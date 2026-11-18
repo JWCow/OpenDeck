@@ -12,14 +12,15 @@
 <body>
 <div class="bar">
   <span id="conn-pill" class="pill bad"><i class="dot"></i><span id="conn-text">Disconnected</span></span>
-  <button id="btn-conn-toggle" class="btn sm" title="WebSocket settings">WS</button>
-  <button id="btn-sync" class="btn sm" title="Refresh OBS scenes, sources, filters, and outputs">↻ Sync</button>
-  <button id="btn-edit" class="btn sm" title="Toggle Edit Mode to configure or drag-swap pads">✎ Edit</button>
+  <button id="btn-conn-toggle" class="btn sm" title="WebSocket connection settings">WS</button>
+  <button id="btn-sync" class="btn sm" title="Refresh OBS scenes, sources, filters, hotkeys, and outputs">↻ Sync</button>
+  <button id="btn-edit" class="btn sm" title="Toggle Edit Mode to configure, drag-swap, or move pads across Pages">✎ Edit</button>
+  <button id="btn-auto-import" class="btn sm" title="Auto-Import Pages from connected OBS Studio (read-only)">🪄 Auto-Import</button>
   <div class="spacer"></div>
-  <button id="btn-panic-cfg" class="btn sm" title="Configure PANIC steps">⚙ Panic</button>
-  <button id="btn-panic" class="btn sm panic" title="Abort running timers/macros &amp; run PANIC reset">⚡ PANIC</button>
-  <button id="btn-export" class="btn sm" title="Export deck layout as JSON (passwords omitted)">Export</button>
-  <button id="btn-import" class="btn sm" title="Import deck layout JSON">Import</button>
+  <button id="btn-panic-cfg" class="btn sm" title="Configure PANIC reset steps">⚙ Panic</button>
+  <button id="btn-panic" class="btn sm panic" title="Abort running Timed Macros &amp; Auto-Off timers and run PANIC reset">⚡ PANIC</button>
+  <button id="btn-export" class="btn sm" title="Export Deck configuration as JSON (passwords omitted)">Export</button>
+  <button id="btn-import" class="btn sm" title="Import Deck configuration JSON">Import</button>
   <input id="file-import" type="file" accept=".json,application/json" hidden>
 </div>
 
@@ -29,22 +30,22 @@
   <label>Pass <input id="ws-pass" class="w-pass" type="password" placeholder="(optional)"></label>
   <button id="btn-ws-connect" class="btn sm on">Connect</button>
   <button id="btn-ws-disconnect" class="btn sm">Disconnect</button>
-  <button id="btn-reset-layout" class="btn sm" title="Restore starter layout">Reset Deck</button>
+  <button id="btn-reset-layout" class="btn sm" title="Restore starter Deck defaults">Reset Deck</button>
 </div>
 
-<div id="deck-bar" class="bar deck-bar">
-  <div id="deck-tabs" class="deck-tabs" role="tablist" aria-label="Deck pages"></div>
-  <button id="btn-deck-add" class="btn sm" title="Add new page">+</button>
-  <button id="btn-deck-dup" class="btn sm" title="Duplicate current page">⎘</button>
-  <button id="btn-deck-cfg" class="btn sm" title="Rename page, resize grid, or delete page">8×8 ⚙</button>
+<div id="deck-bar" class="bar page-bar">
+  <div id="deck-tabs" class="page-tabs" role="tablist" aria-label="Deck Pages"></div>
+  <button id="btn-deck-add" class="btn sm" title="Add new Page">+ Page</button>
+  <button id="btn-deck-dup" class="btn sm" title="Duplicate current Page">⎘</button>
+  <button id="btn-deck-cfg" class="btn sm" title="Rename Page, resize grid, or delete Page">8×8 ⚙</button>
 </div>
 
-<div id="grid" class="grid" aria-label="8 by 8 OBS Deck"></div>
+<div id="grid" class="grid" aria-label="8 by 8 OBS Deck Page"></div>
 
 <div class="status">
   <span id="scene-info">Program: —</span>
   <span id="msg-info">Ready</span>
-  <a id="version-badge" class="ver" href="https://github.com/JWCow/obs-virtual-deck/releases" target="_blank" rel="noopener noreferrer" title="View OBS Virtual Deck releases on GitHub">v2.0.0</a>
+  <a id="version-badge" class="ver" href="https://github.com/JWCow/obs-virtual-deck/releases" target="_blank" rel="noopener noreferrer" title="View OBS Virtual Deck releases on GitHub">v2.1.0</a>
 </div>
 
 <dialog id="pad-dlg">
@@ -73,7 +74,9 @@
         </optgroup>
         <optgroup label="Sources &amp; Media">
           <option value="source">Source Visibility</option>
+          <option value="transform">Source Transform / PiP</option>
           <option value="media">Media Playback</option>
+          <option value="image">Image / Slideshow</option>
           <option value="browser">Browser Source</option>
           <option value="screenshot">Take Screenshot</option>
         </optgroup>
@@ -81,14 +84,18 @@
           <option value="filter">Filter Control</option>
           <option value="mute">Input Mute</option>
           <option value="volume">Input Volume</option>
+          <option value="monitor">Audio Monitor Mode</option>
         </optgroup>
-        <optgroup label="Recording &amp; Streaming">
+        <optgroup label="Recording, Streaming &amp; Telemetry">
           <option value="output">Stream / Record / Cam</option>
+          <option value="chapter">Recording Chapter</option>
+          <option value="stats">Telemetry Stats</option>
+          <option value="hotkey">OBS Hotkey</option>
           <option value="profile">Switch Profile</option>
           <option value="collection">Scene Collection</option>
         </optgroup>
-        <optgroup label="Deck Navigation &amp; Macros">
-          <option value="page">Switch Page / Deck</option>
+        <optgroup label="Pages &amp; Automation">
+          <option value="page">Switch Page</option>
           <option value="macro">Timed Macro</option>
           <option value="panic">PANIC Reset</option>
         </optgroup>
@@ -112,7 +119,7 @@
       <input id="d-name" maxlength="24" placeholder="Main">
     </div>
     <div class="row">
-      <label>Grid Size Presets</label>
+      <label>Page Grid Size Presets</label>
       <div id="d-presets" class="presets">
         <button type="button" class="btn sm" data-cols="3" data-rows="2">3×2</button>
         <button type="button" class="btn sm" data-cols="4" data-rows="3">4×3</button>
@@ -127,8 +134,8 @@
       <div class="row"><label for="d-rows">Rows (2–10)</label><input id="d-rows" type="number" min="2" max="10" value="8"></div>
     </div>
     <div class="dlg-f">
-      <button type="button" id="btn-deck-del" class="btn sm panic" title="Delete this page">Delete Page</button>
-      <button type="button" id="btn-deck-dup-dlg" class="btn sm" title="Duplicate this page">Duplicate</button>
+      <button type="button" id="btn-deck-del" class="btn sm panic" title="Delete this Page">Delete Page</button>
+      <button type="button" id="btn-deck-dup-dlg" class="btn sm" title="Duplicate this Page">Duplicate Page</button>
       <div class="spacer"></div>
       <button type="button" id="btn-deck-cancel" class="btn sm">Cancel</button>
       <button type="submit" class="btn sm on">Apply</button>
@@ -136,10 +143,31 @@
   </form>
 </dialog>
 
+<dialog id="import-wiz-dlg">
+  <div class="dlg-h"><span>🪄 Auto-Import from OBS</span><button id="import-wiz-close" type="button" class="btn sm">✕</button></div>
+  <form id="import-wiz-form" class="frm" method="dialog">
+    <div id="wiz-summary" class="wiz-summary">Read-only setup: inspects your connected OBS Studio scene collection and builds Pages automatically without modifying OBS.</div>
+    <div class="wiz-checks">
+      <label class="chk"><input type="checkbox" id="wiz-scenes" checked> <span><strong>Scenes</strong> — Scene pads + Next/Prev Scene</span></label>
+      <label class="chk"><input type="checkbox" id="wiz-sources" checked> <span><strong>Sources &amp; Overlays</strong> — Scene &amp; group item toggles</span></label>
+      <label class="chk"><input type="checkbox" id="wiz-filters" checked> <span><strong>Filters</strong> — Source &amp; scene filter toggles</span></label>
+      <label class="chk"><input type="checkbox" id="wiz-broadcast" checked> <span><strong>Audio, Broadcast &amp; Telemetry</strong> — Mutes, Stream, Record, Chapter, Studio Mode, Snapshot, Stats</span></label>
+    </div>
+    <div class="wiz-opts">
+      <label class="chk"><input type="checkbox" id="wiz-replace" checked> <span>Populate empty starter Page (unchecked creates new Pages)</span></label>
+    </div>
+    <div class="dlg-f">
+      <button type="button" id="btn-wiz-cancel" class="btn sm">Not Now</button>
+      <div class="spacer"></div>
+      <button type="submit" id="btn-wiz-apply" class="btn sm on">Create Pages</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="panic-dlg">
   <div class="dlg-h"><span>PANIC Reset Steps</span><button id="panic-close" type="button" class="btn sm">✕</button></div>
   <div class="frm">
-    <div style="font-size:11px;color:var(--muted)">Runs when ⚡ PANIC is pressed (after aborting all running macros &amp; auto-off timers). If empty, disables all active deck filters.</div>
+    <div style="font-size:11px;color:var(--muted)">Runs when ⚡ PANIC is pressed (after aborting all running Timed Macros &amp; Auto-Off timers). If empty, disables all active Deck filters.</div>
     <div id="panic-steps" class="steps"></div>
     <div class="dlg-f">
       <button type="button" id="btn-panic-add" class="btn sm">+ Step</button>

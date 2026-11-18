@@ -1,9 +1,10 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.0.0';
+  const VERSION = '2.1.0';
   const STORAGE_KEY = 'obs_virtual_deck_v2';
   const LEGACY_STORAGE_KEY = 'obs_virtual_deck_v1';
+  const PROBE_PORTS = [4455, 4456, 4457, 4458, 4444];
   const MIN_COLS = 2;
   const MAX_COLS = 12;
   const MIN_ROWS = 2;
@@ -15,8 +16,15 @@
     'none', 'scene', 'source', 'filter', 'mute', 'macro', 'panic',
     'page', 'studio', 'output', 'media', 'screenshot', 'browser', 'volume',
     'profile', 'collection', 'transition',
+    'stats', 'hotkey', 'chapter', 'monitor', 'transform', 'image',
   ];
   const AUTO_OFF_TYPES = new Set(['source', 'filter', 'mute', 'studio', 'output', 'media']);
+  const MONITOR_TYPES = [
+    'OBS_MONITORING_TYPE_NONE',
+    'OBS_MONITORING_TYPE_MONITOR_ONLY',
+    'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT',
+  ];
+  const TRANSFORM_PRESETS = ['toggle_pip', 'pip_tr', 'pip_br', 'pip_tl', 'pip_bl', 'center_half', 'full_reset'];
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
@@ -80,6 +88,21 @@
     const n = Math.round(Number(val));
     if (!Number.isFinite(n) || n < 1) return fallback;
     return Math.max(min, Math.min(max, n));
+  }
+
+  function parseValidPort(raw) {
+    if (raw == null || raw === '') return null;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
+  }
+
+  function getUrlPort() {
+    try {
+      if (typeof location === 'undefined' || !location.search) return null;
+      return parseValidPort(new URLSearchParams(location.search).get('port'));
+    } catch {
+      return null;
+    }
   }
 
   function normalizeHotkeyKey(rawKey) {
@@ -160,16 +183,20 @@
     return Number.isFinite(ms) && ms > 0 ? ms : 0;
   }
 
+  function emptyPad() {
+    return { type: 'none', label: '', icon: '', color: COLORS[0] };
+  }
+
   function normalizePadInternal(raw, isStep) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-      return { type: 'none', label: '', icon: '', color: COLORS[0] };
+      return isStep ? { type: 'none' } : emptyPad();
     }
     if (isStep && raw.type === 'wait') {
       const delay = Number(raw.delayMs);
       return { type: 'wait', delayMs: Number.isFinite(delay) ? Math.max(0, delay) : 0 };
     }
     let type = PAD_TYPES.includes(raw.type) ? raw.type : 'none';
-    if (isStep && (type === 'macro' || type === 'panic')) type = 'none';
+    if (isStep && (type === 'macro' || type === 'panic' || type === 'stats')) type = 'none';
     const out = isStep
       ? { type }
       : {
@@ -185,7 +212,8 @@
     }
 
     if (type === 'scene') {
-      if (raw.sceneName) out.sceneName = String(raw.sceneName);
+      out.mode = ['named', 'next', 'prev'].includes(raw.mode) ? raw.mode : 'named';
+      if (out.mode === 'named' && raw.sceneName) out.sceneName = String(raw.sceneName);
     } else if (type === 'source') {
       if (raw.sceneName) out.sceneName = String(raw.sceneName);
       if (raw.sourceName) out.sourceName = String(raw.sourceName);
@@ -203,7 +231,8 @@
         : [];
     } else if (type === 'page') {
       out.mode = ['goto', 'next', 'prev'].includes(raw.mode) ? raw.mode : 'goto';
-      if (out.mode === 'goto' && raw.deckId) out.deckId = String(raw.deckId);
+      const pid = raw.pageId || raw.deckId;
+      if (out.mode === 'goto' && pid) out.pageId = String(pid);
     } else if (type === 'studio') {
       out.action = ['toggle', 'enable', 'disable', 'preview', 'transition'].includes(raw.action) ? raw.action : 'toggle';
       if (out.action === 'preview' && raw.sceneName) out.sceneName = String(raw.sceneName);
@@ -243,6 +272,23 @@
         const dur = Number(raw.durationMs);
         if (Number.isFinite(dur) && dur >= 0) out.durationMs = Math.round(dur);
       }
+    } else if (type === 'stats') {
+      out.mode = ['cpu', 'dropped', 'fps', 'all'].includes(raw.mode) ? raw.mode : 'all';
+    } else if (type === 'hotkey') {
+      if (raw.hotkeyName) out.hotkeyName = String(raw.hotkeyName);
+    } else if (type === 'chapter') {
+      if (raw.chapterName) out.chapterName = String(raw.chapterName);
+    } else if (type === 'monitor') {
+      if (raw.inputName) out.inputName = String(raw.inputName);
+      out.monitorType = ['cycle', ...MONITOR_TYPES].includes(raw.monitorType) ? raw.monitorType : 'cycle';
+    } else if (type === 'transform') {
+      if (raw.sceneName) out.sceneName = String(raw.sceneName);
+      if (raw.sourceName) out.sourceName = String(raw.sourceName);
+      out.preset = TRANSFORM_PRESETS.includes(raw.preset) ? raw.preset : 'toggle_pip';
+    } else if (type === 'image') {
+      if (raw.inputName) out.inputName = String(raw.inputName);
+      out.mode = ['set_file', 'next', 'previous', 'restart'].includes(raw.mode) ? raw.mode : 'set_file';
+      if (out.mode === 'set_file' && raw.filePath) out.filePath = String(raw.filePath);
     }
 
     if (!isStep && AUTO_OFF_TYPES.has(type)) {
@@ -264,16 +310,16 @@
     const c = clampInt(cols, MIN_COLS, MAX_COLS, DEFAULT_COLS);
     const r = clampInt(rows, MIN_ROWS, MAX_ROWS, DEFAULT_ROWS);
     const total = c * r;
-    const pads = Array.from({ length: total }, () => ({ type: 'none', label: '', icon: '', color: COLORS[0] }));
+    const pads = Array.from({ length: total }, emptyPad);
     if (seedPanic && total > 0) {
       pads[total - 1] = { type: 'panic', label: 'PANIC', icon: '🚨', color: '#991b1b' };
     }
     return pads;
   }
 
-  function defaultDecks() {
+  function defaultPages() {
     return [{
-      id: 'deck-1',
+      id: 'page-1',
       name: 'Main',
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
@@ -281,18 +327,18 @@
     }];
   }
 
-  function uniqueDeckId(existingIds, preferred) {
-    let base = String(preferred || '').trim() || 'deck-1';
+  function uniquePageId(existingIds, preferred) {
+    const base = String(preferred || '').trim() || 'page-1';
     if (!existingIds.has(base)) return base;
     let n = existingIds.size + 1;
-    while (existingIds.has(`deck-${n}`)) n++;
-    return `deck-${n}`;
+    while (existingIds.has(`page-${n}`)) n++;
+    return `page-${n}`;
   }
 
-  function normalizeDeck(raw, idx, usedIds, seedPanicIfMissing) {
+  function normalizePage(raw, idx, usedIds, seedPanicIfMissing = false) {
     const cols = clampInt(raw?.cols, MIN_COLS, MAX_COLS, DEFAULT_COLS);
     const rows = clampInt(raw?.rows, MIN_ROWS, MAX_ROWS, DEFAULT_ROWS);
-    const id = uniqueDeckId(usedIds, raw?.id || `deck-${idx + 1}`);
+    const id = uniquePageId(usedIds, raw?.id || `page-${idx + 1}`);
     usedIds.add(id);
     const name = typeof raw?.name === 'string' && raw.name.trim()
       ? raw.name.trim()
@@ -318,24 +364,30 @@
       ws.host = String(raw.ws.host || '127.0.0.1');
       ws.port = port >= 1 && port <= 65535 ? port : 4455;
       ws.password = typeof raw.ws.password === 'string' ? raw.ws.password : fallbackPassword;
+      if (raw.ws.manualPort) ws.manualPort = true;
     }
 
-    let decks;
-    let activeDeckId;
-    if (Array.isArray(raw.decks) && raw.decks.length > 0) {
+    let pages;
+    let activePageId;
+    const sourcePages = Array.isArray(raw.pages) && raw.pages.length > 0
+      ? raw.pages
+      : (Array.isArray(raw.decks) && raw.decks.length > 0 ? raw.decks : null);
+
+    if (sourcePages) {
       const usedIds = new Set();
-      decks = raw.decks
+      pages = sourcePages
         .filter((d) => d && typeof d === 'object')
-        .map((d, idx) => normalizeDeck(d, idx, usedIds, false));
-      if (!decks.length) throw new Error('Invalid layout JSON (empty decks[])');
-      activeDeckId = decks.some((d) => d.id === raw.activeDeckId) ? raw.activeDeckId : decks[0].id;
+        .map((d, idx) => normalizePage(d, idx, usedIds, false));
+      if (!pages.length) throw new Error('Invalid layout JSON (empty pages[])');
+      const rawActiveId = raw.activePageId || raw.activeDeckId;
+      activePageId = pages.some((d) => d.id === rawActiveId) ? rawActiveId : pages[0].id;
     } else if (Array.isArray(raw.pads)) {
       const usedIds = new Set();
-      const single = normalizeDeck({ id: 'deck-1', name: 'Main', cols: 8, rows: 8, pads: raw.pads }, 0, usedIds, false);
-      decks = [single];
-      activeDeckId = single.id;
+      const single = normalizePage({ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads: raw.pads }, 0, usedIds, false);
+      pages = [single];
+      activePageId = single.id;
     } else {
-      throw new Error('Invalid layout JSON (missing decks[] or pads[])');
+      throw new Error('Invalid layout JSON (missing pages[] or pads[])');
     }
 
     const panicSteps = Array.isArray(raw.panicSteps)
@@ -345,32 +397,85 @@
           .filter((s) => s.type !== 'none' && s.type !== 'wait')
       : [];
 
-    return { version: 2, ws, activeDeckId, decks, panicSteps };
+    return { version: 2, ws, activePageId, pages, panicSteps };
   }
 
   function loadState() {
     const base = {
       version: 2,
       ws: { host: '127.0.0.1', port: 4455, password: '' },
-      activeDeckId: 'deck-1',
-      decks: defaultDecks(),
+      activePageId: 'page-1',
+      pages: defaultPages(),
       panicSteps: [],
     };
+    let state = base;
     try {
       const rawV2 = localStorage.getItem(STORAGE_KEY);
-      if (rawV2) return migrateConfig(JSON.parse(rawV2));
-      const rawV1 = localStorage.getItem(LEGACY_STORAGE_KEY);
-      if (rawV1) {
-        const migrated = migrateConfig(JSON.parse(rawV1));
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated)); } catch {}
-        return migrated;
+      if (rawV2) {
+        const parsed = JSON.parse(rawV2);
+        state = migrateConfig(parsed);
+        if (parsed && Array.isArray(parsed.decks) && !Array.isArray(parsed.pages)) {
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+        }
+      } else {
+        const rawV1 = localStorage.getItem(LEGACY_STORAGE_KEY);
+        if (rawV1) {
+          state = migrateConfig(JSON.parse(rawV1));
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+        }
       }
     } catch {}
-    return base;
+
+    const urlPort = getUrlPort();
+    if (urlPort && !state.ws.manualPort) {
+      state.ws.port = urlPort;
+    }
+    return state;
+  }
+
+  function smartSceneIcon(name) {
+    const n = String(name || '');
+    if (/brb|away|break|pause/i.test(n)) return '☕';
+    if (/end|outro|bye/i.test(n)) return '👋';
+    if (/start|intro|soon/i.test(n)) return '🚀';
+    if (/slide|deck|screen|present/i.test(n)) return '🖥️';
+    if (/game|play/i.test(n)) return '🎮';
+    if (/cam|talk|chat|face|main/i.test(n)) return '🎥';
+    return '🎬';
+  }
+
+  function smartSourceIcon(name, kind) {
+    const s = `${name || ''} ${kind || ''}`;
+    if (/mic|audio|sound|wasapi|coreaudio|pulse/i.test(s)) return '🎙️';
+    if (/cam|video|dshow|avfoundation|v4l2/i.test(s)) return '📷';
+    if (/browser|web/i.test(s)) return '🌐';
+    if (/image|photo|logo|slideshow/i.test(s)) return '🖼️';
+    if (/text|title|lower|gdi|ft2/i.test(s)) return '🔤';
+    if (/media|ffmpeg|vlc/i.test(s)) return '🎞️';
+    if (/display|window|screen|monitor|capture/i.test(s)) return '🖥️';
+    return '🧩';
+  }
+
+  function pickAutoImportDims(itemCount) {
+    if (itemCount <= 11) return { cols: 4, rows: 3 };
+    if (itemCount <= 23) return { cols: 6, rows: 4 };
+    if (itemCount <= 31) return { cols: 8, rows: 4 };
+    return { cols: 8, rows: 8 };
+  }
+
+  function packAutoImportPage(id, name, items) {
+    const list = items.slice(0, 63);
+    const { cols, rows } = pickAutoImportDims(list.length);
+    const pads = defaultPads(cols, rows, true);
+    for (let i = 0; i < list.length; i++) {
+      pads[i] = normalizePad(list[i]);
+    }
+    return { id, name, cols, rows, pads };
   }
 
   const Deck = {
     VERSION,
+    PROBE_PORTS,
     PAD_COUNT: DEFAULT_COLS * DEFAULT_ROWS,
     MIN_COLS,
     MAX_COLS,
@@ -379,14 +484,17 @@
     COLORS,
     PAD_TYPES,
     AUTO_OFF_TYPES,
+    MONITOR_TYPES,
+    TRANSFORM_PRESETS,
     $,
     esc,
+    getUrlPort,
     normalizeHotkey,
     hotkeyFromEvent,
     normalizePad,
     normalizeStep,
     defaultPads,
-    defaultDecks,
+    defaultPages,
     migrateConfig,
     cfg: loadState(),
     editMode: false,
@@ -396,8 +504,11 @@
       ws: null,
       status: 'bad',
       reqId: 0,
+      connectGen: 0,
+      hasProbedOnBoot: false,
       pending: new Map(),
       reconnectTimer: null,
+      statsTimer: null,
       manualClose: false,
       scenes: [],
       groups: new Set(),
@@ -405,6 +516,8 @@
       inputKinds: {},
       mediaInputs: [],
       browserInputs: [],
+      imageInputs: [],
+      hotkeys: [],
       programScene: '',
       previewScene: '',
       studioModeEnabled: false,
@@ -412,7 +525,18 @@
       filtersBySource: {},
       mutes: {},
       volumes: {},
+      monitors: {},
       mediaStates: {},
+      imageFiles: {},
+      transforms: {},
+      videoSettings: { baseWidth: 1920, baseHeight: 1080 },
+      stats: {
+        cpuUsage: 0,
+        memoryUsage: 0,
+        activeFps: 0,
+        renderSkippedFrames: 0,
+        outputSkippedFrames: 0,
+      },
       outputs: {
         stream: false,
         record: false,
@@ -431,10 +555,12 @@
     },
     renderGrid: () => {},
     updateMacroTicks: () => {},
+    updateStatsPads: () => Deck.renderGrid(),
   };
 
   Deck.saveCfg = () => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(Deck.cfg)); } catch {}
+    Deck.syncStatsPolling();
   };
 
   Deck.exportConfig = () => {
@@ -442,8 +568,8 @@
     return {
       version: 2,
       ws: { host: cfg.ws.host, port: cfg.ws.port },
-      activeDeckId: cfg.activeDeckId,
-      decks: cfg.decks.map((d) => ({
+      activePageId: cfg.activePageId,
+      pages: cfg.pages.map((d) => ({
         id: d.id,
         name: d.name,
         cols: d.cols,
@@ -454,50 +580,50 @@
     };
   };
 
-  Deck.getActiveDeck = () => {
+  Deck.getActivePage = () => {
     const { cfg } = Deck;
-    if (!Array.isArray(cfg.decks) || !cfg.decks.length) {
-      cfg.decks = defaultDecks();
-      cfg.activeDeckId = cfg.decks[0].id;
+    if (!Array.isArray(cfg.pages) || !cfg.pages.length) {
+      cfg.pages = defaultPages();
+      cfg.activePageId = cfg.pages[0].id;
     }
-    let deck = cfg.decks.find((d) => d.id === cfg.activeDeckId);
-    if (!deck) {
-      deck = cfg.decks[0];
-      cfg.activeDeckId = deck.id;
+    let page = cfg.pages.find((d) => d.id === cfg.activePageId);
+    if (!page) {
+      page = cfg.pages[0];
+      cfg.activePageId = page.id;
     }
-    return deck;
+    return page;
   };
 
-  Deck.getActivePads = () => Deck.getActiveDeck().pads;
+  Deck.getActivePads = () => Deck.getActivePage().pads;
 
-  Deck.setActiveDeck = (deckId) => {
-    const deck = Deck.cfg.decks.find((d) => d.id === deckId);
-    if (!deck) return null;
-    Deck.cfg.activeDeckId = deck.id;
+  Deck.setActivePage = (pageId) => {
+    const page = Deck.cfg.pages.find((d) => d.id === pageId);
+    if (!page) return null;
+    Deck.cfg.activePageId = page.id;
     Deck.saveCfg();
     Deck.renderGrid();
-    return deck;
+    return page;
   };
 
-  Deck.addDeck = ({ name, cols, rows, switchTo = true } = {}) => {
-    const cur = Deck.getActiveDeck();
+  Deck.addPage = ({ name, cols, rows, switchTo = true } = {}) => {
+    const cur = Deck.getActivePage();
     const c = clampInt(cols, MIN_COLS, MAX_COLS, cur.cols || DEFAULT_COLS);
     const r = clampInt(rows, MIN_ROWS, MAX_ROWS, cur.rows || DEFAULT_ROWS);
-    const usedIds = new Set(Deck.cfg.decks.map((d) => d.id));
-    const id = uniqueDeckId(usedIds, `deck-${Deck.cfg.decks.length + 1}`);
-    const deckName = typeof name === 'string' && name.trim() ? name.trim() : `Page ${Deck.cfg.decks.length + 1}`;
-    const deck = { id, name: deckName, cols: c, rows: r, pads: defaultPads(c, r, false) };
-    Deck.cfg.decks.push(deck);
-    if (switchTo) Deck.cfg.activeDeckId = id;
+    const usedIds = new Set(Deck.cfg.pages.map((d) => d.id));
+    const id = uniquePageId(usedIds, `page-${Deck.cfg.pages.length + 1}`);
+    const pageName = typeof name === 'string' && name.trim() ? name.trim() : `Page ${Deck.cfg.pages.length + 1}`;
+    const page = { id, name: pageName, cols: c, rows: r, pads: defaultPads(c, r, false) };
+    Deck.cfg.pages.push(page);
+    if (switchTo) Deck.cfg.activePageId = id;
     Deck.saveCfg();
     Deck.renderGrid();
-    return deck;
+    return page;
   };
 
-  Deck.duplicateDeck = (deckId) => {
-    const src = Deck.cfg.decks.find((d) => d.id === deckId) || Deck.getActiveDeck();
-    const usedIds = new Set(Deck.cfg.decks.map((d) => d.id));
-    const id = uniqueDeckId(usedIds, `${src.id}-copy`);
+  Deck.duplicatePage = (pageId) => {
+    const src = Deck.cfg.pages.find((d) => d.id === pageId) || Deck.getActivePage();
+    const usedIds = new Set(Deck.cfg.pages.map((d) => d.id));
+    const id = uniquePageId(usedIds, `${src.id}-copy`);
     const copy = {
       id,
       name: `${src.name} Copy`,
@@ -505,69 +631,248 @@
       rows: src.rows,
       pads: src.pads.map((p) => normalizePad(JSON.parse(JSON.stringify(p)))),
     };
-    const at = Deck.cfg.decks.indexOf(src);
-    Deck.cfg.decks.splice(at >= 0 ? at + 1 : Deck.cfg.decks.length, 0, copy);
-    Deck.cfg.activeDeckId = copy.id;
+    const at = Deck.cfg.pages.indexOf(src);
+    Deck.cfg.pages.splice(at >= 0 ? at + 1 : Deck.cfg.pages.length, 0, copy);
+    Deck.cfg.activePageId = copy.id;
     Deck.saveCfg();
     Deck.renderGrid();
     return copy;
   };
 
-  Deck.renameDeck = (deckId, name) => {
-    const deck = Deck.cfg.decks.find((d) => d.id === deckId);
-    if (!deck) return false;
+  Deck.renamePage = (pageId, name) => {
+    const page = Deck.cfg.pages.find((d) => d.id === pageId);
+    if (!page) return false;
     const trimmed = String(name || '').trim();
     if (!trimmed) return false;
-    deck.name = trimmed;
+    page.name = trimmed;
     Deck.saveCfg();
     Deck.renderGrid();
     return true;
   };
 
-  Deck.deleteDeck = (deckId) => {
-    const { decks } = Deck.cfg;
-    if (decks.length <= 1) return false;
-    const idx = decks.findIndex((d) => d.id === deckId);
+  Deck.deletePage = (pageId) => {
+    const { pages } = Deck.cfg;
+    if (pages.length <= 1) return false;
+    const idx = pages.findIndex((d) => d.id === pageId);
     if (idx < 0) return false;
-    if (typeof Deck.abortDeckTimers === 'function') Deck.abortDeckTimers(deckId);
-    decks.splice(idx, 1);
-    if (Deck.cfg.activeDeckId === deckId) {
-      Deck.cfg.activeDeckId = decks[Math.max(0, idx - 1)].id;
+    if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(pageId);
+    pages.splice(idx, 1);
+    if (Deck.cfg.activePageId === pageId) {
+      Deck.cfg.activePageId = pages[Math.max(0, idx - 1)].id;
     }
     Deck.saveCfg();
     Deck.renderGrid();
     return true;
   };
 
-  Deck.resizeDeck = (deckId, newCols, newRows) => {
-    const deck = Deck.cfg.decks.find((d) => d.id === deckId) || Deck.getActiveDeck();
-    const oldCols = clampInt(deck.cols, MIN_COLS, MAX_COLS, DEFAULT_COLS);
-    const oldRows = clampInt(deck.rows, MIN_ROWS, MAX_ROWS, DEFAULT_ROWS);
+  Deck.resizePage = (pageId, newCols, newRows) => {
+    const page = Deck.cfg.pages.find((d) => d.id === pageId) || Deck.getActivePage();
+    const oldCols = clampInt(page.cols, MIN_COLS, MAX_COLS, DEFAULT_COLS);
+    const oldRows = clampInt(page.rows, MIN_ROWS, MAX_ROWS, DEFAULT_ROWS);
     const cols = clampInt(newCols, MIN_COLS, MAX_COLS, oldCols);
     const rows = clampInt(newRows, MIN_ROWS, MAX_ROWS, oldRows);
-    if (cols === oldCols && rows === oldRows && deck.pads.length === cols * rows) return deck;
-    if (typeof Deck.abortDeckTimers === 'function') Deck.abortDeckTimers(deck.id);
+    if (cols === oldCols && rows === oldRows && page.pads.length === cols * rows) return page;
+    if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(page.id);
     const nextPads = defaultPads(cols, rows, false);
     const copyRows = Math.min(oldRows, rows);
     const copyCols = Math.min(oldCols, cols);
     for (let r = 0; r < copyRows; r++) {
       for (let c = 0; c < copyCols; c++) {
-        const src = deck.pads[r * oldCols + c];
+        const src = page.pads[r * oldCols + c];
         if (src) nextPads[r * cols + c] = normalizePad(src);
       }
     }
-    deck.cols = cols;
-    deck.rows = rows;
-    deck.pads = nextPads;
+    page.cols = cols;
+    page.rows = rows;
+    page.pads = nextPads;
     Deck.saveCfg();
     Deck.renderGrid();
-    return deck;
+    return page;
+  };
+
+  Deck.movePadToPage = (fromIdx, targetPageId, sourcePageId) => {
+    const srcPage = sourcePageId
+      ? Deck.cfg.pages.find((d) => d.id === sourcePageId)
+      : Deck.getActivePage();
+    const dstPage = Deck.cfg.pages.find((d) => d.id === targetPageId);
+    if (!srcPage || !dstPage || srcPage.id === dstPage.id) return false;
+    if (fromIdx < 0 || fromIdx >= srcPage.pads.length) return false;
+    const pad = srcPage.pads[fromIdx];
+    if (!pad || pad.type === 'none') return false;
+    const dstIdx = dstPage.pads.findIndex((p) => !p || p.type === 'none');
+    if (dstIdx < 0) {
+      Deck.setMsg(`Page "${dstPage.name}" is full`);
+      return false;
+    }
+    if (typeof Deck.abortPadTimer === 'function') Deck.abortPadTimer(srcPage.id, fromIdx);
+    dstPage.pads[dstIdx] = normalizePad(JSON.parse(JSON.stringify(pad)));
+    srcPage.pads[fromIdx] = emptyPad();
+    Deck.saveCfg();
+    Deck.renderGrid();
+    Deck.setMsg(`Moved pad to "${dstPage.name}"`);
+    return true;
+  };
+
+  Deck.isStarterDeck = () => {
+    const pages = Deck.cfg.pages || [];
+    if (pages.length !== 1) return false;
+    const configured = (pages[0].pads || []).filter((p) => p && p.type !== 'none');
+    return configured.length === 1 && configured[0].type === 'panic';
+  };
+
+  Deck.buildAutoImportPages = (opts = {}) => {
+    const { obs } = Deck;
+    const cfgOpts = {
+      scenes: opts.scenes !== false,
+      sources: opts.sources !== false,
+      filters: opts.filters !== false,
+      broadcast: opts.broadcast !== false,
+    };
+    const pages = [];
+
+    if (cfgOpts.scenes) {
+      const items = obs.scenes.map((sceneName) => ({
+        type: 'scene',
+        mode: 'named',
+        sceneName,
+        label: sceneName,
+        icon: smartSceneIcon(sceneName),
+        color: '#1e3a8a',
+      }));
+      if (obs.scenes.length > 1) {
+        items.push(
+          { type: 'scene', mode: 'prev', label: 'Prev Scene', icon: '⏮️', color: '#115e59' },
+          { type: 'scene', mode: 'next', label: 'Next Scene', icon: '⏭️', color: '#115e59' }
+        );
+      }
+      if (items.length) pages.push(packAutoImportPage('page-scenes', 'Scenes', items));
+    }
+
+    if (cfgOpts.sources) {
+      const items = [];
+      const seen = new Set();
+      const targets = [...new Set([...obs.scenes, ...obs.groups])];
+      for (const sceneName of targets) {
+        for (const it of (obs.itemsByScene[sceneName] || [])) {
+          if (!it?.sourceName) continue;
+          const key = `${sceneName}\0${it.sourceName}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          items.push({
+            type: 'source',
+            sceneName,
+            sourceName: it.sourceName,
+            mode: 'toggle',
+            label: it.sourceName,
+            icon: smartSourceIcon(it.sourceName, obs.inputKinds[it.sourceName]),
+            color: '#115e59',
+          });
+        }
+      }
+      if (items.length) pages.push(packAutoImportPage('page-sources', 'Sources', items));
+    }
+
+    if (cfgOpts.filters) {
+      const items = [];
+      const seen = new Set();
+      for (const [sourceName, flts] of Object.entries(obs.filtersBySource || {})) {
+        for (const f of (flts || [])) {
+          if (!f?.filterName) continue;
+          const key = `${sourceName}\0${f.filterName}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          items.push({
+            type: 'filter',
+            sourceName,
+            filterName: f.filterName,
+            mode: 'toggle',
+            label: f.filterName,
+            icon: '✨',
+            color: '#581c87',
+          });
+        }
+      }
+      if (items.length) pages.push(packAutoImportPage('page-filters', 'Filters', items));
+    }
+
+    if (cfgOpts.broadcast) {
+      const items = [];
+      const nonAudioKindRe = /^(image_source|slideshow(_v2)?|browser_source|color_source|text_|window_capture|monitor_capture|display_capture)/i;
+      const allInputs = obs.inputs || [];
+      const audioCandidates = allInputs.filter((inp) => (
+        typeof obs.mutes[inp] === 'boolean' && !nonAudioKindRe.test(obs.inputKinds[inp] || '')
+      ));
+      const fallbackCandidates = audioCandidates.length
+        ? audioCandidates
+        : allInputs.filter((inp) => !nonAudioKindRe.test(obs.inputKinds[inp] || ''));
+      const muteTargets = (fallbackCandidates.length ? fallbackCandidates : allInputs).slice(0, 6);
+      for (const inputName of muteTargets) {
+        items.push({
+          type: 'mute',
+          inputName,
+          mode: 'toggle',
+          label: inputName,
+          icon: '🎙️',
+          color: '#854d0e',
+        });
+      }
+      items.push(
+        { type: 'output', target: 'stream', mode: 'toggle', label: 'Stream', icon: '📡', color: '#991b1b' },
+        { type: 'output', target: 'record', mode: 'toggle', label: 'Record', icon: '🔴', color: '#991b1b' },
+        { type: 'chapter', label: 'Chapter', icon: '🔖', color: '#854d0e' },
+        { type: 'studio', action: 'toggle', label: 'Studio Mode', icon: '🎬', color: '#581c87' },
+        { type: 'output', target: 'vcam', mode: 'toggle', label: 'Virtual Cam', icon: '📹', color: '#166534' },
+        { type: 'screenshot', imageFormat: 'png', label: 'Snapshot', icon: '📸', color: '#115e59' },
+        { type: 'stats', mode: 'all', label: 'OBS Stats', icon: '📊', color: '#222733' }
+      );
+      pages.push(packAutoImportPage('page-broadcast', 'Broadcast', items));
+    }
+
+    return pages;
+  };
+
+  Deck.applyAutoImport = (pages, { replaceEmptyStarter = true } = {}) => {
+    const incoming = Array.isArray(pages) ? pages.filter((p) => p && typeof p === 'object') : [];
+    if (!incoming.length) return [];
+    const replace = replaceEmptyStarter && Deck.isStarterDeck();
+    const usedIds = replace ? new Set() : new Set(Deck.cfg.pages.map((d) => d.id));
+    const normalized = incoming.map((p, idx) => normalizePage(p, idx, usedIds, false));
+    if (replace) {
+      if (typeof Deck.abortPageTimers === 'function') {
+        for (const old of Deck.cfg.pages) Deck.abortPageTimers(old.id);
+      }
+      Deck.cfg.pages = normalized;
+    } else {
+      Deck.cfg.pages.push(...normalized);
+    }
+    Deck.cfg.activePageId = normalized[0].id;
+    Deck.saveCfg();
+    Deck.renderGrid();
+    if (Deck.obs.status === 'ok') {
+      const mutesToSync = new Set();
+      const monitorsToSync = new Set();
+      for (const page of normalized) {
+        for (const p of page.pads) {
+          if (p.type === 'mute' && p.inputName) mutesToSync.add(p.inputName);
+          if (p.type === 'monitor' && p.inputName) monitorsToSync.add(p.inputName);
+        }
+      }
+      if (mutesToSync.size || monitorsToSync.size) {
+        Promise.all([
+          ...[...mutesToSync].map(Deck.fetchMute),
+          ...[...monitorsToSync].map(Deck.fetchMonitorType),
+        ]).then(() => Deck.renderGrid());
+      }
+    }
+    Deck.setMsg(`Auto-Imported ${normalized.length} page(s)`);
+    return normalized;
   };
 
   Deck.setMsg = (txt) => {
     const el = $('msg-info');
     if (el) el.textContent = txt;
   };
+
   Deck.updateSceneHeader = () => {
     const el = $('scene-info');
     if (!el) return;
@@ -576,6 +881,7 @@
       ? `Program: ${programScene || '—'} | Preview: ${previewScene}`
       : `Program: ${programScene || '—'}`;
   };
+
   Deck.setConn = (cls, txt) => {
     Deck.obs.status = cls;
     const pill = $('conn-pill');
@@ -636,6 +942,63 @@
     return Deck.obs.mediaStates[inputName] || '';
   };
 
+  Deck.fetchMonitorType = async (inputName) => {
+    if (!inputName) return 'OBS_MONITORING_TYPE_NONE';
+    try {
+      const r = await Deck.obsCall('GetInputAudioMonitorType', { inputName });
+      if (r.monitorType) Deck.obs.monitors[inputName] = r.monitorType;
+    } catch {}
+    return Deck.obs.monitors[inputName] || 'OBS_MONITORING_TYPE_NONE';
+  };
+
+  Deck.formatStatsText = (mode = 'all') => {
+    const s = Deck.obs.stats || {};
+    const cpu = Number(s.cpuUsage || 0);
+    const fps = Number(s.activeFps || 0);
+    const dropped = Number(s.renderSkippedFrames || 0) + Number(s.outputSkippedFrames || 0);
+    if (mode === 'cpu') return `${cpu.toFixed(1)}% CPU`;
+    if (mode === 'fps') return `${fps.toFixed(1)} FPS`;
+    if (mode === 'dropped') return `${dropped} drop`;
+    return `${cpu.toFixed(0)}% · ${fps.toFixed(0)}fps · ${dropped}d`;
+  };
+
+  Deck.fetchStats = async () => {
+    try {
+      const r = await Deck.obsCall('GetStats');
+      Deck.obs.stats = {
+        cpuUsage: Number(r.cpuUsage) || 0,
+        memoryUsage: Number(r.memoryUsage) || 0,
+        activeFps: Number(r.activeFps) || 0,
+        renderSkippedFrames: Number(r.renderSkippedFrames) || 0,
+        outputSkippedFrames: Number(r.outputSkippedFrames) || 0,
+      };
+      if (typeof Deck.updateStatsPads === 'function') Deck.updateStatsPads();
+      else Deck.renderGrid();
+    } catch {}
+    return Deck.obs.stats;
+  };
+
+  Deck.syncStatsPolling = () => {
+    const { obs } = Deck;
+    const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+    const needsStats = connected && Deck.getActivePads().some((p) => p && p.type === 'stats');
+    if (needsStats) {
+      if (!obs.statsTimer) {
+        obs.statsTimer = setInterval(() => {
+          const stillConnected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+          if (stillConnected && Deck.getActivePads().some((p) => p && p.type === 'stats')) {
+            Deck.fetchStats();
+          } else {
+            Deck.syncStatsPolling();
+          }
+        }, 2000);
+      }
+    } else if (obs.statsTimer) {
+      clearInterval(obs.statsTimer);
+      obs.statsTimer = null;
+    }
+  };
+
   function applyInputList(rawInputs) {
     const { obs } = Deck;
     const list = Array.isArray(rawInputs) ? rawInputs : [];
@@ -643,12 +1006,16 @@
     obs.inputKinds = {};
     obs.mediaInputs = [];
     obs.browserInputs = [];
+    obs.imageInputs = [];
     for (const i of list) {
       if (!i?.inputName) continue;
       const kind = String(i.inputKind || '');
       obs.inputKinds[i.inputName] = kind;
       if (/ffmpeg|vlc|media/i.test(kind)) obs.mediaInputs.push(i.inputName);
       if (/browser/i.test(kind)) obs.browserInputs.push(i.inputName);
+      if (kind === 'image_source' || kind === 'slideshow' || kind === 'slideshow_v2' || /image_source|slideshow/i.test(kind)) {
+        obs.imageInputs.push(i.inputName);
+      }
     }
   }
 
@@ -675,7 +1042,7 @@
       const safe = (req, data) => Deck.obsCall(req, data).catch(() => null);
       const [
         sl, il, studioRes, streamRes, recRes, vcamRes, replayRes,
-        profRes, collRes, transListRes, curTransRes,
+        profRes, collRes, transListRes, curTransRes, hkRes, videoRes, statsRes,
       ] = await Promise.all([
         Deck.obsCall('GetSceneList'),
         Deck.obsCall('GetInputList'),
@@ -688,6 +1055,9 @@
         safe('GetSceneCollectionList'),
         safe('GetSceneTransitionList'),
         safe('GetCurrentSceneTransition'),
+        safe('GetHotkeyList'),
+        safe('GetVideoSettings'),
+        safe('GetStats'),
       ]);
 
       obs.scenes = (sl.scenes || []).map((s) => s.sceneName).reverse();
@@ -721,6 +1091,24 @@
         if (curTransRes.transitionName) obs.currentTransition = curTransRes.transitionName;
         if (typeof curTransRes.transitionDuration === 'number') obs.transitionDuration = curTransRes.transitionDuration;
       }
+      if (hkRes && Array.isArray(hkRes.hotkeys)) {
+        obs.hotkeys = hkRes.hotkeys.filter(Boolean);
+      }
+      if (videoRes) {
+        obs.videoSettings = {
+          baseWidth: Number(videoRes.baseWidth) || 1920,
+          baseHeight: Number(videoRes.baseHeight) || 1080,
+        };
+      }
+      if (statsRes) {
+        obs.stats = {
+          cpuUsage: Number(statsRes.cpuUsage) || 0,
+          memoryUsage: Number(statsRes.memoryUsage) || 0,
+          activeFps: Number(statsRes.activeFps) || 0,
+          renderSkippedFrames: Number(statsRes.renderSkippedFrames) || 0,
+          outputSkippedFrames: Number(statsRes.outputSkippedFrames) || 0,
+        };
+      }
 
       obs.groups = new Set();
       obs.itemsByScene = {};
@@ -728,9 +1116,13 @@
         try { await refreshSceneOrGroupItems(s); } catch {}
       }
 
-      const filterSources = new Set();
-      const muteInputs = new Set();
+      const filterSources = new Set([...obs.scenes, ...obs.groups, ...obs.inputs]);
+      for (const list of Object.values(obs.itemsByScene)) {
+        for (const it of list) if (it?.sourceName) filterSources.add(it.sourceName);
+      }
+      const muteInputs = new Set(obs.inputs);
       const volumeInputs = new Set();
+      const monitorInputs = new Set();
       const mediaTargets = new Set(obs.mediaInputs);
       const collectStep = (st) => {
         if (!st) return;
@@ -738,8 +1130,9 @@
         if (st.type === 'mute' && st.inputName) muteInputs.add(st.inputName);
         if (st.type === 'volume' && st.inputName) volumeInputs.add(st.inputName);
         if (st.type === 'media' && st.inputName) mediaTargets.add(st.inputName);
+        if (st.type === 'monitor' && st.inputName) monitorInputs.add(st.inputName);
       };
-      for (const d of cfg.decks) {
+      for (const d of cfg.pages) {
         for (const p of d.pads) {
           collectStep(p);
           (p.steps || []).forEach(collectStep);
@@ -752,10 +1145,12 @@
         ...[...muteInputs].map(Deck.fetchMute),
         ...[...volumeInputs].map(Deck.fetchVolume),
         ...[...mediaTargets].map(Deck.fetchMediaState),
+        ...[...monitorInputs].map(Deck.fetchMonitorType),
       ]);
 
       Deck.updateSceneHeader();
       Deck.renderGrid();
+      Deck.syncStatsPolling();
     } catch (e) {
       Deck.setMsg(`Sync error: ${e.message}`);
     }
@@ -812,6 +1207,9 @@
     } else if (type === 'InputVolumeChanged') {
       if (d.inputName && typeof d.inputVolumeDb === 'number') obs.volumes[d.inputName] = d.inputVolumeDb;
       Deck.renderGrid();
+    } else if (type === 'InputAudioMonitorTypeChanged') {
+      if (d.inputName && d.monitorType) obs.monitors[d.inputName] = d.monitorType;
+      Deck.renderGrid();
     } else if (type === 'StreamStateChanged') {
       obs.outputs.stream = !!d.outputActive;
       Deck.renderGrid();
@@ -855,10 +1253,58 @@
     }
   }
 
+  function probeSinglePort(host, port, timeoutMs = 450) {
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer = null;
+      let ws = null;
+      const done = (ok) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (ws) {
+          ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+          try { ws.close(); } catch {}
+        }
+        resolve(ok);
+      };
+      timer = setTimeout(() => done(false), timeoutMs);
+      try {
+        ws = new WebSocket(`ws://${host}:${port}`);
+      } catch {
+        done(false);
+        return;
+      }
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.op === 0) done(true);
+        } catch {}
+      };
+      ws.onerror = () => done(false);
+      ws.onclose = () => done(false);
+    });
+  }
+
+  Deck.probeObsPorts = async (host = '127.0.0.1', ports = Deck.PROBE_PORTS, timeoutMs = 450) => {
+    const cleanHost = String(host || '127.0.0.1').trim() || '127.0.0.1';
+    const list = (Array.isArray(ports) ? ports : Deck.PROBE_PORTS)
+      .map(parseValidPort)
+      .filter((p) => p !== null);
+    if (!list.length) return null;
+    const results = await Promise.all(list.map((p) => probeSinglePort(cleanHost, p, timeoutMs)));
+    const idx = results.findIndex(Boolean);
+    return idx >= 0 ? list[idx] : null;
+  };
+
   Deck.disconnectObs = (manual = true) => {
     const { obs } = Deck;
     obs.manualClose = manual;
     clearTimeout(obs.reconnectTimer);
+    if (obs.statsTimer) {
+      clearInterval(obs.statsTimer);
+      obs.statsTimer = null;
+    }
     for (const p of obs.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Disconnected')); }
     obs.pending.clear();
     if (obs.ws) { const w = obs.ws; obs.ws = null; try { w.close(); } catch {} }
@@ -891,23 +1337,42 @@
     return { proto, host, port, url: `${proto}://${host}:${port}` };
   }
 
-  Deck.connectObs = () => {
+  Deck.connectObs = (opts = {}) => {
     const { obs, cfg } = Deck;
+    const isBoot = Boolean(opts && typeof opts === 'object' && opts.isBoot === true);
+    const myGen = ++obs.connectGen;
     Deck.disconnectObs(false);
     obs.manualClose = false;
-    const { host, port, url } = buildWsTarget($('ws-host').value, $('ws-port').value);
-    const password = $('ws-pass').value || '';
-    $('ws-host').value = host;
-    $('ws-port').value = port;
-    cfg.ws = { host, port, password };
+
+    const rawHost = $('ws-host') ? $('ws-host').value : cfg.ws.host;
+    const rawPort = $('ws-port') ? $('ws-port').value : cfg.ws.port;
+    const { host, port, url } = buildWsTarget(rawHost, rawPort);
+    const password = ($('ws-pass') ? $('ws-pass').value : cfg.ws.password) || '';
+    if ($('ws-host')) $('ws-host').value = host;
+    if ($('ws-port')) $('ws-port').value = port;
+
+    const urlPort = getUrlPort();
+    const isManual = !isBoot && (opts?.manual === true || (typeof Event !== 'undefined' && opts instanceof Event));
+    const keepManual = Boolean(cfg.ws.manualPort) || (isManual && port !== (urlPort || 4455));
+    cfg.ws = keepManual
+      ? { host, port, password, manualPort: true }
+      : { host, port, password };
     Deck.saveCfg();
     Deck.setConn('wait', 'Connecting…');
+
     let ws;
     try { ws = new WebSocket(url); } catch (e) { Deck.setConn('bad', 'Bad WS URL'); Deck.setMsg(e.message); return; }
     obs.ws = ws;
-    ws.onclose = (ev) => {
+    let opened = false;
+    ws.onopen = () => { opened = true; };
+
+    ws.onclose = async (ev) => {
       if (obs.ws !== ws) return;
       obs.ws = null;
+      if (obs.statsTimer) {
+        clearInterval(obs.statsTimer);
+        obs.statsTimer = null;
+      }
       for (const p of obs.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Closed')); }
       obs.pending.clear();
       if (ev.code === 4009) {
@@ -916,9 +1381,33 @@
         $('conn-bar')?.classList.add('open');
         return;
       }
+
+      if (!obs.manualClose && !opened && isBoot && !obs.hasProbedOnBoot
+        && host === '127.0.0.1' && port === 4455 && !cfg.ws.manualPort && !urlPort) {
+        obs.hasProbedOnBoot = true;
+        Deck.setConn('wait', 'Scanning OBS ports…');
+        Deck.setMsg('Probing local OBS WebSocket ports…');
+        const candidates = Deck.PROBE_PORTS.filter((p) => p !== port);
+        const foundPort = await Deck.probeObsPorts(host, candidates);
+        if (obs.manualClose || obs.connectGen !== myGen) return;
+        if (foundPort) {
+          cfg.ws.port = foundPort;
+          if ($('ws-port')) $('ws-port').value = foundPort;
+          Deck.saveCfg();
+          Deck.setMsg(`Found OBS WebSocket on port ${foundPort}`);
+          Deck.connectObs({ isBoot: false });
+          return;
+        }
+        Deck.setConn('bad', 'Disconnected');
+        Deck.setMsg('No OBS WebSocket found on ports 4455–4458, 4444');
+        obs.reconnectTimer = setTimeout(() => Deck.connectObs({ isBoot: false }), 3000);
+        return;
+      }
+
       Deck.setConn('bad', 'Disconnected');
-      if (!obs.manualClose) obs.reconnectTimer = setTimeout(Deck.connectObs, 3000);
+      if (!obs.manualClose) obs.reconnectTimer = setTimeout(() => Deck.connectObs({ isBoot: false }), 3000);
     };
+
     ws.onmessage = async (ev) => {
       if (obs.ws !== ws) return;
       let msg;
@@ -934,6 +1423,7 @@
         Deck.setConn('ok', 'Connected');
         Deck.setMsg(`Connected to ${url}`);
         await Deck.syncObsState();
+        if (typeof Deck.onObsConnected === 'function') Deck.onObsConnected();
       } else if (msg.op === 5) {
         await handleObsEvent(msg.d?.eventType, msg.d?.eventData || {});
       } else if (msg.op === 7) {

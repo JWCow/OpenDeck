@@ -10,11 +10,17 @@
     filter: 'FLT',
     mute: 'MUT',
     volume: 'VOL',
+    monitor: 'MON',
     studio: 'STD',
     output: 'OUT',
     media: 'MED',
+    image: 'IMG',
     browser: 'WEB',
     screenshot: 'CAP',
+    transform: 'PIP',
+    hotkey: 'KEY',
+    chapter: 'CHP',
+    stats: 'STS',
     profile: 'PRF',
     collection: 'COL',
     transition: 'TRN',
@@ -23,7 +29,10 @@
     panic: 'PNC',
   };
 
-  const ICON_PRESETS = ['🎬', '🎥', '🎙️', '🔇', '🔊', '✨', '📺', '🔴', '📸', '🎵', '🌐', '⚡', '🚨'];
+  const ICON_PRESETS = [
+    '🎬', '🎥', '🎙️', '🔇', '🔊', '🎧', '✨', '📺', '🔴', '📸',
+    '🎵', '🖼️', '🌐', '📐', '🔖', '📊', '⌨️', '⚡', '🚨',
+  ];
   const OUTPUT_LABELS = {
     stream: 'Stream',
     record: 'Record',
@@ -32,16 +41,44 @@
     replay: 'Replay',
     saveReplay: 'Save Replay',
   };
+  const MONITOR_LABELS = {
+    cycle: 'Cycle Monitor',
+    OBS_MONITORING_TYPE_NONE: 'Mon Off',
+    OBS_MONITORING_TYPE_MONITOR_ONLY: 'Mon Only',
+    OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT: 'Mon+Out',
+  };
+  const TRANSFORM_LABELS = {
+    toggle_pip: 'PiP Toggle',
+    pip_tr: 'PiP TR',
+    pip_br: 'PiP BR',
+    pip_tl: 'PiP TL',
+    pip_bl: 'PiP BL',
+    center_half: 'Half Center',
+    full_reset: 'Full Reset',
+  };
 
   let dragIdx = null;
+  let dragSourcePageId = '';
+  let justDroppedAt = 0;
   let editingIdx = -1;
-  let editingDeckId = '';
+  let editingPageId = '';
   let draftPad = null;
   let draftPanic = [];
   let isRecordingHotkey = false;
+  let promptedAutoImportThisSession = false;
+
+  function clearDragHighlights() {
+    document.querySelectorAll('.pad.drag-over, .pad.dragging, .page-tab.drag-over').forEach((el) => {
+      el.classList.remove('drag-over', 'dragging');
+    });
+  }
 
   function padFallbackLabel(p, i, cols = 8) {
-    if (p.type === 'scene') return p.sceneName || 'Scene';
+    if (p.type === 'scene') {
+      if (p.mode === 'next') return 'Next Scene';
+      if (p.mode === 'prev') return 'Prev Scene';
+      return p.sceneName || 'Scene';
+    }
     if (p.type === 'source') return p.sourceName || p.sceneName || 'Source';
     if (p.type === 'filter') return p.filterName || p.sourceName || 'Filter';
     if (p.type === 'mute') return p.inputName || 'Mute';
@@ -49,6 +86,28 @@
       const db = p.volumeDb ?? (p.mode === 'step' ? -3 : 0);
       const val = p.mode === 'step' && db > 0 ? `+${db}` : `${db}`;
       return p.inputName ? `${p.inputName} ${val}dB` : `Vol ${val}dB`;
+    }
+    if (p.type === 'monitor') {
+      const m = MONITOR_LABELS[p.monitorType || 'cycle'] || 'Monitor';
+      return p.inputName ? `${p.inputName} (${m})` : m;
+    }
+    if (p.type === 'transform') {
+      const pr = TRANSFORM_LABELS[p.preset || 'toggle_pip'] || 'PiP';
+      return p.sourceName ? `${p.sourceName} ${pr}` : pr;
+    }
+    if (p.type === 'image') {
+      if (p.mode === 'next') return p.inputName ? `${p.inputName} Next` : 'Next Slide';
+      if (p.mode === 'previous') return p.inputName ? `${p.inputName} Prev` : 'Prev Slide';
+      if (p.mode === 'restart') return p.inputName ? `${p.inputName} Restart` : 'Restart Slide';
+      return p.inputName || 'Image Swap';
+    }
+    if (p.type === 'hotkey') return p.hotkeyName || 'OBS Hotkey';
+    if (p.type === 'chapter') return p.chapterName || 'Chapter';
+    if (p.type === 'stats') {
+      if (p.mode === 'cpu') return 'CPU';
+      if (p.mode === 'fps') return 'FPS';
+      if (p.mode === 'dropped') return 'Dropped';
+      return 'OBS Stats';
     }
     if (p.type === 'studio') {
       if (p.action === 'preview') return p.sceneName || 'Preview';
@@ -65,7 +124,8 @@
     if (p.type === 'page') {
       if (p.mode === 'next') return 'Next Page';
       if (p.mode === 'prev') return 'Prev Page';
-      const target = Deck.cfg.decks.find((d) => d.id === p.deckId);
+      const pid = p.pageId || p.deckId;
+      const target = (Deck.cfg.pages || []).find((d) => d.id === pid);
       return target ? target.name : 'Page';
     }
     if (p.type === 'macro') return 'Macro';
@@ -80,7 +140,7 @@
 
   Deck.updateMacroTicks = () => {
     const grid = $('grid');
-    for (const t of Deck.getActiveDeckTicks()) {
+    for (const t of Deck.getActivePageTicks()) {
       const btn = grid.querySelector(`.pad[data-idx="${t.idx}"]`);
       if (!btn) continue;
       let sub = btn.querySelector('.sub');
@@ -94,50 +154,122 @@
     }
   };
 
-  function renderDeckBar() {
+  Deck.updateStatsPads = () => {
+    const grid = $('grid');
+    const page = Deck.getActivePage();
+    if (!grid || !page) return;
+    page.pads.forEach((p, i) => {
+      if (!p || p.type !== 'stats') return;
+      const btn = grid.querySelector(`.pad[data-idx="${i}"]`);
+      if (!btn) return;
+      let sub = btn.querySelector('.sub');
+      const txt = Deck.formatStatsText(p.mode || 'all');
+      if (!sub) {
+        sub = document.createElement('span');
+        sub.className = 'sub';
+        btn.appendChild(sub);
+      }
+      sub.textContent = txt;
+    });
+  };
+
+  function renderPageBar() {
     const tabs = $('deck-tabs');
     if (!tabs) return;
-    const active = Deck.getActiveDeck();
+    const active = Deck.getActivePage();
     tabs.innerHTML = '';
-    for (const d of Deck.cfg.decks) {
+    for (const d of Deck.cfg.pages) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'deck-tab' + (d.id === active.id ? ' on' : '');
+      b.className = 'page-tab' + (d.id === active.id ? ' on' : '');
       b.setAttribute('role', 'tab');
       b.setAttribute('aria-selected', String(d.id === active.id));
-      b.dataset.deckId = d.id;
+      b.dataset.pageId = d.id;
       b.textContent = d.name || 'Page';
       b.title = `${d.name} (${d.cols}×${d.rows})`;
-      b.addEventListener('click', () => Deck.setActiveDeck(d.id));
+      b.addEventListener('click', () => Deck.setActivePage(d.id));
+      b.addEventListener('dragover', (e) => {
+        if (!Deck.editMode || dragIdx === null || d.id === Deck.getActivePage().id) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        b.classList.add('drag-over');
+      });
+      b.addEventListener('dragleave', (e) => {
+        if (!b.contains(e.relatedTarget)) b.classList.remove('drag-over');
+      });
+      b.addEventListener('drop', (e) => {
+        e.preventDefault();
+        clearDragHighlights();
+        if (!Deck.editMode || dragIdx === null) return;
+        const from = dragIdx;
+        const srcPageId = dragSourcePageId;
+        dragIdx = null;
+        dragSourcePageId = '';
+        justDroppedAt = Date.now();
+        Deck.movePadToPage(from, d.id, srcPageId);
+      });
       tabs.appendChild(b);
     }
     const cfgBtn = $('btn-deck-cfg');
     if (cfgBtn) cfgBtn.textContent = `${active.cols}×${active.rows} ⚙`;
   }
 
-  function initGrid(deck) {
+  function initGrid(page) {
     const grid = $('grid');
-    const total = deck.cols * deck.rows;
-    grid.style.setProperty('--cols', deck.cols);
-    grid.style.setProperty('--rows', deck.rows);
-    grid.setAttribute('aria-label', `${deck.cols} by ${deck.rows} OBS Deck`);
+    const total = page.cols * page.rows;
+    grid.style.setProperty('--cols', page.cols);
+    grid.style.setProperty('--rows', page.rows);
+    grid.setAttribute('aria-label', `${page.cols} by ${page.rows} OBS Deck Page`);
     if (grid.children.length === total) return;
     grid.innerHTML = '';
     for (let i = 0; i < total; i++) {
       const el = document.createElement('button');
       el.type = 'button';
       el.dataset.idx = i;
-      el.addEventListener('click', () => Deck.onPadClick(i));
+      el.addEventListener('click', () => {
+        if (Date.now() - justDroppedAt < 250) return;
+        Deck.onPadClick(i);
+      });
       el.addEventListener('contextmenu', (e) => { e.preventDefault(); Deck.openPadEditor(i); });
-      el.addEventListener('dragstart', () => { dragIdx = i; });
-      el.addEventListener('dragend', () => { dragIdx = null; });
-      el.addEventListener('dragover', (e) => { if (Deck.editMode) e.preventDefault(); });
+      el.addEventListener('dragstart', (e) => {
+        if (!Deck.editMode) { e.preventDefault(); return; }
+        dragIdx = i;
+        dragSourcePageId = Deck.getActivePage().id;
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', String(i));
+        }
+        el.classList.add('dragging');
+      });
+      el.addEventListener('dragend', () => {
+        if (dragIdx !== null) justDroppedAt = Date.now();
+        dragIdx = null;
+        dragSourcePageId = '';
+        clearDragHighlights();
+      });
+      el.addEventListener('dragover', (e) => {
+        if (!Deck.editMode || dragIdx === null || dragIdx === i) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        el.classList.add('drag-over');
+      });
+      el.addEventListener('dragleave', (e) => {
+        if (!el.contains(e.relatedTarget)) el.classList.remove('drag-over');
+      });
       el.addEventListener('drop', (e) => {
         e.preventDefault();
-        const pads = Deck.getActivePads();
+        clearDragHighlights();
+        const activePage = Deck.getActivePage();
+        const pads = activePage.pads;
         if (!Deck.editMode || dragIdx === null || dragIdx === i || dragIdx >= pads.length || i >= pads.length) return;
+        if (typeof Deck.abortPadTimer === 'function') {
+          Deck.abortPadTimer(activePage.id, dragIdx);
+          Deck.abortPadTimer(activePage.id, i);
+        }
         [pads[dragIdx], pads[i]] = [pads[i], pads[dragIdx]];
         dragIdx = null;
+        dragSourcePageId = '';
+        justDroppedAt = Date.now();
         Deck.saveCfg();
         Deck.renderGrid();
       });
@@ -146,32 +278,34 @@
   }
 
   Deck.renderGrid = () => {
-    const deck = Deck.getActiveDeck();
-    renderDeckBar();
-    initGrid(deck);
+    const page = Deck.getActivePage();
+    renderPageBar();
+    initGrid(page);
     const btns = $('grid').children;
-    deck.pads.forEach((p, i) => {
+    page.pads.forEach((p, i) => {
       const el = btns[i];
       if (!el) return;
-      const rt = Deck.getPadRuntime(i, deck.id);
+      const rt = Deck.getPadRuntime(i, page.id);
       const active = Deck.isPadActive(p);
       el.className = 'pad'
         + (p.type === 'none' ? ' empty' : '')
+        + (p.type === 'stats' ? ' stats-pad' : '')
         + (Deck.editMode ? ' edit-mode' : '')
         + (active ? ' active' : '')
         + (rt.running ? ' running' : '');
       el.style.background = p.color && p.type !== 'none' ? p.color : '';
-      el.draggable = Deck.editMode;
-      const rem = tickText(rt);
-      const lbl = p.label || padFallbackLabel(p, i, deck.cols);
+      el.draggable = Deck.editMode && p.type !== 'none';
+      const subText = p.type === 'stats' ? Deck.formatStatsText(p.mode || 'all') : tickText(rt);
+      const lbl = p.label || padFallbackLabel(p, i, page.cols);
       const tipParts = [lbl || `Pad ${i + 1}`];
+      if (p.type === 'stats' && subText) tipParts.push(`(${subText})`);
       if (TAGS[p.type]) tipParts.push(`[${TAGS[p.type]}]`);
       if (p.hotkey) tipParts.push(`(${p.hotkey})`);
       el.title = tipParts.join(' ');
       el.innerHTML = `<i class="led"></i>${TAGS[p.type] ? `<span class="tag">${TAGS[p.type]}</span>` : ''}`
         + `${p.icon ? `<span class="ico">${esc(p.icon)}</span>` : ''}`
         + `<span class="lbl">${esc(lbl)}</span>`
-        + `${rem ? `<span class="sub">${esc(rem)}</span>` : ''}`
+        + `${subText ? `<span class="sub">${esc(subText)}</span>` : ''}`
         + `${p.hotkey ? `<span class="hk">${esc(p.hotkey)}</span>` : ''}`;
     });
   };
@@ -344,7 +478,18 @@
     const t = obj.type;
 
     if (t === 'scene') {
-      container.appendChild(makeObsSelect('Scene Name', obj.sceneName, obs.scenes, (v) => { obj.sceneName = v; }, 'Select scene…').el);
+      if (!obj.mode) obj.mode = 'named';
+      const sceneRow = makeObsSelect('Scene Name', obj.sceneName, obs.scenes, (v) => { obj.sceneName = v; }, 'Select scene…').el;
+      const syncVis = () => { sceneRow.hidden = (obj.mode || 'named') !== 'named'; };
+      container.append(
+        sceneRow,
+        makeSelect('Target Mode', obj.mode, [
+          ['named', 'Named Scene'],
+          ['next', 'Next Scene'],
+          ['prev', 'Previous Scene'],
+        ], (v) => { obj.mode = v; syncVis(); })
+      );
+      syncVis();
     } else if (t === 'source') {
       let srcPick;
       const scPick = makeObsSelect('Scene / Group', obj.sceneName, allSceneTargets(), (v) => {
@@ -366,6 +511,33 @@
         ], (v) => { obj.mode = v; })
       );
       if (!allowWait) container.appendChild(makeAutoOffField(obj));
+    } else if (t === 'transform') {
+      if (!obj.preset) obj.preset = 'toggle_pip';
+      let srcPick;
+      const scPick = makeObsSelect('Scene / Group', obj.sceneName, allSceneTargets(), (v) => {
+        obj.sceneName = v;
+        srcPick.fill((obs.itemsByScene[v] || []).map((x) => x.sourceName), obj.sourceName);
+      }, 'Select scene or group…');
+      srcPick = makeObsSelect(
+        'Source Name',
+        obj.sourceName,
+        (obs.itemsByScene[obj.sceneName] || []).map((x) => x.sourceName),
+        (v) => { obj.sourceName = v; },
+        'Select source…'
+      );
+      container.append(
+        scPick.el,
+        srcPick.el,
+        makeSelect('Transform Preset', obj.preset, [
+          ['toggle_pip', 'Toggle PiP ↔ Full'],
+          ['pip_br', 'PiP Bottom-Right'],
+          ['pip_tr', 'PiP Top-Right'],
+          ['pip_bl', 'PiP Bottom-Left'],
+          ['pip_tl', 'PiP Top-Left'],
+          ['center_half', 'Center Half (50%)'],
+          ['full_reset', 'Full Screen Reset'],
+        ], (v) => { obj.preset = v; })
+      );
     } else if (t === 'filter') {
       let fltPick;
       const loadFlts = async (src) => {
@@ -401,6 +573,17 @@
         ], (v) => { obj.mode = v; })
       );
       if (!allowWait) container.appendChild(makeAutoOffField(obj));
+    } else if (t === 'monitor') {
+      if (!obj.monitorType) obj.monitorType = 'cycle';
+      container.append(
+        makeObsSelect('Audio Input', obj.inputName, obs.inputs, (v) => { obj.inputName = v; }, 'Select audio input…').el,
+        makeSelect('Monitor Mode', obj.monitorType, [
+          ['cycle', 'Cycle (Off → Mon Only → Both)'],
+          ['OBS_MONITORING_TYPE_NONE', 'Monitor Off'],
+          ['OBS_MONITORING_TYPE_MONITOR_ONLY', 'Monitor Only (Mute Output)'],
+          ['OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT', 'Monitor and Output'],
+        ], (v) => { obj.monitorType = v; })
+      );
     } else if (t === 'studio') {
       if (!obj.action) obj.action = 'toggle';
       const sceneRow = makeObsSelect('Preview Scene', obj.sceneName, obs.scenes, (v) => { obj.sceneName = v; }, 'Select preview scene…').el;
@@ -447,6 +630,24 @@
       );
       if (autoRow) container.appendChild(autoRow);
       syncVis();
+    } else if (t === 'chapter') {
+      container.appendChild(
+        makeTextInput('Chapter Name (optional)', obj.chapterName || '', 'Leave blank for default OBS chapter name', (v) => { obj.chapterName = v; })
+      );
+    } else if (t === 'stats') {
+      if (!obj.mode) obj.mode = 'all';
+      container.appendChild(
+        makeSelect('Telemetry Metric', obj.mode, [
+          ['all', 'All (CPU · FPS · Dropped)'],
+          ['cpu', 'CPU Usage (%)'],
+          ['fps', 'Active FPS'],
+          ['dropped', 'Dropped / Skipped Frames'],
+        ], (v) => { obj.mode = v; })
+      );
+    } else if (t === 'hotkey') {
+      container.appendChild(
+        makeObsSelect('OBS Hotkey', obj.hotkeyName, obs.hotkeys || [], (v) => { obj.hotkeyName = v; }, 'Select OBS hotkey…').el
+      );
     } else if (t === 'media') {
       const mediaOpts = obs.mediaInputs?.length ? obs.mediaInputs : obs.inputs;
       container.append(
@@ -462,6 +663,22 @@
         ], (v) => { obj.mediaAction = v; })
       );
       if (!allowWait) container.appendChild(makeAutoOffField(obj));
+    } else if (t === 'image') {
+      if (!obj.mode) obj.mode = 'set_file';
+      const imageOpts = obs.imageInputs?.length ? obs.imageInputs : obs.inputs;
+      const fileRow = makeTextInput('Image File Path', obj.filePath || '', 'C:/path/to/slide.png', (v) => { obj.filePath = v; });
+      const syncVis = () => { fileRow.hidden = (obj.mode || 'set_file') !== 'set_file'; };
+      container.append(
+        makeObsSelect('Image / Slideshow Input', obj.inputName, imageOpts, (v) => { obj.inputName = v; }, 'Select image or slideshow…').el,
+        makeSelect('Mode', obj.mode, [
+          ['set_file', 'Set Image File'],
+          ['next', 'Slideshow: Next'],
+          ['previous', 'Slideshow: Previous'],
+          ['restart', 'Slideshow: Restart'],
+        ], (v) => { obj.mode = v; syncVis(); }),
+        fileRow
+      );
+      syncVis();
     } else if (t === 'screenshot') {
       container.append(
         makeObsSelect('Source / Scene (blank = Program)', obj.sourceName, allFilterSources(), (v) => { obj.sourceName = v; }, 'Current Program Scene').el,
@@ -522,15 +739,15 @@
       );
     } else if (t === 'page') {
       if (!obj.mode) obj.mode = 'goto';
-      if (obj.mode === 'goto' && !obj.deckId) obj.deckId = Deck.cfg.decks[0]?.id || '';
-      const deckOpts = Deck.cfg.decks.map((d) => [d.id, d.name]);
-      const deckRow = makeSelect('Target Page', obj.deckId, deckOpts, (v) => { obj.deckId = v; });
-      const syncVis = () => { deckRow.hidden = (obj.mode || 'goto') !== 'goto'; };
+      if (obj.mode === 'goto' && !obj.pageId) obj.pageId = obj.deckId || Deck.cfg.pages[0]?.id || '';
+      const pageOpts = Deck.cfg.pages.map((d) => [d.id, d.name]);
+      const pageRow = makeSelect('Target Page', obj.pageId, pageOpts, (v) => { obj.pageId = v; });
+      const syncVis = () => { pageRow.hidden = (obj.mode || 'goto') !== 'goto'; };
       container.append(
         makeSelect('Navigation', obj.mode, [
           ['goto', 'Go to Page'], ['next', 'Next Page'], ['prev', 'Previous Page'],
         ], (v) => { obj.mode = v; syncVis(); }),
-        deckRow
+        pageRow
       );
       syncVis();
     } else if (t === 'wait' && allowWait) {
@@ -557,14 +774,19 @@
       const types = [
         ['scene', 'Scene'],
         ['source', 'Source'],
+        ['transform', 'Source Transform / PiP'],
         ['filter', 'Filter'],
         ['mute', 'Mute'],
+        ['volume', 'Volume'],
+        ['monitor', 'Audio Monitor'],
         ['studio', 'Studio Mode'],
         ['output', 'Stream / Record / Cam'],
+        ['chapter', 'Recording Chapter'],
         ['media', 'Media'],
-        ['screenshot', 'Screenshot'],
+        ['image', 'Image / Slideshow'],
         ['browser', 'Browser Source'],
-        ['volume', 'Volume'],
+        ['screenshot', 'Screenshot'],
+        ['hotkey', 'OBS Hotkey'],
         ['transition', 'Transition'],
         ['profile', 'Profile'],
         ['collection', 'Collection'],
@@ -634,16 +856,16 @@
     }
   }
 
-  Deck.openPadEditor = (idx, deckId) => {
-    const deck = deckId ? (Deck.cfg.decks.find((d) => d.id === deckId) || Deck.getActiveDeck()) : Deck.getActiveDeck();
-    if (!deck.pads[idx]) return;
+  Deck.openPadEditor = (idx, pageId) => {
+    const page = pageId ? (Deck.cfg.pages.find((d) => d.id === pageId) || Deck.getActivePage()) : Deck.getActivePage();
+    if (!page.pads[idx]) return;
     editingIdx = idx;
-    editingDeckId = deck.id;
+    editingPageId = page.id;
     isRecordingHotkey = false;
-    draftPad = JSON.parse(JSON.stringify(deck.pads[idx]));
+    draftPad = JSON.parse(JSON.stringify(page.pads[idx]));
     if (!draftPad.steps) draftPad.steps = [];
-    const cols = deck.cols || 8;
-    $('dlg-title').textContent = `Edit Pad R${Math.floor(idx / cols) + 1}C${(idx % cols) + 1} (${deck.name})`;
+    const cols = page.cols || 8;
+    $('dlg-title').textContent = `Edit Pad R${Math.floor(idx / cols) + 1}C${(idx % cols) + 1} (${page.name})`;
     $('f-label').value = draftPad.label || '';
     $('f-icon').value = draftPad.icon || '';
     $('f-type').value = draftPad.type || 'none';
@@ -681,17 +903,17 @@
     $('pad-dlg').showModal();
   };
 
-  function openDeckDialog() {
-    const deck = Deck.getActiveDeck();
-    $('d-name').value = deck.name || 'Main';
-    $('d-cols').value = deck.cols;
-    $('d-rows').value = deck.rows;
-    $('btn-deck-del').disabled = Deck.cfg.decks.length <= 1;
-    syncDeckPresetHighlight();
+  function openPageDialog() {
+    const page = Deck.getActivePage();
+    $('d-name').value = page.name || 'Main';
+    $('d-cols').value = page.cols;
+    $('d-rows').value = page.rows;
+    $('btn-deck-del').disabled = Deck.cfg.pages.length <= 1;
+    syncPagePresetHighlight();
     $('deck-dlg').showModal();
   }
 
-  function syncDeckPresetHighlight() {
+  function syncPagePresetHighlight() {
     const c = Number($('d-cols').value);
     const r = Number($('d-rows').value);
     $('d-presets').querySelectorAll('button').forEach((b) => {
@@ -704,6 +926,53 @@
     renderStepList($('panic-steps'), draftPanic, false);
     $('panic-dlg').showModal();
   }
+
+  function syncAutoImportState() {
+    const connected = Deck.obs.status === 'ok';
+    const anyChecked = $('wiz-scenes').checked
+      || $('wiz-sources').checked
+      || $('wiz-filters').checked
+      || $('wiz-broadcast').checked;
+    const isStarter = Deck.isStarterDeck();
+    const rep = $('wiz-replace');
+    if (rep) {
+      rep.disabled = !isStarter;
+      if (!isStarter) rep.checked = false;
+    }
+    const summary = $('wiz-summary');
+    if (summary) {
+      if (connected) {
+        const { obs } = Deck;
+        const filterCount = Object.values(obs.filtersBySource || {}).reduce((acc, arr) => acc + (arr?.length || 0), 0);
+        summary.textContent = `Connected to OBS (${obs.scenes.length} scene(s), ${obs.inputs.length} input(s), ${filterCount} filter(s)). Read-only scan — OBS will not be modified.`;
+      } else {
+        summary.textContent = 'Connect to OBS Studio first to scan your scenes, sources, filters, and audio inputs (read-only).';
+      }
+    }
+    const applyBtn = $('btn-wiz-apply');
+    if (applyBtn) applyBtn.disabled = !connected || !anyChecked;
+  }
+
+  function openAutoImportWizard() {
+    const dlg = $('import-wiz-dlg');
+    if (!dlg) return;
+    $('wiz-scenes').checked = true;
+    $('wiz-sources').checked = true;
+    $('wiz-filters').checked = true;
+    $('wiz-broadcast').checked = true;
+    $('wiz-replace').checked = Deck.isStarterDeck();
+    syncAutoImportState();
+    if (!dlg.open) dlg.showModal();
+  }
+
+  Deck.onObsConnected = () => {
+    if (promptedAutoImportThisSession) return;
+    if (!Deck.isStarterDeck()) return;
+    if (document.querySelector('dialog[open]')) return;
+    if (!Deck.obs.scenes.length && !Deck.obs.inputs.length) return;
+    promptedAutoImportThisSession = true;
+    openAutoImportWizard();
+  };
 
   $('f-type').addEventListener('change', drawPadFields);
   $('dlg-close').addEventListener('click', () => $('pad-dlg').close());
@@ -721,8 +990,8 @@
   });
 
   $('btn-pad-clear').addEventListener('click', () => {
-    const deck = Deck.cfg.decks.find((d) => d.id === editingDeckId) || Deck.getActiveDeck();
-    if (deck.pads[editingIdx]) deck.pads[editingIdx] = { type: 'none', label: '', icon: '', color: COLORS[0] };
+    const page = Deck.cfg.pages.find((d) => d.id === editingPageId) || Deck.getActivePage();
+    if (page.pads[editingIdx]) page.pads[editingIdx] = { type: 'none', label: '', icon: '', color: COLORS[0] };
     Deck.saveCfg();
     $('pad-dlg').close();
     Deck.renderGrid();
@@ -740,8 +1009,8 @@
           : Deck.normalizePad(st)
       ));
     }
-    const deck = Deck.cfg.decks.find((d) => d.id === editingDeckId) || Deck.getActiveDeck();
-    deck.pads[editingIdx] = saved;
+    const page = Deck.cfg.pages.find((d) => d.id === editingPageId) || Deck.getActivePage();
+    page.pads[editingIdx] = saved;
     Deck.saveCfg();
     Deck.renderGrid();
     if (Deck.obs.status === 'ok') {
@@ -750,6 +1019,8 @@
         if (st.type === 'filter' && st.sourceName) Deck.refreshFilters(st.sourceName).then(Deck.renderGrid);
         if (st.type === 'volume' && st.inputName && Deck.fetchVolume) Deck.fetchVolume(st.inputName).then(Deck.renderGrid);
         if (st.type === 'media' && st.inputName && Deck.fetchMediaState) Deck.fetchMediaState(st.inputName).then(Deck.renderGrid);
+        if (st.type === 'monitor' && st.inputName && Deck.fetchMonitorType) Deck.fetchMonitorType(st.inputName).then(Deck.renderGrid);
+        if (st.type === 'stats' && Deck.fetchStats) Deck.fetchStats();
       };
       syncStep(saved);
       if (saved.type === 'macro') saved.steps.forEach(syncStep);
@@ -758,49 +1029,70 @@
 
   // Page & Grid Settings Dialog
   $('btn-deck-add').addEventListener('click', () => {
-    const created = Deck.addDeck({ switchTo: true });
-    Deck.setMsg(`Added page "${created.name}" (${created.cols}×${created.rows})`);
+    const created = Deck.addPage({ switchTo: true });
+    Deck.setMsg(`Added Page "${created.name}" (${created.cols}×${created.rows})`);
   });
   $('btn-deck-dup').addEventListener('click', () => {
-    const cur = Deck.getActiveDeck();
-    const copy = Deck.duplicateDeck(cur.id);
+    const cur = Deck.getActivePage();
+    const copy = Deck.duplicatePage(cur.id);
     if (copy) Deck.setMsg(`Duplicated "${cur.name}" -> "${copy.name}"`);
   });
-  $('btn-deck-cfg').addEventListener('click', openDeckDialog);
+  $('btn-deck-cfg').addEventListener('click', openPageDialog);
   $('deck-dlg-close').addEventListener('click', () => $('deck-dlg').close());
   $('btn-deck-cancel').addEventListener('click', () => $('deck-dlg').close());
-  $('d-cols').addEventListener('input', syncDeckPresetHighlight);
-  $('d-rows').addEventListener('input', syncDeckPresetHighlight);
+  $('d-cols').addEventListener('input', syncPagePresetHighlight);
+  $('d-rows').addEventListener('input', syncPagePresetHighlight);
   $('d-presets').querySelectorAll('button').forEach((b) => {
     b.addEventListener('click', () => {
       $('d-cols').value = b.dataset.cols;
       $('d-rows').value = b.dataset.rows;
-      syncDeckPresetHighlight();
+      syncPagePresetHighlight();
     });
   });
   $('btn-deck-dup-dlg').addEventListener('click', () => {
-    const cur = Deck.getActiveDeck();
+    const cur = Deck.getActivePage();
     $('deck-dlg').close();
-    const copy = Deck.duplicateDeck(cur.id);
+    const copy = Deck.duplicatePage(cur.id);
     if (copy) Deck.setMsg(`Duplicated "${cur.name}" -> "${copy.name}"`);
   });
   $('btn-deck-del').addEventListener('click', () => {
-    if (Deck.cfg.decks.length <= 1) return;
-    const cur = Deck.getActiveDeck();
-    if (!confirm(`Delete page "${cur.name}" and its pads?`)) return;
+    if (Deck.cfg.pages.length <= 1) return;
+    const cur = Deck.getActivePage();
+    if (!confirm(`Delete Page "${cur.name}" and its pads?`)) return;
     $('deck-dlg').close();
-    Deck.deleteDeck(cur.id);
-    Deck.setMsg(`Deleted page "${cur.name}"`);
+    Deck.deletePage(cur.id);
+    Deck.setMsg(`Deleted Page "${cur.name}"`);
   });
   $('deck-form').addEventListener('submit', () => {
-    const cur = Deck.getActiveDeck();
+    const cur = Deck.getActivePage();
     const name = $('d-name').value.trim() || cur.name;
     const cols = Number($('d-cols').value) || cur.cols;
     const rows = Number($('d-rows').value) || cur.rows;
-    Deck.renameDeck(cur.id, name);
-    Deck.resizeDeck(cur.id, cols, rows);
-    const updated = Deck.getActiveDeck();
+    Deck.renamePage(cur.id, name);
+    Deck.resizePage(cur.id, cols, rows);
+    const updated = Deck.getActivePage();
     Deck.setMsg(`Page "${updated.name}" (${updated.cols}×${updated.rows})`);
+  });
+
+  // Auto-Import Wizard Dialog
+  $('btn-auto-import').addEventListener('click', openAutoImportWizard);
+  $('import-wiz-close').addEventListener('click', () => $('import-wiz-dlg').close());
+  $('btn-wiz-cancel').addEventListener('click', () => $('import-wiz-dlg').close());
+  ['wiz-scenes', 'wiz-sources', 'wiz-filters', 'wiz-broadcast'].forEach((id) => {
+    $(id).addEventListener('change', syncAutoImportState);
+  });
+  $('import-wiz-form').addEventListener('submit', () => {
+    const pages = Deck.buildAutoImportPages({
+      scenes: $('wiz-scenes').checked,
+      sources: $('wiz-sources').checked,
+      filters: $('wiz-filters').checked,
+      broadcast: $('wiz-broadcast').checked,
+    });
+    if (!pages.length) {
+      Deck.setMsg('No items found in OBS for selected categories');
+      return;
+    }
+    Deck.applyAutoImport(pages, { replaceEmptyStarter: $('wiz-replace').checked });
   });
 
   // PANIC Dialog
@@ -817,7 +1109,7 @@
         draftPanic.push({ type: 'filter', sourceName: st.sourceName, filterName: st.filterName, mode: 'disable' });
       }
     };
-    for (const d of Deck.cfg.decks) {
+    for (const d of Deck.cfg.pages) {
       for (const p of d.pads) {
         pullFrom(p);
         (p.steps || []).forEach(pullFrom);
@@ -834,13 +1126,13 @@
 
   // Toolbar & WS
   $('btn-conn-toggle').addEventListener('click', () => $('conn-bar').classList.toggle('open'));
-  $('btn-ws-connect').addEventListener('click', Deck.connectObs);
+  $('btn-ws-connect').addEventListener('click', () => Deck.connectObs({ manual: true }));
   $('btn-ws-disconnect').addEventListener('click', () => Deck.disconnectObs(true));
   $('btn-sync').addEventListener('click', Deck.syncObsState);
   $('btn-edit').addEventListener('click', () => {
     Deck.editMode = !Deck.editMode;
     $('btn-edit').classList.toggle('on', Deck.editMode);
-    Deck.setMsg(Deck.editMode ? 'Edit mode: click pad to configure, drag to swap' : 'Run mode');
+    Deck.setMsg(Deck.editMode ? 'Edit mode: click pad to configure, drag to swap or move to Page tab' : 'Run mode');
     Deck.renderGrid();
   });
   $('btn-panic').addEventListener('click', Deck.runPanic);
@@ -874,9 +1166,12 @@
     }
   });
   $('btn-reset-layout').addEventListener('click', () => {
-    if (!confirm('Reset all pages, pads, and PANIC steps to starter defaults?')) return;
-    Deck.cfg.decks = [{ id: 'deck-1', name: 'Main', cols: 8, rows: 8, pads: Deck.defaultPads(8, 8, true) }];
-    Deck.cfg.activeDeckId = 'deck-1';
+    if (!confirm('Reset all Pages, pads, and PANIC steps to starter defaults?')) return;
+    for (const p of Deck.cfg.pages) {
+      if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(p.id);
+    }
+    Deck.cfg.pages = Deck.defaultPages();
+    Deck.cfg.activePageId = Deck.cfg.pages[0].id;
     Deck.cfg.panicSteps = [];
     Deck.saveCfg();
     Deck.renderGrid();
@@ -909,5 +1204,5 @@
   $('ws-port').value = Deck.cfg.ws.port;
   $('ws-pass').value = Deck.cfg.ws.password;
   Deck.renderGrid();
-  Deck.connectObs();
+  Deck.connectObs({ isBoot: true });
 })();

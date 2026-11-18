@@ -5,11 +5,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import zlib from 'node:zlib';
 import { chromium } from 'playwright';
-import { createFakeObs } from './test-deck-fake-obs.mjs';
+import { createFakeObs, PASSWORD } from './test-deck-fake-obs.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DECK_URL = pathToFileURL(join(__dirname, 'deck.html')).href;
@@ -70,7 +72,7 @@ try {
   await page.goto(DECK_URL);
   await page.waitForSelector('#grid .pad');
 
-  // 1. v1 -> v2 localStorage migration (all 64 pads & panicSteps survive intact)
+  // 1a. v1 -> v2.1.0 localStorage migration (all 64 pads & panicSteps survive intact)
   await page.evaluate((p) => {
     const pads = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
     pads[0] = { type: 'scene', sceneName: 'Slides', label: 'Migrated Slides', icon: '📺', color: '#1e3a8a' };
@@ -87,13 +89,42 @@ try {
   await page.waitForSelector('#grid .pad');
   const migrated = await page.evaluate(() => JSON.parse(localStorage.getItem('obs_virtual_deck_v2') || 'null'));
   assert.equal(migrated?.version, 2, 'migrated to v2 storage key');
-  assert.equal(migrated.decks.length, 1);
-  assert.equal(migrated.decks[0].pads.length, 64);
-  assert.equal(migrated.decks[0].pads[0].label, 'Migrated Slides');
-  assert.equal(migrated.decks[0].pads[10].filterName, 'Blur');
-  assert.equal(migrated.decks[0].pads[63].type, 'panic');
+  assert.equal(migrated.pages.length, 1);
+  assert.equal(migrated.activePageId, 'page-1');
+  assert.equal(migrated.pages[0].pads.length, 64);
+  assert.equal(migrated.pages[0].pads[0].label, 'Migrated Slides');
+  assert.equal(migrated.pages[0].pads[10].filterName, 'Blur');
+  assert.equal(migrated.pages[0].pads[63].type, 'panic');
   assert.equal(migrated.panicSteps.length, 1);
   assert.ok((await page.locator('#grid .pad').nth(0).textContent()).includes('Migrated Slides'));
+
+  // 1b. v2.0.0 (decks[], activeDeckId, deckId) -> v2.1.0 (pages[], activePageId, pageId) migration
+  await page.evaluate((p) => {
+    const d1 = Array.from({ length: 12 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+    d1[0] = { type: 'page', mode: 'goto', deckId: 'deck-2', label: 'Jump D2', icon: '', color: '#222733' };
+    const d2 = Array.from({ length: 12 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+    d2[1] = { type: 'scene', sceneName: 'BRB', label: 'D2 BRB', icon: '', color: '#1e3a8a' };
+    localStorage.removeItem('obs_virtual_deck_v1');
+    localStorage.setItem('obs_virtual_deck_v2', JSON.stringify({
+      version: 2,
+      ws: { host: '127.0.0.1', port: p, password: '' },
+      activeDeckId: 'deck-2',
+      decks: [
+        { id: 'deck-1', name: 'Main', cols: 4, rows: 3, pads: d1 },
+        { id: 'deck-2', name: 'Sub', cols: 4, rows: 3, pads: d2 },
+      ],
+      panicSteps: [],
+    }));
+  }, port);
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  const migratedV20 = await page.evaluate(() => JSON.parse(localStorage.getItem('obs_virtual_deck_v2') || 'null'));
+  assert.equal(migratedV20.decks, undefined, 'legacy decks[] replaced by pages[]');
+  assert.equal(migratedV20.activePageId, 'deck-2', 'activeDeckId migrated to activePageId');
+  assert.equal(migratedV20.pages.length, 2);
+  assert.equal(migratedV20.pages[0].pads[0].pageId, 'deck-2', 'page pad deckId migrated to pageId');
+  assert.ok((await page.locator('#grid .pad').nth(1).textContent()).includes('D2 BRB'));
+
   // Reset back to clean defaults before continuing
   await page.evaluate(() => {
     localStorage.removeItem('obs_virtual_deck_v1');
@@ -101,9 +132,9 @@ try {
   });
   await page.reload();
   await page.waitForSelector('#grid .pad');
-  console.log('  ✓ v1 -> v2 localStorage migration');
+  console.log('  ✓ v1 & v2.0.0 (decks[]) -> v2.1.0 (pages[]) lossless localStorage migration');
 
-  // 2. ws://host:port normalization + no-auth connect
+  // 2. ws://host:port normalization + no-auth connect + dismiss auto-import prompt
   await page.click('#btn-conn-toggle');
   await page.fill('#ws-host', `ws://127.0.0.1:${port}`);
   await page.fill('#ws-port', '9999');
@@ -111,6 +142,10 @@ try {
   await page.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
   assert.equal(await page.inputValue('#ws-host'), '127.0.0.1');
   assert.equal(await page.inputValue('#ws-port'), String(port));
+  await page.waitForTimeout(80);
+  if (await page.evaluate(() => document.getElementById('import-wiz-dlg').open)) {
+    await page.click('#btn-wiz-cancel');
+  }
   console.log('  ✓ ws://host:port normalization');
 
   const pad = (i) => page.locator('#grid .pad').nth(i);
@@ -320,38 +355,90 @@ try {
 
   // 10. Grid resize 2D (row, col) coordinate preservation & bounds clamping
   await page.evaluate(() => {
-    const d = Deck.getActiveDeck();
+    const d = Deck.getActivePage();
     // Place pad at (row 1, col 1) = idx 9 in 8x8, and (row 6, col 6) = idx 54
     d.pads[9] = Deck.normalizePad({ type: 'scene', sceneName: 'Slides', label: 'R2C2' });
     d.pads[54] = Deck.normalizePad({ type: 'scene', sceneName: 'BRB', label: 'DroppedPad' });
     Deck.saveCfg();
-    Deck.resizeDeck(d.id, 4, 3);
+    Deck.resizePage(d.id, 4, 3);
   });
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad').length === 12);
   // In 4x3, (row 1, col 1) is index 1*4 + 1 = 5
   assert.ok((await pad(5).textContent()).includes('R2C2'), '2D (row 1, col 1) mapped to index 5 in 4x3');
   assert.equal(await page.evaluate(() => Deck.getActivePads().some((p) => p.label === 'DroppedPad')), false, 'out-of-bounds pad dropped cleanly');
   // Clamp bounds (1x1 -> 2x2, 99x99 -> 12x10)
-  const clampedMin = await page.evaluate(() => { const d = Deck.resizeDeck(Deck.getActiveDeck().id, 1, 1); return [d.cols, d.rows]; });
+  const clampedMin = await page.evaluate(() => { const d = Deck.resizePage(Deck.getActivePage().id, 1, 1); return [d.cols, d.rows]; });
   assert.deepEqual(clampedMin, [2, 2]);
-  const clampedMax = await page.evaluate(() => { const d = Deck.resizeDeck(Deck.getActiveDeck().id, 99, 99); return [d.cols, d.rows]; });
+  const clampedMax = await page.evaluate(() => { const d = Deck.resizePage(Deck.getActivePage().id, 99, 99); return [d.cols, d.rows]; });
   assert.deepEqual(clampedMax, [12, 10]);
   console.log('  ✓ grid resize 2D coordinate preservation & bounds clamping (2..12 x 2..10)');
 
-  // 11. Narrow OBS dock viewport (360x420) fits without horizontal overflow even with 4 tabs + 12x10 grid
+  // 11. Narrow OBS dock viewport (360x420) fits without horizontal overflow + pads stay >= 54x54px
   await page.click('#btn-deck-add');
   await page.click('#btn-deck-add');
   await page.click('#btn-deck-add');
-  await page.locator('#deck-tabs .deck-tab').nth(0).click();
+  await page.locator('#deck-tabs .page-tab').nth(0).click();
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad').length === 120);
   await page.setViewportSize({ width: 360, height: 420 });
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  assert.equal(overflow, false, 'no horizontal overflow at 360x420 OBS dock size with 4 tabs & 12x10 grid');
-  console.log('  ✓ narrow OBS dock viewport (360x420) layout check with multiple tabs & 12x10 grid');
+  const layoutAudit = await page.evaluate(() => {
+    const pads = [...document.querySelectorAll('#grid .pad')].map((el) => el.getBoundingClientRect());
+    return {
+      overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      minW: Math.min(...pads.map((r) => r.width)),
+      minH: Math.min(...pads.map((r) => r.height)),
+    };
+  });
+  assert.equal(layoutAudit.overflow, false, 'no horizontal overflow at 360x420 OBS dock size with 4 tabs & 12x10 grid');
+  assert.ok(layoutAudit.minW >= 54 && layoutAudit.minH >= 54, `pads remain >= 54x54px (got ${layoutAudit.minW}x${layoutAudit.minH})`);
+  console.log('  ✓ narrow OBS dock viewport (360x420) layout & min 54x54 pad size check');
+
+  // 12. OBS Group Transform / PiP + ?port= query param + port auto-discovery probe + 4009 auth stop
+  await page.click('#btn-ws-connect');
+  await page.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+  await page.evaluate(async () => {
+    await Deck.execAction({ type: 'transform', sceneName: 'Cam Group', sourceName: 'Ring Light Overlay', preset: 'pip_tl' });
+  });
+  assert.ok(state.itemTransforms['Cam Group:11'].scaleX < 0.5, 'transform PiP works inside OBS Groups');
+
+  const deadSrv = net.createServer();
+  await new Promise((r) => deadSrv.listen(0, '127.0.0.1', r));
+  const deadPort = deadSrv.address().port;
+  await new Promise((r) => deadSrv.close(r));
+
+  const probedPort = await page.evaluate(async ([dp, lp]) => Deck.probeObsPorts('127.0.0.1', [dp, lp], 300), [deadPort, port]);
+  assert.equal(probedPort, port, 'probeObsPorts skips dead port and finds live OBS port');
+
+  const ctxUrl = await browser.newContext();
+  const pageUrl = await ctxUrl.newPage();
+  pageUrl.on('pageerror', (e) => pageErrors.push(e.message));
+  await pageUrl.goto(`${DECK_URL}?port=${port}&password=do-not-read`);
+  await pageUrl.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+  assert.equal(await pageUrl.inputValue('#ws-port'), String(port), '?port= query param applied on boot');
+  assert.equal(await pageUrl.inputValue('#ws-pass'), '', 'password query param is ignored');
+  await ctxUrl.close();
+
+  const authObs = createFakeObs(true);
+  await new Promise((r) => authObs.wss.once('listening', r));
+  const authPort = authObs.wss.address().port;
+  try {
+    const ctxAuth = await browser.newContext();
+    const pageAuth = await ctxAuth.newPage();
+    pageAuth.on('pageerror', (e) => pageErrors.push(e.message));
+    await pageAuth.goto(`${DECK_URL}?port=${authPort}`);
+    await pageAuth.waitForFunction(() => document.getElementById('conn-text').textContent === 'Auth Failed');
+    const connsOnAuthFail = authObs.state.connections;
+    await pageAuth.waitForTimeout(300);
+    assert.equal(authObs.state.connections, connsOnAuthFail, '4009 Auth Failed stops without probing or reconnecting');
+    await ctxAuth.close();
+  } finally {
+    authObs.wss.close();
+  }
+  console.log('  ✓ Group PiP transform + ?port= query param + probeObsPorts + 4009 stops cleanly');
 
   assert.deepEqual(pageErrors, [], `unexpected page errors: ${pageErrors.join('; ')}`);
 
-  // 12. Release build check: npm run build:release produces clean valid ZIPs
+  // 13. Release build check: npm run build:release produces clean valid ZIPs for v2.1.0
+  assert.equal(PKG.version, '2.1.0', 'package.json version is 2.1.0');
   execFileSync(process.execPath, [join(__dirname, 'scripts', 'build-release.mjs')], { cwd: __dirname, stdio: 'pipe' });
   const zipPath = join(__dirname, 'dist', 'obs-virtual-deck.zip');
   const latestZipPath = join(__dirname, 'dist', 'obs-virtual-deck-latest.zip');
@@ -383,7 +470,42 @@ try {
   assert.equal(macEntry.data.toString('utf8').includes('\r\n'), false, 'Install-Mac.command uses LF line endings');
   const winEntry = entries.find((e) => e.name === 'obs-virtual-deck/Install-Windows.bat');
   assert.equal(winEntry.data.toString('utf8').includes('\r\n'), true, 'Install-Windows.bat uses CRLF line endings');
-  console.log(`  ✓ release ZIP build verified (${entries.length} clean files, valid PKZIP, zero leaked tests/node_modules)`);
+  console.log(`  ✓ release ZIP build verified (v${PKG.version}, ${entries.length} clean files, valid PKZIP, zero leaked tests/node_modules)`);
+
+  // 14. Install-Windows.bat port detection against mock config.json (verifies ?port=4459 & NO password)
+  if (process.platform === 'win32') {
+    const mockRoot = fs.mkdtempSync(join(os.tmpdir(), 'obs-deck-win-install-'));
+    try {
+      const mockAppData = join(mockRoot, 'appdata');
+      const mockCfgDir = join(mockAppData, 'obs-studio', 'plugin_config', 'obs-websocket');
+      const mockDest = join(mockRoot, 'dest');
+      fs.mkdirSync(mockCfgDir, { recursive: true });
+      fs.writeFileSync(join(mockCfgDir, 'config.json'), JSON.stringify({
+        server_enabled: true,
+        server_port: 4459,
+        auth_required: true,
+        server_password: 'super-secret-password-never-leak',
+      }));
+      const builtBat = join(__dirname, 'dist', 'obs-virtual-deck', 'Install-Windows.bat');
+      const out = execFileSync('cmd.exe', ['/c', builtBat], {
+        cwd: join(__dirname, 'dist', 'obs-virtual-deck'),
+        env: {
+          ...process.env,
+          OBS_DECK_NO_PAUSE: '1',
+          OBS_DECK_DEST: mockDest,
+          APPDATA: mockAppData,
+        },
+        encoding: 'utf8',
+      });
+      assert.match(out, /deck\.html\?port=4459/, 'Install-Windows.bat appended ?port=4459 from mock config.json');
+      assert.equal(out.includes('super-secret-password-never-leak'), false, 'Install-Windows.bat never leaks server_password');
+      assert.equal(/pass(word)?=/i.test(out), false, 'Install-Windows.bat URL has no password query param');
+      assert.ok(fs.existsSync(join(mockDest, 'deck.html')), 'Install-Windows.bat copied deck.html to dest');
+      console.log('  ✓ Install-Windows.bat mock config.json ?port=4459 detection & zero-password check');
+    } finally {
+      fs.rmSync(mockRoot, { recursive: true, force: true });
+    }
+  }
 
   console.log('\nPASS: all deck edge E2E checks succeeded.');
 } finally {

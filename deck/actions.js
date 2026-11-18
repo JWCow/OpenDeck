@@ -12,14 +12,16 @@
     previous: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PREVIOUS',
   };
 
-  function timerKey(deckId, idx) {
-    return `${deckId}:${idx}`;
+  function timerKey(pageId, idx) {
+    return `${pageId}:${idx}`;
   }
 
   function isPadActive(p) {
     const { obs, cfg } = Deck;
     if (!p || p.type === 'none') return false;
-    if (p.type === 'scene') return Boolean(p.sceneName && obs.programScene === p.sceneName);
+    if (p.type === 'scene') {
+      return (p.mode || 'named') === 'named' && Boolean(p.sceneName && obs.programScene === p.sceneName);
+    }
     if (p.type === 'source') {
       const items = obs.itemsByScene[p.sceneName] || [];
       return items.some((it) => it.sourceName === p.sourceName && it.sceneItemEnabled);
@@ -29,7 +31,29 @@
       return flts.some((f) => f.filterName === p.filterName && f.filterEnabled);
     }
     if (p.type === 'mute') return Boolean(p.inputName && obs.mutes[p.inputName]);
-    if (p.type === 'page') return (p.mode || 'goto') === 'goto' && Boolean(p.deckId && cfg.activeDeckId === p.deckId);
+    if (p.type === 'monitor') {
+      if (!p.inputName) return false;
+      const cur = obs.monitors?.[p.inputName];
+      if ((p.monitorType || 'cycle') === 'cycle') {
+        return cur === 'OBS_MONITORING_TYPE_MONITOR_ONLY' || cur === 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT';
+      }
+      return cur === p.monitorType;
+    }
+    if (p.type === 'transform') {
+      if (!p.sceneName || !p.sourceName) return false;
+      const state = obs.transforms?.[`${p.sceneName}\0${p.sourceName}`];
+      if (!state) return false;
+      if ((p.preset || 'toggle_pip') === 'toggle_pip') return state !== 'full_reset';
+      return state === p.preset;
+    }
+    if (p.type === 'image') {
+      if ((p.mode || 'set_file') !== 'set_file') return false;
+      return Boolean(p.inputName && p.filePath && obs.imageFiles?.[p.inputName] === p.filePath);
+    }
+    if (p.type === 'page') {
+      const pid = p.pageId || p.deckId;
+      return (p.mode || 'goto') === 'goto' && Boolean(pid && cfg.activePageId === pid);
+    }
     if (p.type === 'studio') {
       const act = p.action || 'toggle';
       if (act === 'preview') return Boolean(obs.studioModeEnabled && p.sceneName && obs.previewScene === p.sceneName);
@@ -66,21 +90,105 @@
     } catch {}
   }
 
+  async function getSceneItems(sceneName) {
+    const { obs, obsCall } = Deck;
+    let items = obs.itemsByScene[sceneName];
+    if (!items) {
+      const req = obs.groups.has(sceneName) ? 'GetGroupSceneItemList' : 'GetSceneItemList';
+      items = (await obsCall(req, { sceneName })).sceneItems || [];
+      obs.itemsByScene[sceneName] = items;
+    }
+    return items;
+  }
+
+  function computeTransformPreset(cur, preset, videoSettings) {
+    const baseW = Number(videoSettings?.baseWidth) || 1920;
+    const baseH = Number(videoSettings?.baseHeight) || 1080;
+    const srcW = Number(cur?.sourceWidth) || baseW;
+    const srcH = Number(cur?.sourceHeight) || baseH;
+    const effW = Math.max(1, srcW - (Number(cur?.cropLeft) || 0) - (Number(cur?.cropRight) || 0));
+    const effH = Math.max(1, srcH - (Number(cur?.cropTop) || 0) - (Number(cur?.cropBottom) || 0));
+
+    let effectivePreset = preset || 'toggle_pip';
+    if (effectivePreset === 'toggle_pip') {
+      const curScaleX = Number(cur?.scaleX) || 1;
+      effectivePreset = (effW * curScaleX) < baseW * 0.6 ? 'full_reset' : 'pip_br';
+    }
+
+    if (effectivePreset === 'full_reset') {
+      const fullScale = Math.min(baseW / effW, baseH / effH);
+      const fw = effW * fullScale;
+      const fh = effH * fullScale;
+      return {
+        effectivePreset,
+        sceneItemTransform: {
+          alignment: 5,
+          positionX: Math.round((baseW - fw) / 2),
+          positionY: Math.round((baseH - fh) / 2),
+          scaleX: fullScale,
+          scaleY: fullScale,
+          rotation: 0,
+        },
+      };
+    }
+
+    if (effectivePreset === 'center_half') {
+      const halfScale = Math.min((baseW * 0.5) / effW, (baseH * 0.5) / effH);
+      const hw = effW * halfScale;
+      const hh = effH * halfScale;
+      return {
+        effectivePreset,
+        sceneItemTransform: {
+          alignment: 5,
+          positionX: Math.round((baseW - hw) / 2),
+          positionY: Math.round((baseH - hh) / 2),
+          scaleX: halfScale,
+          scaleY: halfScale,
+        },
+      };
+    }
+
+    const margin = Math.round(Math.min(baseW, baseH) * 0.03);
+    const pipScale = Math.min((baseW * 0.28) / effW, (baseH * 0.28) / effH);
+    const pipW = effW * pipScale;
+    const pipH = effH * pipScale;
+    const isRight = effectivePreset === 'pip_tr' || effectivePreset === 'pip_br';
+    const isBottom = effectivePreset === 'pip_bl' || effectivePreset === 'pip_br';
+
+    return {
+      effectivePreset,
+      sceneItemTransform: {
+        alignment: 5,
+        positionX: isRight ? Math.round(baseW - pipW - margin) : margin,
+        positionY: isBottom ? Math.round(baseH - pipH - margin) : margin,
+        scaleX: pipScale,
+        scaleY: pipScale,
+      },
+    };
+  }
+
   async function execAction(a) {
     const { obs, obsCall, refreshFilters, cfg } = Deck;
     if (!a || a.type === 'none' || a.type === 'wait') return;
 
-    if (a.type === 'scene' && a.sceneName) {
-      await obsCall('SetCurrentProgramScene', { sceneName: a.sceneName });
-      obs.programScene = a.sceneName;
-      Deck.updateSceneHeader();
-    } else if (a.type === 'source' && a.sceneName && a.sourceName) {
-      let items = obs.itemsByScene[a.sceneName];
-      if (!items) {
-        const req = obs.groups.has(a.sceneName) ? 'GetGroupSceneItemList' : 'GetSceneItemList';
-        items = (await obsCall(req, { sceneName: a.sceneName })).sceneItems || [];
-        obs.itemsByScene[a.sceneName] = items;
+    if (a.type === 'scene') {
+      const mode = a.mode || 'named';
+      if (mode === 'next' || mode === 'prev') {
+        const scenes = obs.scenes || [];
+        if (!scenes.length) throw new Error('No scenes available');
+        const curIdx = scenes.indexOf(obs.programScene);
+        const delta = mode === 'next' ? 1 : -1;
+        const target = curIdx < 0 ? scenes[0] : scenes[(curIdx + delta + scenes.length) % scenes.length];
+        await obsCall('SetCurrentProgramScene', { sceneName: target });
+        obs.programScene = target;
+        Deck.updateSceneHeader();
+      } else if (a.sceneName) {
+        await obsCall('SetCurrentProgramScene', { sceneName: a.sceneName });
+        obs.programScene = a.sceneName;
+        Deck.updateSceneHeader();
       }
+    } else if (a.type === 'source' && a.sceneName && a.sourceName) {
+      const items = await getSceneItems(a.sceneName);
       const targets = items.filter((it) => it.sourceName === a.sourceName);
       if (!targets.length) throw new Error(`Source "${a.sourceName}" not in "${a.sceneName}"`);
       const mode = a.mode || 'toggle';
@@ -127,20 +235,72 @@
         await obsCall('SetInputMute', { inputName: a.inputName, inputMuted: want });
         obs.mutes[a.inputName] = want;
       }
+    } else if (a.type === 'monitor' && a.inputName) {
+      const mt = a.monitorType || 'cycle';
+      let nextType = mt;
+      if (mt === 'cycle') {
+        let cur = obs.monitors[a.inputName];
+        if (!cur) cur = await Deck.fetchMonitorType(a.inputName);
+        const order = Deck.MONITOR_TYPES;
+        const idx = order.indexOf(cur);
+        nextType = order[(idx + 1) % order.length];
+      }
+      await obsCall('SetInputAudioMonitorType', { inputName: a.inputName, monitorType: nextType });
+      obs.monitors[a.inputName] = nextType;
+    } else if (a.type === 'transform' && a.sceneName && a.sourceName) {
+      const items = await getSceneItems(a.sceneName);
+      const item = items.find((it) => it.sourceName === a.sourceName);
+      if (!item) throw new Error(`Source "${a.sourceName}" not in "${a.sceneName}"`);
+      const trRes = await obsCall('GetSceneItemTransform', {
+        sceneName: a.sceneName,
+        sceneItemId: item.sceneItemId,
+      });
+      const cur = trRes.sceneItemTransform || trRes || {};
+      const { effectivePreset, sceneItemTransform } = computeTransformPreset(cur, a.preset, obs.videoSettings);
+      await obsCall('SetSceneItemTransform', {
+        sceneName: a.sceneName,
+        sceneItemId: item.sceneItemId,
+        sceneItemTransform,
+      });
+      obs.transforms[`${a.sceneName}\0${a.sourceName}`] = effectivePreset;
+    } else if (a.type === 'image' && a.inputName) {
+      const mode = a.mode || 'set_file';
+      if (mode === 'set_file') {
+        await obsCall('SetInputSettings', {
+          inputName: a.inputName,
+          inputSettings: { file: a.filePath || '' },
+          overlay: true,
+        });
+        obs.imageFiles[a.inputName] = a.filePath || '';
+      } else {
+        const enumAction = MEDIA_ENUM[mode] || MEDIA_ENUM.restart;
+        await obsCall('TriggerMediaInputAction', { inputName: a.inputName, mediaAction: enumAction });
+      }
+    } else if (a.type === 'hotkey' && a.hotkeyName) {
+      await obsCall('TriggerHotkeyByName', { hotkeyName: a.hotkeyName });
+    } else if (a.type === 'chapter') {
+      const data = a.chapterName ? { chapterName: a.chapterName } : {};
+      await obsCall('CreateRecordChapter', data);
+    } else if (a.type === 'stats') {
+      await Deck.fetchStats();
+      return;
     } else if (a.type === 'page') {
       const mode = a.mode || 'goto';
       if (mode === 'next' || mode === 'prev') {
-        const decks = cfg.decks || [];
-        if (decks.length > 1) {
-          const curIdx = Math.max(0, decks.findIndex((d) => d.id === cfg.activeDeckId));
+        const pages = cfg.pages || [];
+        if (pages.length > 1) {
+          const curIdx = Math.max(0, pages.findIndex((d) => d.id === cfg.activePageId));
           const delta = mode === 'next' ? 1 : -1;
-          const nextDeck = decks[(curIdx + delta + decks.length) % decks.length];
-          Deck.setActiveDeck(nextDeck.id);
+          const nextPage = pages[(curIdx + delta + pages.length) % pages.length];
+          Deck.setActivePage(nextPage.id);
           return;
         }
-      } else if (a.deckId) {
-        Deck.setActiveDeck(a.deckId);
-        return;
+      } else {
+        const targetId = a.pageId || a.deckId;
+        if (targetId) {
+          Deck.setActivePage(targetId);
+          return;
+        }
       }
     } else if (a.type === 'studio') {
       const act = a.action || 'toggle';
@@ -331,13 +491,13 @@
     return true;
   }
 
-  function startAutoOff(key, deckId, idx, pad) {
+  function startAutoOff(key, pageId, idx, pad) {
     abortAutoOff(key);
     const ms = Math.max(1, Number(pad.autoOffMs) || 0);
     const reverse = buildAutoOffReverse(pad);
     if (!reverse) return;
     const ctx = {
-      deckId,
+      pageId,
       idx,
       aborted: false,
       endsAt: Date.now() + ms,
@@ -373,14 +533,20 @@
     return true;
   }
 
-  Deck.abortDeckTimers = (deckId) => {
-    const prefix = `${deckId}:`;
+  Deck.abortPadTimer = (pageId, idx) => {
+    const key = timerKey(pageId, idx);
+    abortMacro(key);
+    abortAutoOff(key);
+  };
+
+  Deck.abortPageTimers = (pageId) => {
+    const prefix = `${pageId}:`;
     for (const k of [...Deck.activeMacros.keys()]) if (k.startsWith(prefix)) abortMacro(k);
     for (const k of [...Deck.activeAutoOffs.keys()]) if (k.startsWith(prefix)) abortAutoOff(k);
   };
 
-  Deck.getPadRuntime = (idx, deckId = Deck.cfg.activeDeckId) => {
-    const key = timerKey(deckId, idx);
+  Deck.getPadRuntime = (idx, pageId = Deck.cfg.activePageId) => {
+    const key = timerKey(pageId, idx);
     const macro = Deck.activeMacros.get(key);
     if (macro) return { running: true, kind: 'macro', endsAt: macro.endsAt || 0 };
     const autoOff = Deck.activeAutoOffs.get(key);
@@ -388,21 +554,21 @@
     return { running: false, kind: null, endsAt: 0 };
   };
 
-  Deck.getActiveDeckTicks = () => {
-    const activeId = Deck.cfg.activeDeckId;
+  Deck.getActivePageTicks = () => {
+    const activeId = Deck.cfg.activePageId;
     const out = [];
     for (const m of Deck.activeMacros.values()) {
-      if (m.deckId === activeId) out.push({ idx: m.idx, kind: 'macro', endsAt: m.endsAt || 0 });
+      if (m.pageId === activeId) out.push({ idx: m.idx, kind: 'macro', endsAt: m.endsAt || 0 });
     }
     for (const t of Deck.activeAutoOffs.values()) {
-      if (t.deckId === activeId) out.push({ idx: t.idx, kind: 'autoOff', endsAt: t.endsAt || 0 });
+      if (t.pageId === activeId) out.push({ idx: t.idx, kind: 'autoOff', endsAt: t.endsAt || 0 });
     }
     return out;
   };
 
-  async function runMacro(idx, pad, deckId) {
+  async function runMacro(idx, pad, pageId) {
     const { activeMacros, setMsg } = Deck;
-    const key = timerKey(deckId, idx);
+    const key = timerKey(pageId, idx);
     if (activeMacros.has(key)) {
       abortMacro(key);
       setMsg(`Cancelled macro: ${pad.label || `Pad ${idx + 1}`}`);
@@ -411,7 +577,7 @@
     }
     const steps = pad.steps || [];
     if (!steps.length) return;
-    const ctx = { deckId, idx, aborted: false, waitTimer: null, tickTimer: null, endsAt: 0, resolveWait: null };
+    const ctx = { pageId, idx, aborted: false, waitTimer: null, tickTimer: null, endsAt: 0, resolveWait: null };
     activeMacros.set(key, ctx);
     Deck.renderGrid();
     try {
@@ -468,7 +634,7 @@
           targets.set(`${st.sourceName}\0${st.filterName}`, { sourceName: st.sourceName, filterName: st.filterName });
         }
       };
-      for (const d of cfg.decks) {
+      for (const d of cfg.pages) {
         for (const p of d.pads) {
           collect(p);
           (p.steps || []).forEach(collect);
@@ -496,19 +662,24 @@
   }
 
   function describePad(p) {
+    if (p.type === 'scene' && (p.mode === 'next' || p.mode === 'prev')) {
+      return p.label || (p.mode === 'next' ? 'Next Scene' : 'Prev Scene');
+    }
+    if (p.type === 'stats') return p.label || Deck.formatStatsText(p.mode);
     return p.label || p.sceneName || p.filterName || p.sourceName || p.inputName
-      || p.profileName || p.collectionName || p.transitionName || p.target || p.type;
+      || p.hotkeyName || p.chapterName || p.profileName || p.collectionName
+      || p.transitionName || p.preset || p.target || p.type;
   }
 
-  async function onPadClick(idx, deckId = Deck.cfg.activeDeckId) {
+  async function onPadClick(idx, pageId = Deck.cfg.activePageId) {
     if (Deck.editMode) { Deck.openPadEditor(idx); return; }
-    const deck = Deck.cfg.decks.find((d) => d.id === deckId) || Deck.getActiveDeck();
-    const p = deck.pads[idx];
+    const page = Deck.cfg.pages.find((d) => d.id === pageId) || Deck.getActivePage();
+    const p = page.pads[idx];
     if (!p || p.type === 'none') { Deck.openPadEditor(idx); return; }
     if (p.type === 'panic') { await runPanic(); return; }
-    if (p.type === 'macro') { await runMacro(idx, p, deck.id); return; }
+    if (p.type === 'macro') { await runMacro(idx, p, page.id); return; }
 
-    const key = timerKey(deck.id, idx);
+    const key = timerKey(page.id, idx);
     if (Deck.activeAutoOffs.has(key)) {
       abortAutoOff(key);
       if (isPadActive(p)) {
@@ -532,7 +703,7 @@
     try {
       await execAction(p);
       if (isTurnOnAction(p, wasActive)) {
-        startAutoOff(key, deck.id, idx, p);
+        startAutoOff(key, page.id, idx, p);
       }
       Deck.setMsg(`Ran: ${describePad(p)}`);
     } catch (e) {
@@ -540,15 +711,15 @@
     }
   }
 
-  Deck.findPadByHotkey = (hotkeyOrEvent, deck = Deck.getActiveDeck()) => {
+  Deck.findPadByHotkey = (hotkeyOrEvent, page = Deck.getActivePage()) => {
     const target = typeof hotkeyOrEvent === 'string'
       ? Deck.normalizeHotkey(hotkeyOrEvent)
       : Deck.hotkeyFromEvent(hotkeyOrEvent);
-    if (!target || !deck) return null;
-    for (let i = 0; i < deck.pads.length; i++) {
-      const p = deck.pads[i];
+    if (!target || !page) return null;
+    for (let i = 0; i < page.pads.length; i++) {
+      const p = page.pads[i];
       if (p && p.type !== 'none' && p.hotkey && Deck.normalizeHotkey(p.hotkey) === target) {
-        return { deck, idx: i, pad: p };
+        return { page, idx: i, pad: p };
       }
     }
     return null;
@@ -564,7 +735,7 @@
     const match = Deck.findPadByHotkey(ev);
     if (!match) return false;
     if (typeof ev.preventDefault === 'function') ev.preventDefault();
-    Deck.onPadClick(match.idx, match.deck.id);
+    Deck.onPadClick(match.idx, match.page.id);
     return true;
   };
 

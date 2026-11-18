@@ -46,12 +46,16 @@ try {
   assert.equal(state.connections, connsAtFail, 'does not auto-reconnect on 4009 Auth Failed');
   console.log('  ✓ 4009 Auth Failed handled without reconnect loop');
 
-  // 3. Correct UTF-8 password -> Connected & state synced
+  // 3. Correct UTF-8 password -> Connected & state synced + Auto-Import Wizard first-connect prompt
   await page.fill('#ws-pass', PASSWORD);
   await page.click('#btn-ws-connect');
   await page.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
   assert.equal(await page.textContent('#scene-info'), 'Program: Main Cam');
-  console.log('  ✓ OBS WebSocket v5 SHA-256 auth + initial sync');
+  await page.waitForFunction(() => document.getElementById('import-wiz-dlg').open === true);
+  assert.match(await page.textContent('#wiz-summary'), /Read-only scan/);
+  await page.click('#btn-wiz-cancel');
+  assert.equal(await page.evaluate(() => document.getElementById('import-wiz-dlg').open), false);
+  console.log('  ✓ OBS WebSocket v5 SHA-256 auth + initial sync + first-connect Auto-Import prompt');
 
   // 4. Dropdown-first Pad Editor: auto-listing scenes, sources, filters + quick icons + XSS escaping
   await page.click('#btn-edit');
@@ -204,13 +208,30 @@ try {
   await page.locator('#f-fields select').nth(0).selectOption('Mic/Aux');
   await page.fill('#f-label', 'Mute Mic');
   await page.click('#pad-form button[type="submit"]');
-  await pad(6).dragTo(pad(7));
+  // Verify .pad.drag-over highlight on dragover + clean drop without opening #pad-dlg
+  await page.evaluate(() => {
+    const src = document.querySelectorAll('#grid .pad')[6];
+    const dst = document.querySelectorAll('#grid .pad')[7];
+    const dt = new DataTransfer();
+    src.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    dst.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+  assert.ok((await pad(7).getAttribute('class')).includes('drag-over'), 'dragover adds .pad.drag-over highlight');
+  await page.evaluate(() => {
+    const dst = document.querySelectorAll('#grid .pad')[7];
+    const src = document.querySelectorAll('#grid .pad')[6];
+    const dt = new DataTransfer();
+    dst.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    src.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+  assert.equal(await page.evaluate(() => document.getElementById('pad-dlg').open), false, 'drop does not open pad editor');
   assert.equal((await pad(7).textContent()).includes('Mute Mic'), true, 'drag swap moved pad to slot 7');
+  await page.waitForTimeout(280);
   await page.click('#btn-edit');
   await pad(7).click();
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[7].className.includes('active'));
   assert.equal(state.mutes['Mic/Aux'], true);
-  console.log('  ✓ macro re-click cancel + drag swap + mute toggle');
+  console.log('  ✓ macro re-click cancel + drag swap highlight + mute toggle');
 
   // 11. Auto-Off timed toggle (autoOffMs): ON -> countdown -> automatic OFF
   // Ensure Blur filter is OFF first (Test 10 macro step 0 enabled Blur before cancel)
@@ -241,23 +262,23 @@ try {
   assert.equal((await pad(8).getAttribute('class')).includes('active'), false, 'auto-off cleared active LED');
   console.log('  ✓ auto-off timed toggle (ON -> countdown -> auto OFF)');
 
-  // 12. Multiple Decks / Pages, Custom Grid Sizing & `page` navigation pad
+  // 12. Multiple Pages, Custom Grid Sizing, Cross-Page Drag & `page` navigation pad
   await page.click('#btn-deck-add');
-  await page.waitForFunction(() => document.querySelectorAll('#deck-tabs .deck-tab').length === 2);
+  await page.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 2);
   await page.click('#btn-deck-cfg');
   await page.fill('#d-name', 'Show Controls');
   await page.click('#d-presets button[data-cols="4"][data-rows="3"]');
   await page.click('#deck-form button[type="submit"]');
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad').length === 12);
   assert.equal((await page.textContent('#btn-deck-cfg')).trim(), '4×3 ⚙');
-  assert.equal((await page.locator('#deck-tabs .deck-tab.on').textContent()).trim(), 'Show Controls');
+  assert.equal((await page.locator('#deck-tabs .page-tab.on').textContent()).trim(), 'Show Controls');
 
   // Configure pad 0 on Page 2 to jump back to Page 1 (Main)
   await page.click('#btn-edit');
   await pad(0).click();
   await page.selectOption('#f-type', 'page');
   await page.locator('#f-fields select').nth(0).selectOption('goto');
-  await page.locator('#f-fields select').nth(1).selectOption('deck-1');
+  await page.locator('#f-fields select').nth(1).selectOption('page-1');
   await page.fill('#f-label', 'Back Main');
   await page.click('#pad-form button[type="submit"]');
 
@@ -267,25 +288,49 @@ try {
   await page.locator('#f-fields select').nth(0).selectOption('next');
   await page.fill('#f-label', 'Next Pg');
   await page.click('#pad-form button[type="submit"]');
+
+  // Configure pad 10 temporarily and drag it onto Page 1 tab to verify cross-page move
+  await pad(10).click();
+  await page.selectOption('#f-type', 'chapter');
+  await page.fill('#f-label', 'MovedChap');
+  await page.click('#pad-form button[type="submit"]');
+  await page.evaluate(() => {
+    const src = document.querySelectorAll('#grid .pad')[10];
+    const tab0 = document.querySelectorAll('#deck-tabs .page-tab')[0];
+    const dt = new DataTransfer();
+    src.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    tab0.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+  assert.ok((await page.locator('#deck-tabs .page-tab').nth(0).getAttribute('class')).includes('drag-over'), 'page tab shows .drag-over highlight');
+  await page.evaluate(() => {
+    const src = document.querySelectorAll('#grid .pad')[10];
+    const tab0 = document.querySelectorAll('#deck-tabs .page-tab')[0];
+    const dt = new DataTransfer();
+    tab0.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    src.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+  assert.equal((await pad(10).textContent()).includes('MovedChap'), false, 'moved pad removed from source page');
+  assert.equal(await page.evaluate(() => Deck.cfg.pages[0].pads.some((p) => p.label === 'MovedChap')), true, 'moved pad placed on target page');
+  await page.waitForTimeout(280);
   await page.click('#btn-edit');
 
   // Clicking pad 0 on Page 2 switches to Page 1 (64 pads)
   await pad(0).click();
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad').length === 64);
-  assert.equal((await page.locator('#deck-tabs .deck-tab.on').textContent()).trim(), 'Main');
+  assert.equal((await page.locator('#deck-tabs .page-tab.on').textContent()).trim(), 'Main');
 
   // Switch back to Page 2 via tab, duplicate & delete duplicate
-  await page.locator('#deck-tabs .deck-tab').nth(1).click();
+  await page.locator('#deck-tabs .page-tab').nth(1).click();
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad').length === 12);
   await page.click('#btn-deck-dup');
-  await page.waitForFunction(() => document.querySelectorAll('#deck-tabs .deck-tab').length === 3);
+  await page.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 3);
   await page.click('#btn-deck-cfg');
   await page.click('#btn-deck-del');
-  await page.waitForFunction(() => document.querySelectorAll('#deck-tabs .deck-tab').length === 2);
-  console.log('  ✓ multi-page decks (add, rename, 4x3 grid resize, page pad, duplicate, delete)');
+  await page.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 2);
+  console.log('  ✓ multi-page deck (add, rename, 4x3 grid resize, cross-page drag, page pad, duplicate, delete)');
 
-  // 13. All new OBS WebSocket v5 Actions on Page 2 (12-pad grid)
-  await page.locator('#deck-tabs .deck-tab').nth(1).click();
+  // 13. OBS WebSocket v5 Actions (existing + all 7 new v2.1.0 actions) on Page 2 (12-pad grid)
+  await page.locator('#deck-tabs .page-tab').nth(1).click();
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad').length === 12);
   await page.click('#btn-edit');
 
@@ -413,7 +458,7 @@ try {
   const [shotDl] = await Promise.all([page.waitForEvent('download'), pad(10).click()]);
   assert.match(shotDl.suggestedFilename(), /^screenshot-Slides-.*\.png$/);
 
-  // Exercise remaining actions (vcam, replay, saveReplay, recordPause, browser refresh, profile, collection, SaveSourceScreenshot)
+  // Exercise remaining v2.0 actions (vcam, replay, saveReplay, recordPause, browser refresh, profile, collection, SaveSourceScreenshot)
   await page.evaluate(async () => {
     await Deck.execAction({ type: 'output', target: 'vcam', mode: 'start' });
     await Deck.execAction({ type: 'output', target: 'replay', mode: 'start' });
@@ -436,24 +481,151 @@ try {
   assert.deepEqual(state.savedScreenshots[0], { sourceName: 'Main Cam', imageFormat: 'jpg', imageFilePath: '/tmp/shot.jpg' });
   console.log('  ✓ OBS v5 actions (Studio, Outputs, Media, Browser, Volume, Profile, Collection, Transition, Screenshot)');
 
-  // 14. localStorage persistence + v2 Export/Import + legacy v1 JSON import + invalid import guard
-  await page.locator('#deck-tabs .deck-tab').nth(0).click();
+  // 13b. All 7 new v2.1.0 OBS WebSocket v5 actions on a dedicated 4x3 Page
+  await page.click('#btn-deck-add');
+  await page.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 3);
+  await page.click('#btn-edit');
+
+  // Slot 0: Next Scene
+  await pad(0).click();
+  await page.selectOption('#f-type', 'scene');
+  await page.locator('#f-fields select').nth(1).selectOption('next');
+  await page.click('#pad-form button[type="submit"]');
+
+  // Slot 1: Prev Scene
+  await pad(1).click();
+  await page.selectOption('#f-type', 'scene');
+  await page.locator('#f-fields select').nth(1).selectOption('prev');
+  await page.click('#pad-form button[type="submit"]');
+
+  // Slot 2: Telemetry Stats
+  await pad(2).click();
+  await page.selectOption('#f-type', 'stats');
+  await page.locator('#f-fields select').nth(0).selectOption('all');
+  await page.click('#pad-form button[type="submit"]');
+
+  // Slot 3: OBS Hotkey Trigger
+  await pad(3).click();
+  await page.selectOption('#f-type', 'hotkey');
+  const hkOpts = await page.locator('#f-fields select').nth(0).locator('option').allTextContents();
+  assert.ok(hkOpts.includes('OBSBasic.StartRecording'), 'hotkeys auto-listed from GetHotkeyList');
+  await page.locator('#f-fields select').nth(0).selectOption('OBSBasic.StartRecording');
+  await page.click('#pad-form button[type="submit"]');
+
+  // Slot 4: Recording Chapter Marker
+  await pad(4).click();
+  await page.selectOption('#f-type', 'chapter');
+  await page.locator('#f-fields input[type="text"]').first().fill('Boss Fight');
+  await page.click('#pad-form button[type="submit"]');
+
+  // Slot 5: Audio Monitor Mode (cycle)
+  await pad(5).click();
+  await page.selectOption('#f-type', 'monitor');
+  await page.locator('#f-fields select').nth(0).selectOption('Mic/Aux');
+  await page.locator('#f-fields select').nth(1).selectOption('cycle');
+  await page.click('#pad-form button[type="submit"]');
+
+  // Slot 6: Source Transform / PiP (Main Cam / Webcam, toggle_pip)
+  await pad(6).click();
+  await page.selectOption('#f-type', 'transform');
+  await page.locator('#f-fields select').nth(0).selectOption('Main Cam');
+  await page.locator('#f-fields select').nth(1).selectOption('Webcam');
+  await page.locator('#f-fields select').nth(2).selectOption('toggle_pip');
+  await page.click('#pad-form button[type="submit"]');
+
+  // Slot 7: Image Swap (Slide Image, set_file)
+  await pad(7).click();
+  await page.selectOption('#f-type', 'image');
+  const imgOpts = await page.locator('#f-fields select').nth(0).locator('option').allTextContents();
+  assert.ok(imgOpts.includes('Slide Image') && imgOpts.includes('Photo Slideshow'), 'image/slideshow inputs filtered & listed');
+  await page.locator('#f-fields select').nth(0).selectOption('Slide Image');
+  await page.locator('#f-fields select').nth(1).selectOption('set_file');
+  await page.locator('#f-fields input[type="text"]').last().fill('/img/slide2.png');
+  await page.click('#pad-form button[type="submit"]');
+
+  // Slot 8: Slideshow Next (Photo Slideshow, next)
+  await pad(8).click();
+  await page.selectOption('#f-type', 'image');
+  await page.locator('#f-fields select').nth(0).selectOption('Photo Slideshow');
+  await page.locator('#f-fields select').nth(1).selectOption('next');
+  await page.click('#pad-form button[type="submit"]');
+
+  await page.click('#btn-edit');
+
+  // Execute Next / Prev Scene
+  const beforeScene = state.programScene;
+  await pad(0).click();
+  await page.waitForFunction((prev) => document.getElementById('scene-info').textContent !== `Program: ${prev}`, beforeScene);
+  assert.notEqual(state.programScene, beforeScene, 'next scene stepped forward');
+  await pad(1).click();
+  await page.waitForFunction((prev) => document.getElementById('scene-info').textContent.startsWith(`Program: ${prev}`), beforeScene);
+  assert.equal(state.programScene, beforeScene, 'prev scene stepped back');
+
+  // Execute Telemetry Stats click refresh
+  assert.match(await pad(2).locator('.sub').textContent(), /14% · 60fps · 4d/);
+  state.stats.cpuUsage = 42.4;
+  await pad(2).click();
+  await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[2].querySelector('.sub')?.textContent.includes('42%'));
+
+  // Execute Hotkey Trigger
+  await pad(3).click();
+  await page.waitForFunction(() => document.getElementById('msg-info').textContent.includes('OBSBasic.StartRecording'));
+  assert.ok(state.triggeredHotkeys.includes('OBSBasic.StartRecording'));
+
+  // Execute Recording Chapter Marker
+  await pad(4).click();
+  await page.waitForFunction(() => document.getElementById('msg-info').textContent.includes('Boss Fight'));
+  assert.deepEqual(state.chapters[0], { chapterName: 'Boss Fight' });
+
+  // Execute Audio Monitor Mode cycle + external event
+  await pad(5).click();
+  await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[5].className.includes('active'));
+  assert.equal(state.monitors['Mic/Aux'], 'OBS_MONITORING_TYPE_MONITOR_ONLY');
+  broadcast('InputAudioMonitorTypeChanged', { inputName: 'Mic/Aux', monitorType: 'OBS_MONITORING_TYPE_NONE' });
+  state.monitors['Mic/Aux'] = 'OBS_MONITORING_TYPE_NONE';
+  await page.waitForFunction(() => !document.querySelectorAll('#grid .pad')[5].className.includes('active'));
+
+  // Execute Source Transform / PiP toggle -> PiP -> Full Reset
+  await pad(6).click();
+  await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[6].className.includes('active'));
+  assert.ok(state.itemTransforms['Main Cam:1'].scaleX < 0.5, 'toggle_pip shrunk source to PiP');
+  await pad(6).click();
+  await page.waitForFunction(() => !document.querySelectorAll('#grid .pad')[6].className.includes('active'));
+  assert.equal(state.itemTransforms['Main Cam:1'].scaleX, 1, 'second toggle_pip restored full scale');
+
+  // Execute Image Swap & Slideshow Next
+  await pad(7).click();
+  await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[7].className.includes('active'));
+  assert.equal(state.inputSettings['Slide Image'].file, '/img/slide2.png');
+  await pad(8).click();
+  await page.waitForFunction(() => document.getElementById('msg-info').textContent.includes('Photo Slideshow'));
+  assert.ok(state.calls.some((c) => c.requestType === 'TriggerMediaInputAction' && c.requestData.inputName === 'Photo Slideshow' && c.requestData.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_NEXT'));
+  console.log('  ✓ all 7 new v2.1.0 OBS v5 actions (Next/Prev Scene, Stats, Hotkey, Chapter, Monitor, Transform PiP, Image Swap)');
+
+  // Delete temporary 3rd page before export check so Pages = 2
+  await page.click('#btn-deck-cfg');
+  await page.click('#btn-deck-del');
+  await page.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 2);
+
+  // 14. localStorage persistence + v2.1.0 Export/Import + legacy v1 & v2.0.0 JSON import + Auto-Import Wizard
+  await page.locator('#deck-tabs .page-tab').nth(0).click();
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad').length === 64);
 
   await page.reload();
   await page.waitForSelector('#grid .pad');
-  assert.equal((await pad(0).textContent()).includes('Go Slides'), true, 'localStorage persisted v2 decks & pads');
-  assert.equal(await page.locator('#deck-tabs .deck-tab').count(), 2, 'localStorage persisted multiple pages');
+  assert.equal((await pad(0).textContent()).includes('Go Slides'), true, 'localStorage persisted v2.1.0 pages & pads');
+  assert.equal(await page.locator('#deck-tabs .page-tab').count(), 2, 'localStorage persisted multiple pages');
 
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#btn-export')]);
   const exportPath = join(tmpDir, 'deck-export.json');
   await download.saveAs(exportPath);
   const exported = JSON.parse(fs.readFileSync(exportPath, 'utf8'));
   assert.equal(exported.version, 2, 'exported JSON is v2');
-  assert.equal(exported.decks.length, 2, 'exported JSON includes both decks');
-  assert.equal(exported.decks[0].pads.length, 64);
-  assert.equal(exported.decks[1].pads.length, 12);
+  assert.equal(exported.pages.length, 2, 'exported JSON includes both pages');
+  assert.equal(exported.pages[0].pads.length, 64);
+  assert.equal(exported.pages[1].pads.length, 12);
   assert.equal(exported.ws.password, undefined, 'password is not leaked in exported JSON');
+  assert.equal(exported.ws.manualPort, undefined, 'manualPort is not leaked in exported JSON');
   assert.ok(exported.panicSteps.length >= 1, 'panicSteps exported');
 
   const badPath = join(tmpDir, 'bad.json');
@@ -462,10 +634,30 @@ try {
   await page.waitForFunction(() => document.getElementById('msg-info').textContent.includes('Import error'));
   assert.equal((await pad(0).textContent()).includes('Go Slides'), true, 'invalid import preserves existing deck');
 
-  await page.click('#btn-conn-toggle');
+  if (!(await page.locator('#btn-reset-layout').isVisible())) {
+    await page.click('#btn-conn-toggle');
+  }
   await page.click('#btn-reset-layout');
   assert.equal((await pad(0).textContent()).includes('Go Slides'), false, 'reset cleared pads');
-  assert.equal(await page.locator('#deck-tabs .deck-tab').count(), 1, 'reset restored single starter page');
+  assert.equal(await page.locator('#deck-tabs .page-tab').count(), 1, 'reset restored single starter page');
+
+  // Test Auto-Import Wizard selective Page generation (uncheck Filters) + verify read-only against OBS
+  const callsBeforeWiz = state.calls.length;
+  await page.click('#btn-auto-import');
+  await page.waitForSelector('#import-wiz-dlg[open]');
+  await page.uncheck('#wiz-filters');
+  await page.click('#btn-wiz-apply');
+  await page.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+  const tabNames = await page.locator('#deck-tabs .page-tab').allTextContents();
+  assert.deepEqual(tabNames, ['Scenes', 'Sources', 'Broadcast'], 'Auto-Import created selected Pages only');
+  const broadcastMutes = await page.evaluate(() => {
+    const bp = Deck.cfg.pages.find((p) => p.name === 'Broadcast');
+    return bp ? bp.pads.filter((p) => p.type === 'mute').map((p) => p.inputName) : [];
+  });
+  assert.ok(broadcastMutes.includes('Mic/Aux') && broadcastMutes.includes('Desktop Audio'), 'Broadcast includes audio mutes');
+  assert.equal(broadcastMutes.includes('Slide Image') || broadcastMutes.includes('Alert Overlay'), false, 'Broadcast excludes non-audio image/browser sources');
+  const mutatingCalls = state.calls.slice(callsBeforeWiz).filter((c) => /^(Create|Set|Remove|Press|Trigger)/.test(c.requestType));
+  assert.equal(mutatingCalls.length, 0, 'Auto-Import is strictly read-only against OBS');
 
   // Test importing a legacy v1 JSON layout
   const v1Path = join(tmpDir, 'legacy-v1.json');
@@ -475,11 +667,31 @@ try {
   await page.setInputFiles('#file-import', v1Path);
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].textContent.includes('V1 BRB'));
 
-  // Re-import v2 export
+  // Test importing a legacy v2.0.0 JSON layout (decks[], activeDeckId, deckId)
+  const v20Path = join(tmpDir, 'legacy-v200.json');
+  const d1Pads = Array.from({ length: 12 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+  d1Pads[0] = { type: 'page', mode: 'goto', deckId: 'deck-2', label: 'To D2', icon: '', color: '#222733' };
+  const d2Pads = Array.from({ length: 12 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+  d2Pads[0] = { type: 'scene', sceneName: 'Slides', label: 'D2 Slides', icon: '', color: '#1e3a8a' };
+  fs.writeFileSync(v20Path, JSON.stringify({
+    version: 2,
+    ws: { host: '127.0.0.1', port },
+    activeDeckId: 'deck-2',
+    decks: [
+      { id: 'deck-1', name: 'D1', cols: 4, rows: 3, pads: d1Pads },
+      { id: 'deck-2', name: 'D2', cols: 4, rows: 3, pads: d2Pads },
+    ],
+    panicSteps: [],
+  }));
+  await page.setInputFiles('#file-import', v20Path);
+  await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].textContent.includes('D2 Slides'));
+  assert.equal(await page.evaluate(() => Deck.cfg.pages[0].pads[0].pageId), 'deck-2', 'v2.0.0 deckId migrated to pageId');
+
+  // Re-import v2.1.0 export
   await page.setInputFiles('#file-import', exportPath);
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].textContent.includes('Go Slides'));
-  assert.equal(await page.locator('#deck-tabs .deck-tab').count(), 2, 'v2 import restored multi-page layout');
-  console.log('  ✓ v2 localStorage + Export/Import + legacy v1 JSON import + invalid JSON guard');
+  assert.equal(await page.locator('#deck-tabs .page-tab').count(), 2, 'v2.1.0 import restored multi-page layout');
+  console.log('  ✓ v2.1.0 localStorage + Export/Import + Auto-Import Wizard + v1 & v2.0.0 JSON migration');
 
   // 15. No-auth OBS WebSocket v5 server handshake
   const noAuth = createFakeObs(false);

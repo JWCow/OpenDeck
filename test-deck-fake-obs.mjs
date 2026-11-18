@@ -15,16 +15,19 @@ export function createFakeObs(requireAuth = true) {
     previewScene: 'Slides',
     studioModeEnabled: false,
     scenes: ['BRB', 'Slides', 'Main Cam', '<img src=x onerror="window.__xss=1"> #cam'],
-    inputs: ['Webcam', 'Mic/Aux', 'Desktop Audio', 'Intro Video', 'Alert Overlay'],
+    inputs: ['Webcam', 'Mic/Aux', 'Desktop Audio', 'Intro Video', 'Alert Overlay', 'Slide Image', 'Photo Slideshow'],
     inputKinds: {
       'Webcam': 'dshow_input',
       'Mic/Aux': 'wasapi_input_capture',
       'Desktop Audio': 'wasapi_output_capture',
       'Intro Video': 'ffmpeg_source',
       'Alert Overlay': 'browser_source',
+      'Slide Image': 'image_source',
+      'Photo Slideshow': 'slideshow',
     },
     inputSettings: {
       'Alert Overlay': { url: 'https://example.com/alerts' },
+      'Slide Image': { file: '/img/slide1.png' },
     },
     sceneItems: {
       'Main Cam': [
@@ -49,7 +52,32 @@ export function createFakeObs(requireAuth = true) {
     },
     mutes: { 'Webcam': false, 'Mic/Aux': false, 'Desktop Audio': true, 'Intro Video': false },
     volumes: { 'Webcam': 0, 'Mic/Aux': -6, 'Desktop Audio': -12, 'Intro Video': 0 },
-    mediaStates: { 'Intro Video': 'OBS_MEDIA_STATE_STOPPED' },
+    monitors: {
+      'Webcam': 'OBS_MONITORING_TYPE_NONE',
+      'Mic/Aux': 'OBS_MONITORING_TYPE_NONE',
+      'Desktop Audio': 'OBS_MONITORING_TYPE_MONITOR_ONLY',
+      'Intro Video': 'OBS_MONITORING_TYPE_NONE',
+    },
+    mediaStates: { 'Intro Video': 'OBS_MEDIA_STATE_STOPPED', 'Photo Slideshow': 'OBS_MEDIA_STATE_STOPPED' },
+    videoSettings: {
+      baseWidth: 1920,
+      baseHeight: 1080,
+      outputWidth: 1920,
+      outputHeight: 1080,
+      fpsNumerator: 60,
+      fpsDenominator: 1,
+    },
+    stats: {
+      cpuUsage: 14.2,
+      memoryUsage: 512.4,
+      activeFps: 60.0,
+      renderSkippedFrames: 3,
+      outputSkippedFrames: 1,
+    },
+    hotkeys: ['OBSBasic.StartRecording', 'OBSBasic.StopRecording', 'OBSBasic.Screenshot'],
+    triggeredHotkeys: [],
+    chapters: [],
+    itemTransforms: {},
     outputs: {
       stream: false,
       record: false,
@@ -331,6 +359,72 @@ export function createFakeObs(requireAuth = true) {
           imageFormat: requestData.imageFormat,
           imageFilePath: requestData.imageFilePath,
         });
+      } else if (requestType === 'GetStats') {
+        responseData = { ...state.stats };
+      } else if (requestType === 'GetVideoSettings') {
+        responseData = { ...state.videoSettings };
+      } else if (requestType === 'GetHotkeyList') {
+        responseData = { hotkeys: state.hotkeys };
+      } else if (requestType === 'TriggerHotkeyByName') {
+        if (!requestData.hotkeyName) { ok = false; comment = 'Missing hotkeyName'; }
+        else state.triggeredHotkeys.push(requestData.hotkeyName);
+      } else if (requestType === 'CreateRecordChapter') {
+        state.chapters.push({ chapterName: requestData.chapterName || '' });
+      } else if (requestType === 'GetInputAudioMonitorType') {
+        responseData = { monitorType: state.monitors[requestData.inputName] || 'OBS_MONITORING_TYPE_NONE' };
+      } else if (requestType === 'SetInputAudioMonitorType') {
+        if (!state.inputs.includes(requestData.inputName)) { ok = false; comment = 'Input not found'; }
+        else {
+          state.monitors[requestData.inputName] = requestData.monitorType;
+          broadcast('InputAudioMonitorTypeChanged', {
+            inputName: requestData.inputName,
+            monitorType: requestData.monitorType,
+          });
+        }
+      } else if (requestType === 'GetSceneItemTransform') {
+        const list = state.sceneItems[requestData.sceneName] || state.groupItems[requestData.sceneName] || [];
+        const it = list.find((x) => x.sceneItemId === requestData.sceneItemId);
+        if (!it) { ok = false; comment = 'Item not found'; }
+        else {
+          const key = `${requestData.sceneName}:${requestData.sceneItemId}`;
+          const base = {
+            positionX: 0,
+            positionY: 0,
+            scaleX: 1,
+            scaleY: 1,
+            sourceWidth: state.videoSettings.baseWidth,
+            sourceHeight: state.videoSettings.baseHeight,
+            cropLeft: 0,
+            cropRight: 0,
+            cropTop: 0,
+            cropBottom: 0,
+            alignment: 5,
+            rotation: 0,
+          };
+          responseData = { sceneItemTransform: { ...base, ...(state.itemTransforms[key] || {}) } };
+        }
+      } else if (requestType === 'SetSceneItemTransform') {
+        const list = state.sceneItems[requestData.sceneName] || state.groupItems[requestData.sceneName] || [];
+        const it = list.find((x) => x.sceneItemId === requestData.sceneItemId);
+        if (!it) { ok = false; comment = 'Item not found'; }
+        else {
+          const key = `${requestData.sceneName}:${requestData.sceneItemId}`;
+          const prev = state.itemTransforms[key] || {
+            positionX: 0,
+            positionY: 0,
+            scaleX: 1,
+            scaleY: 1,
+            sourceWidth: state.videoSettings.baseWidth,
+            sourceHeight: state.videoSettings.baseHeight,
+            cropLeft: 0,
+            cropRight: 0,
+            cropTop: 0,
+            cropBottom: 0,
+            alignment: 5,
+            rotation: 0,
+          };
+          state.itemTransforms[key] = { ...prev, ...(requestData.sceneItemTransform || {}) };
+        }
       }
 
       ws.send(JSON.stringify({
