@@ -314,31 +314,52 @@ body.edit-mode .palette {
 }
 .palette-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
-  padding: 4px;
+  padding: 6px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 .palette-cat {
+  flex-shrink: 0;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: #12151c;
   overflow: hidden;
 }
 .palette-cat summary {
-  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
   user-select: none;
   color: var(--text);
   background: #191e2b;
+  list-style: none;
+}
+.palette-cat summary::-webkit-details-marker {
+  display: none;
+}
+.palette-cat summary::after {
+  content: '▾';
+  font-size: 11px;
+  color: var(--muted);
+  transition: transform .15s ease;
+}
+.palette-cat:not([open]) summary::after {
+  transform: rotate(-90deg);
 }
 .palette-cat summary:hover {
   background: #232a3d;
+  color: #93c5fd;
 }
 .palette-items {
   display: flex;
