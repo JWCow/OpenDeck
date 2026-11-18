@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dev dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          PKG_VER="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VER" != "$PKG_VER" ]; then
+            echo "Tag version ($TAG_VER) does not match package.json version ($PKG_VER)"
+            exit 1
+          fi
+
+      - name: Run E2E test suite
+        run: npm test
+
+      - name: Build release ZIPs
+        run: npm run build:release
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-virtual-deck-release
+          path: dist/*.zip
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/obs-virtual-deck.zip
+            dist/obs-virtual-deck-latest.zip
+            dist/obs-virtual-deck-v*.zip

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OBS Virtual Deck (8×8)</title>
+<title>OBS Virtual Deck</title>
 <link rel="stylesheet" href="deck/deck.css">
 <script defer src="deck/obs-ws.js"></script>
 <script defer src="deck/actions.js"></script>
@@ -13,13 +13,13 @@
 <div class="bar">
   <span id="conn-pill" class="pill bad"><i class="dot"></i><span id="conn-text">Disconnected</span></span>
   <button id="btn-conn-toggle" class="btn sm" title="WebSocket settings">WS</button>
-  <button id="btn-sync" class="btn sm" title="Refresh OBS scenes, sources, filters">↻ Sync</button>
-  <button id="btn-edit" class="btn sm">✎ Edit</button>
+  <button id="btn-sync" class="btn sm" title="Refresh OBS scenes, sources, filters, and outputs">↻ Sync</button>
+  <button id="btn-edit" class="btn sm" title="Toggle Edit Mode to configure or drag-swap pads">✎ Edit</button>
   <div class="spacer"></div>
   <button id="btn-panic-cfg" class="btn sm" title="Configure PANIC steps">⚙ Panic</button>
-  <button id="btn-panic" class="btn sm panic" title="Abort macros &amp; run PANIC reset">⚡ PANIC</button>
-  <button id="btn-export" class="btn sm">Export</button>
-  <button id="btn-import" class="btn sm">Import</button>
+  <button id="btn-panic" class="btn sm panic" title="Abort running timers/macros &amp; run PANIC reset">⚡ PANIC</button>
+  <button id="btn-export" class="btn sm" title="Export deck layout as JSON (passwords omitted)">Export</button>
+  <button id="btn-import" class="btn sm" title="Import deck layout JSON">Import</button>
   <input id="file-import" type="file" accept=".json,application/json" hidden>
 </div>
 
@@ -32,30 +32,66 @@
   <button id="btn-reset-layout" class="btn sm" title="Restore starter layout">Reset Deck</button>
 </div>
 
+<div id="deck-bar" class="bar deck-bar">
+  <div id="deck-tabs" class="deck-tabs" role="tablist" aria-label="Deck pages"></div>
+  <button id="btn-deck-add" class="btn sm" title="Add new page">+</button>
+  <button id="btn-deck-dup" class="btn sm" title="Duplicate current page">⎘</button>
+  <button id="btn-deck-cfg" class="btn sm" title="Rename page, resize grid, or delete page">8×8 ⚙</button>
+</div>
+
 <div id="grid" class="grid" aria-label="8 by 8 OBS Deck"></div>
 
 <div class="status">
   <span id="scene-info">Program: —</span>
   <span id="msg-info">Ready</span>
+  <a id="version-badge" class="ver" href="https://github.com/JWCow/obs-virtual-deck/releases" target="_blank" rel="noopener noreferrer" title="View OBS Virtual Deck releases on GitHub">v2.0.0</a>
 </div>
 
 <dialog id="pad-dlg">
-  <div class="dlg-h"><span id="dlg-title">Edit Pad</span><button id="dlg-close" class="btn sm">✕</button></div>
+  <div class="dlg-h"><span id="dlg-title">Edit Pad</span><button id="dlg-close" type="button" class="btn sm">✕</button></div>
   <form id="pad-form" class="frm" method="dialog">
     <div class="row2">
-      <div class="row"><label>Label</label><input id="f-label" maxlength="32" placeholder="Cam Blur"></div>
-      <div class="row"><label>Icon</label><input id="f-icon" maxlength="8" placeholder="🎬"></div>
+      <div class="row"><label for="f-label">Label</label><input id="f-label" maxlength="32" placeholder="Cam Blur"></div>
+      <div class="row"><label for="f-icon">Icon</label><input id="f-icon" maxlength="8" placeholder="🎬"></div>
     </div>
+    <div class="row"><label>Quick Icons</label><div id="f-icons" class="icon-presets"></div></div>
     <div class="row"><label>Color</label><div id="f-colors" class="swatches"></div></div>
-    <div class="row"><label>Action</label>
+    <div class="row">
+      <label>Keyboard Shortcut</label>
+      <div class="hotkey-row">
+        <button type="button" id="f-hotkey-btn" class="btn sm hotkey-btn">None (click to record)</button>
+        <button type="button" id="btn-hotkey-clear" class="btn sm" title="Clear shortcut">Clear</button>
+      </div>
+    </div>
+    <div class="row"><label for="f-type">Action</label>
       <select id="f-type">
         <option value="none">Empty / None</option>
-        <option value="scene">Switch Scene</option>
-        <option value="source">Source Visibility</option>
-        <option value="filter">Filter Control</option>
-        <option value="mute">Input Mute</option>
-        <option value="macro">Timed Macro</option>
-        <option value="panic">PANIC Reset</option>
+        <optgroup label="Scenes &amp; Studio">
+          <option value="scene">Switch Scene</option>
+          <option value="studio">Studio Mode</option>
+          <option value="transition">Scene Transition</option>
+        </optgroup>
+        <optgroup label="Sources &amp; Media">
+          <option value="source">Source Visibility</option>
+          <option value="media">Media Playback</option>
+          <option value="browser">Browser Source</option>
+          <option value="screenshot">Take Screenshot</option>
+        </optgroup>
+        <optgroup label="Filters &amp; Audio">
+          <option value="filter">Filter Control</option>
+          <option value="mute">Input Mute</option>
+          <option value="volume">Input Volume</option>
+        </optgroup>
+        <optgroup label="Recording &amp; Streaming">
+          <option value="output">Stream / Record / Cam</option>
+          <option value="profile">Switch Profile</option>
+          <option value="collection">Scene Collection</option>
+        </optgroup>
+        <optgroup label="Deck Navigation &amp; Macros">
+          <option value="page">Switch Page / Deck</option>
+          <option value="macro">Timed Macro</option>
+          <option value="panic">PANIC Reset</option>
+        </optgroup>
       </select>
     </div>
     <div id="f-fields" class="frm"></div>
@@ -68,10 +104,42 @@
   </form>
 </dialog>
 
+<dialog id="deck-dlg">
+  <div class="dlg-h"><span>Page &amp; Grid Settings</span><button id="deck-dlg-close" type="button" class="btn sm">✕</button></div>
+  <form id="deck-form" class="frm" method="dialog">
+    <div class="row">
+      <label for="d-name">Page Name</label>
+      <input id="d-name" maxlength="24" placeholder="Main">
+    </div>
+    <div class="row">
+      <label>Grid Size Presets</label>
+      <div id="d-presets" class="presets">
+        <button type="button" class="btn sm" data-cols="3" data-rows="2">3×2</button>
+        <button type="button" class="btn sm" data-cols="4" data-rows="3">4×3</button>
+        <button type="button" class="btn sm" data-cols="5" data-rows="3">5×3</button>
+        <button type="button" class="btn sm" data-cols="6" data-rows="4">6×4</button>
+        <button type="button" class="btn sm" data-cols="8" data-rows="4">8×4</button>
+        <button type="button" class="btn sm" data-cols="8" data-rows="8">8×8</button>
+      </div>
+    </div>
+    <div class="row2">
+      <div class="row"><label for="d-cols">Columns (2–12)</label><input id="d-cols" type="number" min="2" max="12" value="8"></div>
+      <div class="row"><label for="d-rows">Rows (2–10)</label><input id="d-rows" type="number" min="2" max="10" value="8"></div>
+    </div>
+    <div class="dlg-f">
+      <button type="button" id="btn-deck-del" class="btn sm panic" title="Delete this page">Delete Page</button>
+      <button type="button" id="btn-deck-dup-dlg" class="btn sm" title="Duplicate this page">Duplicate</button>
+      <div class="spacer"></div>
+      <button type="button" id="btn-deck-cancel" class="btn sm">Cancel</button>
+      <button type="submit" class="btn sm on">Apply</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="panic-dlg">
-  <div class="dlg-h"><span>PANIC Reset Steps</span><button id="panic-close" class="btn sm">✕</button></div>
+  <div class="dlg-h"><span>PANIC Reset Steps</span><button id="panic-close" type="button" class="btn sm">✕</button></div>
   <div class="frm">
-    <div style="font-size:11px;color:var(--muted)">Runs when ⚡ PANIC is pressed (after aborting all running timed macros). If empty, disables all active deck filters.</div>
+    <div style="font-size:11px;color:var(--muted)">Runs when ⚡ PANIC is pressed (after aborting all running macros &amp; auto-off timers). If empty, disables all active deck filters.</div>
     <div id="panic-steps" class="steps"></div>
     <div class="dlg-f">
       <button type="button" id="btn-panic-add" class="btn sm">+ Step</button>
