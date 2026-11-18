@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.1.0';
+  const VERSION = '2.2.0';
   const STORAGE_KEY = 'obs_virtual_deck_v2';
   const LEGACY_STORAGE_KEY = 'obs_virtual_deck_v1';
   const PROBE_PORTS = [4455, 4456, 4457, 4458, 4444];
@@ -105,76 +105,14 @@
     }
   }
 
-  function normalizeHotkeyKey(rawKey) {
-    const k = String(rawKey || '').trim();
-    if (!k) return '';
-    const low = k.toLowerCase();
-    if (low === 'control' || low === 'ctrl' || low === 'shift' || low === 'alt' || low === 'option'
-      || low === 'meta' || low === 'cmd' || low === 'command' || low === 'win' || low === 'super') {
-      return '';
+  function getPadContextSubtitle(pad) {
+    if (!pad || pad.type === 'none') return '';
+    if (pad.type === 'filter') return pad.sourceName || '';
+    if (pad.type === 'source' || pad.type === 'transform') return pad.sceneName || '';
+    if (pad.type === 'volume' || pad.type === 'monitor') {
+      return (pad.label && pad.label !== pad.inputName) ? (pad.inputName || '') : '';
     }
-    if (low === ' ' || low === 'space' || low === 'spacebar') return 'Space';
-    if (low === 'esc' || low === 'escape') return 'Escape';
-    if (low === 'return' || low === 'enter') return 'Enter';
-    if (low === 'del' || low === 'delete') return 'Delete';
-    if (low === 'bs' || low === 'backspace') return 'Backspace';
-    if (low === 'tab') return 'Tab';
-    if (low === 'up' || low === 'arrowup') return 'ArrowUp';
-    if (low === 'down' || low === 'arrowdown') return 'ArrowDown';
-    if (low === 'left' || low === 'arrowleft') return 'ArrowLeft';
-    if (low === 'right' || low === 'arrowright') return 'ArrowRight';
-    if (low === 'plus' || k === '+') return 'Plus';
-    if (/^f([1-9]|1[0-9]|2[0-4])$/i.test(k)) return k.toUpperCase();
-    if (k.length === 1) return /[a-z]/i.test(k) ? k.toUpperCase() : k;
-    return k.charAt(0).toUpperCase() + k.slice(1);
-  }
-
-  function normalizeHotkey(raw) {
-    if (typeof raw !== 'string') return '';
-    const trimmed = raw.trim();
-    if (!trimmed) return '';
-    const parts = trimmed.split('+').map((p) => p.trim()).filter(Boolean);
-    if (!parts.length) return '';
-    const mods = { Ctrl: false, Alt: false, Shift: false, Meta: false };
-    let key = '';
-    for (const part of parts) {
-      const low = part.toLowerCase();
-      if (low === 'ctrl' || low === 'control') mods.Ctrl = true;
-      else if (low === 'alt' || low === 'option') mods.Alt = true;
-      else if (low === 'shift') mods.Shift = true;
-      else if (low === 'meta' || low === 'cmd' || low === 'command' || low === 'win' || low === 'super') mods.Meta = true;
-      else key = normalizeHotkeyKey(part);
-    }
-    if (!key) return '';
-    const out = [];
-    if (mods.Ctrl) out.push('Ctrl');
-    if (mods.Alt) out.push('Alt');
-    if (mods.Shift) out.push('Shift');
-    if (mods.Meta) out.push('Meta');
-    out.push(key);
-    return out.join('+');
-  }
-
-  function hotkeyFromEvent(ev) {
-    if (!ev || typeof ev !== 'object') return '';
-    let base = '';
-    const code = ev.code || '';
-    const digit = code.match(/^Digit([0-9])$/);
-    const letter = code.match(/^Key([A-Z])$/);
-    if (digit) base = digit[1];
-    else if (letter) base = letter[1];
-    else if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) base = code;
-    else if (code === 'Space') base = 'Space';
-    else if (ev.key && ev.key !== 'Dead' && ev.key !== 'Unidentified') base = normalizeHotkeyKey(ev.key);
-    else return '';
-    if (!base) return '';
-    const out = [];
-    if (ev.ctrlKey) out.push('Ctrl');
-    if (ev.altKey) out.push('Alt');
-    if (ev.shiftKey) out.push('Shift');
-    if (ev.metaKey) out.push('Meta');
-    out.push(base);
-    return out.join('+');
+    return '';
   }
 
   function sanitizeAutoOff(raw) {
@@ -205,11 +143,6 @@
           icon: typeof raw.icon === 'string' ? raw.icon : '',
           color: typeof raw.color === 'string' && raw.color ? raw.color : COLORS[0],
         };
-
-    if (!isStep && type !== 'none') {
-      const hk = normalizeHotkey(raw.hotkey);
-      if (hk) out.hotkey = hk;
-    }
 
     if (type === 'scene') {
       out.mode = ['named', 'next', 'prev'].includes(raw.mode) ? raw.mode : 'named';
@@ -489,8 +422,7 @@
     $,
     esc,
     getUrlPort,
-    normalizeHotkey,
-    hotkeyFromEvent,
+    getPadContextSubtitle,
     normalizePad,
     normalizeStep,
     defaultPads,
@@ -699,17 +631,166 @@
     if (fromIdx < 0 || fromIdx >= srcPage.pads.length) return false;
     const pad = srcPage.pads[fromIdx];
     if (!pad || pad.type === 'none') return false;
-    const dstIdx = dstPage.pads.findIndex((p) => !p || p.type === 'none');
+    let dstIdx = dstPage.pads.findIndex((p) => !p || p.type === 'none');
+    if (dstIdx < 0 && dstPage.rows < MAX_ROWS) {
+      Deck.resizePage(dstPage.id, dstPage.cols, dstPage.rows + 1);
+      dstIdx = dstPage.pads.findIndex((p) => !p || p.type === 'none');
+    }
     if (dstIdx < 0) {
       Deck.setMsg(`Page "${dstPage.name}" is full`);
       return false;
     }
-    if (typeof Deck.abortPadTimer === 'function') Deck.abortPadTimer(srcPage.id, fromIdx);
+    if (typeof Deck.abortPadTimer === 'function') {
+      Deck.abortPadTimer(srcPage.id, fromIdx);
+      Deck.abortPadTimer(dstPage.id, dstIdx);
+    }
     dstPage.pads[dstIdx] = normalizePad(JSON.parse(JSON.stringify(pad)));
     srcPage.pads[fromIdx] = emptyPad();
     Deck.saveCfg();
     Deck.renderGrid();
     Deck.setMsg(`Moved pad to "${dstPage.name}"`);
+    return true;
+  };
+
+  Deck.duplicatePad = (fromIdx, targetPageId, sourcePageId) => {
+    const srcPage = sourcePageId
+      ? Deck.cfg.pages.find((d) => d.id === sourcePageId)
+      : Deck.getActivePage();
+    const dstPage = targetPageId
+      ? Deck.cfg.pages.find((d) => d.id === targetPageId)
+      : Deck.getActivePage();
+    if (!srcPage || !dstPage) return -1;
+    if (fromIdx < 0 || fromIdx >= srcPage.pads.length) return -1;
+    const pad = srcPage.pads[fromIdx];
+    if (!pad || pad.type === 'none') return -1;
+    let dstIdx = dstPage.pads.findIndex((p) => !p || p.type === 'none');
+    if (dstIdx < 0 && dstPage.rows < MAX_ROWS) {
+      Deck.resizePage(dstPage.id, dstPage.cols, dstPage.rows + 1);
+      dstIdx = dstPage.pads.findIndex((p) => !p || p.type === 'none');
+    }
+    if (dstIdx < 0) {
+      Deck.setMsg(`Page "${dstPage.name}" is full`);
+      return -1;
+    }
+    if (typeof Deck.abortPadTimer === 'function') Deck.abortPadTimer(dstPage.id, dstIdx);
+    dstPage.pads[dstIdx] = normalizePad(JSON.parse(JSON.stringify(pad)));
+    Deck.saveCfg();
+    Deck.renderGrid();
+    Deck.setMsg(`Duplicated "${pad.label || pad.type}" to "${dstPage.name}"`);
+    return dstIdx;
+  };
+
+  Deck.duplicatePads = (fromIndices, targetPageId, sourcePageId) => {
+    if (!Array.isArray(fromIndices) || !fromIndices.length) return [];
+    const srcPage = sourcePageId
+      ? Deck.cfg.pages.find((d) => d.id === sourcePageId)
+      : Deck.getActivePage();
+    const dstPage = targetPageId
+      ? Deck.cfg.pages.find((d) => d.id === targetPageId)
+      : Deck.getActivePage();
+    if (!srcPage || !dstPage) return [];
+    const validIndices = fromIndices.filter((i) => (
+      Number.isInteger(i) && i >= 0 && i < srcPage.pads.length && srcPage.pads[i] && srcPage.pads[i].type !== 'none'
+    ));
+    if (!validIndices.length) return [];
+    const created = [];
+    for (const fromIdx of validIndices) {
+      let dstIdx = dstPage.pads.findIndex((p) => !p || p.type === 'none');
+      if (dstIdx < 0 && dstPage.rows < MAX_ROWS) {
+        Deck.resizePage(dstPage.id, dstPage.cols, dstPage.rows + 1);
+        dstIdx = dstPage.pads.findIndex((p) => !p || p.type === 'none');
+      }
+      if (dstIdx < 0) break;
+      const pad = srcPage.pads[fromIdx];
+      if (typeof Deck.abortPadTimer === 'function') Deck.abortPadTimer(dstPage.id, dstIdx);
+      dstPage.pads[dstIdx] = normalizePad(JSON.parse(JSON.stringify(pad)));
+      created.push(dstIdx);
+    }
+    if (created.length > 0) {
+      Deck.saveCfg();
+      Deck.renderGrid();
+      Deck.setMsg(`Duplicated ${created.length} pad(s) to "${dstPage.name}"`);
+    } else {
+      Deck.setMsg(`Page "${dstPage.name}" is full`);
+    }
+    return created;
+  };
+
+  Deck.movePadsToPage = (fromIndices, targetPageId, sourcePageId) => {
+    if (!Array.isArray(fromIndices) || !fromIndices.length) return [];
+    const srcPage = sourcePageId
+      ? Deck.cfg.pages.find((d) => d.id === sourcePageId)
+      : Deck.getActivePage();
+    const dstPage = Deck.cfg.pages.find((d) => d.id === targetPageId);
+    if (!srcPage || !dstPage || srcPage.id === dstPage.id) return [];
+    const validIndices = fromIndices.filter((i) => (
+      Number.isInteger(i) && i >= 0 && i < srcPage.pads.length && srcPage.pads[i] && srcPage.pads[i].type !== 'none'
+    ));
+    if (!validIndices.length) return [];
+    const moved = [];
+    for (const fromIdx of validIndices) {
+      let dstIdx = dstPage.pads.findIndex((p) => !p || p.type === 'none');
+      if (dstIdx < 0 && dstPage.rows < MAX_ROWS) {
+        Deck.resizePage(dstPage.id, dstPage.cols, dstPage.rows + 1);
+        dstIdx = dstPage.pads.findIndex((p) => !p || p.type === 'none');
+      }
+      if (dstIdx < 0) break;
+      const pad = srcPage.pads[fromIdx];
+      if (typeof Deck.abortPadTimer === 'function') {
+        Deck.abortPadTimer(srcPage.id, fromIdx);
+        Deck.abortPadTimer(dstPage.id, dstIdx);
+      }
+      dstPage.pads[dstIdx] = normalizePad(JSON.parse(JSON.stringify(pad)));
+      srcPage.pads[fromIdx] = emptyPad();
+      moved.push(dstIdx);
+    }
+    if (moved.length > 0) {
+      Deck.saveCfg();
+      Deck.renderGrid();
+      Deck.setMsg(`Moved ${moved.length} pad(s) to "${dstPage.name}"`);
+    } else {
+      Deck.setMsg(`Page "${dstPage.name}" is full`);
+    }
+    return moved;
+  };
+
+  Deck.setPadColors = (indices, color, pageId) => {
+    const page = pageId
+      ? Deck.cfg.pages.find((d) => d.id === pageId)
+      : Deck.getActivePage();
+    if (!page || !Array.isArray(indices) || !color) return false;
+    let count = 0;
+    for (const idx of indices) {
+      if (idx >= 0 && idx < page.pads.length) {
+        const p = page.pads[idx];
+        if (p && p.type !== 'none') {
+          p.color = color;
+          count++;
+        }
+      }
+    }
+    Deck.saveCfg();
+    Deck.renderGrid();
+    Deck.setMsg(`Updated color for ${count} pad(s)`);
+    return true;
+  };
+
+  Deck.clearPads = (indices, pageId) => {
+    const page = pageId
+      ? Deck.cfg.pages.find((d) => d.id === pageId)
+      : Deck.getActivePage();
+    if (!page || !Array.isArray(indices)) return false;
+    let count = 0;
+    for (const idx of indices) {
+      if (idx >= 0 && idx < page.pads.length) {
+        if (typeof Deck.abortPadTimer === 'function') Deck.abortPadTimer(page.id, idx);
+        page.pads[idx] = emptyPad();
+        count++;
+      }
+    }
+    Deck.saveCfg();
+    Deck.renderGrid();
+    Deck.setMsg(`Cleared ${count} pad(s)`);
     return true;
   };
 
@@ -737,7 +818,7 @@
         sceneName,
         label: sceneName,
         icon: smartSceneIcon(sceneName),
-        color: '#1e3a8a',
+        color: '#991b1b',
       }));
       if (obs.scenes.length > 1) {
         items.push(

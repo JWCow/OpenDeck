@@ -2,7 +2,7 @@
 
 [![Latest Release](https://img.shields.io/github/v/release/JWCow/obs-virtual-deck?label=Latest%20Release&color=2563eb)](https://github.com/JWCow/obs-virtual-deck/releases/latest)
 [![Download ZIP](https://img.shields.io/badge/Download-obs--virtual--deck.zip-16a34a?logo=github)](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/obs-virtual-deck.zip)
-[![Version](https://img.shields.io/badge/Version-v2.1.0-7c3aed)](https://github.com/JWCow/obs-virtual-deck/releases)
+[![Version](https://img.shields.io/badge/Version-v2.2.0-7c3aed)](https://github.com/JWCow/obs-virtual-deck/releases)
 [![Platforms](https://img.shields.io/badge/Platforms-macOS%20%26%20Windows-334155)](#quick-start-macos--windows)
 [![Zero Backend](https://img.shields.io/badge/Architecture-Zero%20Backend%20(file%3A%2F%2F)-0f766e)](#project-structure)
 
@@ -19,21 +19,25 @@ Download the ZIP, load `deck.html` into an **OBS Custom Browser Dock** (or any m
 - Always downloads the newest release ZIP in one click (no `node_modules` or test files included).
 - Browse all versions, changelogs, and release assets on the **[Releases page](https://github.com/JWCow/obs-virtual-deck/releases)**.
 
-> **Upgrading from v1 or v2.0.0?** Your existing layout, pages, pads, and PANIC steps migrate **automatically and losslessly** to v2.1.0 the first time you open the updated `deck.html` at the same `file://` path. *(Tip: click **Export** first if you want a backup `.json` file.)*
+> **Upgrading from v1, v2.0.0, or v2.1.0?** Your existing layout, pages, pads, and PANIC steps migrate **automatically and losslessly** to v2.2.0 the first time you open the updated `deck.html` at the same `file://` path (legacy local keyboard shortcut fields are cleaned safely). *(Tip: click **Export** first if you want a backup `.json` file.)*
 
 ---
 
 ## Features & OBS Actions
 
 ### Workflow & Usability
-- **🪄 Read-Only Auto-Import Wizard:** On first connect (or anytime via **`🪄 Auto-Import`**), inspect your live OBS Studio scene collection and generate ready-to-use **Pages** for *Scenes*, *Sources & Overlays*, *Filters*, and *Audio, Broadcast & Telemetry*—strictly read-only, without mutating your OBS scenes.
+- **🎛️ Stream Deck-Style Command Palette:** In **`✎ Edit`** mode, open a searchable, categorized right-hand Command Palette (*Broadcast & Outputs*, *Scenes & Sources*, *Filters & Audio*, *Media & Tools*, plus live connected OBS items). Drag any command directly onto any Pad slot. Self-contained actions (Stream, Record, Virtual Cam, Replay, Snapshot, Stats, PANIC, and live items) configure and save instantly; target actions pre-populate the Pad Editor for one-click assignment.
+- **☑️ Edit-Mode Multi-Select & Batch Duplication:** In **`✎ Edit`** mode, select multiple Pads via `Ctrl/Cmd+Click`, `Shift+Click` range, or the **Select** toggle button. Use the dedicated Selection Bar to **Duplicate** selected Pads to empty slots, **Move to Page**, batch **Color**, or **Clear** them in one click. The Pad Editor also includes a 1-click **Duplicate** button to clone individual Pads.
+- **🏷️ Parent Context Subtitles on Pads:** Filter Pads display their associated source/scene name (`.ctx`), Source & Transform/PiP Pads display their parent scene name, and Audio Volume/Monitor Pads display their input name when custom labels are set. Active Auto-Off countdowns display smoothly without collision and restore context subtitles automatically upon completion. Full info is always accessible in native tooltips.
+- **🔴 Red Scene Pads & Proportional Typography:** Auto-Imported and newly created Scene Pads default to prominent red (`#991b1b`) for instant scanning during live broadcasts (with `PANIC` remaining visually distinct). Container-aware typography (`container-type: size`) scales Pad icons, labels, context subtitles, and badges up cleanly on large desktop grids while keeping narrow `360×420` OBS docks crisp and free of horizontal overflow.
+- **🪄 Read-Only Auto-Import Wizard:** On first connect (or anytime via **`🪄 Auto-Import`**), inspect your live OBS Studio scene collection and generate ready-to-use **Pages** for *Scenes* (styled in red), *Sources & Overlays*, *Filters*, and *Audio, Broadcast & Telemetry*—strictly read-only, without mutating your OBS scenes.
 - **📄 Single Deck with Multiple Pages:** Organize Pads across switchable Page tabs (`+ Page` add, `⎘` duplicate, `8×8 ⚙` rename/resize/delete) plus a **Switch Page (`PAG`)** Pad action.
 - **📐 Custom Grid Sizes & Readable Narrow Docks:** Choose quick presets (`3×2`, `4×3`, `5×3`, `6×4`, `8×4`, `8×8`) or any custom grid from `2×2` up to `12×10`. Resizing preserves existing Pads in place, and minimum Pad dimensions keep buttons comfortably clickable inside narrow OBS docks (`360×420`+).
 - **🧲 Drag-to-Rearrange & Cross-Page Moves:** In **`✎ Edit`** mode, drag any Pad onto another slot to swap, or drag it onto a **Page tab** to move it to that Page.
 - **⏱️ Auto-Off Timed Toggles:** Add an optional **Auto-off after (sec)** timer (`3s`, `5s`, `10s`, `30s`, or custom) to toggleable actions (`Source`, `Filter`, `Mute`, `Studio Mode`, `Stream/Record/Cam`, `Media`). Clicking turns it ON with a live countdown, then automatically turns it OFF; clicking again cancels early.
-- **⌨️ Keyboard Shortcuts:** Bind any key or shortcut combo (e.g., `F1`, `1`, `Ctrl+Shift+1`, `Alt+M`) to any Pad. Shortcuts work globally in the dock and pause automatically while typing in inputs or dialogs.
+- **⌨️ OBS-Native Hotkeys (`KEY`):** Trigger any registered OBS Studio hotkey directly (`GetHotkeyList` → `TriggerHotkeyByName`). (Local dock-only keyboard shortcuts have been removed to keep pad editing clean and lightweight).
 - **🔌 Port Auto-Discovery (Credential-Safe):** The Windows and macOS setup helpers inspect your local OBS `obs-websocket` config for `server_enabled` / `server_port`, pass `?port=<port>` in the dock URL, and never embed or write your WebSocket password. The Deck also probes common local ports (`4455–4458`, `4444`) if the default port does not respond.
-- **🎛️ Dropdown-First Pad Editor:** Clean OBS dropdowns populated via **`↻ Sync`**, 1-click quick emoji icons, color swatches, and an offline **`✎`** toggle for typing names while disconnected.
+- **🎛️ Dropdown-First Pad Editor:** Clean OBS dropdowns populated via **`↻ Sync`**, 1-click quick emoji icons, color swatches, 1-click **Duplicate**, and an offline **`✎`** toggle for typing names while disconnected.
 
 ### 22 OBS Studio Action Types
 
@@ -142,10 +146,13 @@ If the setup helper reported that OBS WebSocket is not enabled yet:
 - Use the Page bar to switch tabs, click **`+ Page`** to add a Page, **`⎘`** to duplicate the active Page, or **`8×8 ⚙`** to open **Page & Grid Settings** (rename, choose presets or custom **Cols 2–12 × Rows 2–10**, or delete extra Pages).
 
 ### Configuring & Rearranging Pads (`✎ Edit` Mode)
+- **Command Palette Drag-and-Drop:** Open the right-hand **Command Palette** in Edit mode to drag commands directly onto any Pad slot. Self-contained actions (Stream, Record, Virtual Cam, Replay, Snapshot, Stats, PANIC, and live items) configure and save instantly. Target-specific actions pre-populate the Pad Editor so you can select the target in one click.
+- **Multi-Select & Batch Actions:** Select multiple Pads via `Ctrl/Cmd+Click`, `Shift+Click` range, or the **Select** toggle button. Use the Selection Bar to batch **Duplicate** to empty slots, **Move to Page**, **Color**, or **Clear**.
 - Click **`✎ Edit`** (or **right-click** any Pad, or click any **empty** Pad) to open the **Edit Pad** dialog:
-  - Set **Label**, **Quick Icons**, **Color**, and **Keyboard Shortcut**.
+  - Set **Label**, **Quick Icons**, and **Color** (Scene pads default to red `#991b1b`).
   - Pick an **Action** and select targets from the live OBS dropdowns (or click **`✎`** beside a dropdown to type a custom name offline).
   - Configure **Auto-off after (sec)** on toggleable actions.
+  - Click **Duplicate** to clone the current Pad to the next empty slot on the Page.
 - While **`✎ Edit`** is active:
   - **Drag a Pad onto another Pad** to swap positions.
   - **Drag a Pad onto a Page tab** to move it to the first available slot on that Page.
@@ -157,7 +164,7 @@ If the setup helper reported that OBS WebSocket is not enabled yet:
 
 ### Export, Import & Reset
 - **`Export`**: downloads `obs-virtual-deck.json` with all Pages, Pads, PANIC steps, and host/port (**passwords are always stripped**).
-- **`Import`**: restores v1, v2.0.0, or v2.1.0 `.json` Deck backups.
+- **`Import`**: restores v1, v2.0.0, v2.1.0, or v2.2.0 `.json` Deck backups.
 - **`Reset Deck`** (inside `WS`): resets all Pages and PANIC steps back to the starter layout.
 
 ---

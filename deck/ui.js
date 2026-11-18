@@ -57,20 +57,136 @@
     full_reset: 'Full Reset',
   };
 
+  const PALETTE_CATEGORIES = [
+    {
+      id: 'cat-broadcast',
+      title: 'Broadcast & Outputs',
+      items: [
+        { label: 'Stream', icon: '📡', tag: 'OUT', action: { type: 'output', target: 'stream', mode: 'toggle', label: 'Stream', icon: '📡' } },
+        { label: 'Record', icon: '🔴', tag: 'OUT', action: { type: 'output', target: 'record', mode: 'toggle', label: 'Record', icon: '🔴' } },
+        { label: 'Record Pause', icon: '⏸️', tag: 'OUT', action: { type: 'output', target: 'recordPause', mode: 'toggle', label: 'Rec Pause', icon: '⏸️' } },
+        { label: 'Chapter Marker', icon: '🔖', tag: 'CHP', action: { type: 'chapter', label: 'Chapter', icon: '🔖' } },
+        { label: 'Virtual Cam', icon: '🎥', tag: 'OUT', action: { type: 'output', target: 'vcam', mode: 'toggle', label: 'Virtual Cam', icon: '🎥' } },
+        { label: 'Replay Buffer', icon: '🔄', tag: 'OUT', action: { type: 'output', target: 'replay', mode: 'toggle', label: 'Replay Buffer', icon: '🔄' } },
+        { label: 'Replay Buffer Save', icon: '💾', tag: 'OUT', action: { type: 'output', target: 'saveReplay', label: 'Save Replay', icon: '💾' } },
+        { label: 'Studio Mode', icon: '🎛️', tag: 'STD', action: { type: 'studio', action: 'toggle', label: 'Studio Mode', icon: '🎛️' } },
+        { label: 'Snapshot', icon: '📸', tag: 'CAP', action: { type: 'screenshot', label: 'Snapshot', icon: '📸' } },
+        { label: 'OBS Stats', icon: '📊', tag: 'STS', action: { type: 'stats', mode: 'all', label: 'OBS Stats', icon: '📊' } },
+        { label: 'PANIC', icon: '⚡', tag: 'PNC', action: { type: 'panic', label: 'PANIC', icon: '⚡', color: '#7f1d1d' } },
+      ],
+    },
+    {
+      id: 'cat-scenes',
+      title: 'Scenes & Sources',
+      items: [
+        { label: 'Scene', icon: '🎬', tag: 'SCN', action: { type: 'scene', mode: 'named', label: 'Scene', icon: '🎬', color: '#991b1b' } },
+        { label: 'Prev Scene', icon: '⏮️', tag: 'SCN', action: { type: 'scene', mode: 'prev', label: 'Prev Scene', icon: '⏮️', color: '#115e59' } },
+        { label: 'Next Scene', icon: '⏭️', tag: 'SCN', action: { type: 'scene', mode: 'next', label: 'Next Scene', icon: '⏭️', color: '#115e59' } },
+        { label: 'Source Visibility', icon: '📺', tag: 'SRC', action: { type: 'source', mode: 'toggle', label: 'Source', icon: '📺' } },
+        { label: 'Source Transform', icon: '📐', tag: 'PIP', action: { type: 'transform', preset: 'toggle_pip', label: 'PiP', icon: '📐' } },
+      ],
+    },
+    {
+      id: 'cat-audio',
+      title: 'Filters & Audio',
+      items: [
+        { label: 'Filter Toggle', icon: '✨', tag: 'FLT', action: { type: 'filter', mode: 'toggle', label: 'Filter', icon: '✨' } },
+        { label: 'Input Mute', icon: '🔇', tag: 'MUT', action: { type: 'mute', mode: 'toggle', label: 'Mute', icon: '🔇' } },
+        { label: 'Input Volume', icon: '🔊', tag: 'VOL', action: { type: 'volume', mode: 'step', volumeDb: -3, label: 'Volume', icon: '🔊' } },
+        { label: 'Audio Monitor', icon: '🎧', tag: 'MON', action: { type: 'monitor', monitorType: 'cycle', label: 'Monitor', icon: '🎧' } },
+      ],
+    },
+    {
+      id: 'cat-media',
+      title: 'Media & Tools',
+      items: [
+        { label: 'Media Source Control', icon: '🎵', tag: 'MED', action: { type: 'media', mediaAction: 'play_pause', label: 'Media', icon: '🎵' } },
+        { label: 'Browser Source', icon: '🌐', tag: 'WEB', action: { type: 'browser', mode: 'refresh', label: 'Browser Source', icon: '🌐' } },
+        { label: 'Image Swap', icon: '🖼️', tag: 'IMG', action: { type: 'image', mode: 'set_file', label: 'Image Swap', icon: '🖼️' } },
+        { label: 'Scene Transition', icon: '✂️', tag: 'TRN', action: { type: 'transition', label: 'Transition', icon: '✂️' } },
+        { label: 'Profile', icon: '👤', tag: 'PRF', action: { type: 'profile', label: 'Profile', icon: '👤' } },
+        { label: 'Scene Collection', icon: '📁', tag: 'COL', action: { type: 'collection', label: 'Collection', icon: '📁' } },
+        { label: 'OBS Hotkey', icon: '⌨️', tag: 'KEY', action: { type: 'hotkey', label: 'Hotkey', icon: '⌨️' } },
+        { label: 'Go to Page', icon: '📄', tag: 'PAG', action: { type: 'page', mode: 'goto', label: 'Go to Page', icon: '📄' } },
+        { label: 'Timed Macro', icon: '⏱️', tag: 'MCR', action: { type: 'macro', label: 'Timed Macro', icon: '⏱️', steps: [] } },
+      ],
+    },
+  ];
+
   let dragIdx = null;
   let dragSourcePageId = '';
+  let paletteDragItem = null;
   let justDroppedAt = 0;
   let editingIdx = -1;
   let editingPageId = '';
   let draftPad = null;
   let draftPanic = [];
-  let isRecordingHotkey = false;
   let promptedAutoImportThisSession = false;
+
+  // Edit-Mode Multi-Select State
+  let selectedPads = new Set();
+  let lastSelectedIdx = null;
+  let selectMode = false;
+
+  function isSelfContained(act) {
+    if (!act) return false;
+    if (act.isLive) return true;
+    if (act.type === 'output') return true;
+    if (act.type === 'chapter') return true;
+    if (act.type === 'studio' && (act.action === 'toggle' || act.action === 'transition')) return true;
+    if (act.type === 'screenshot') return true;
+    if (act.type === 'stats') return true;
+    if (act.type === 'scene' && (act.mode === 'next' || act.mode === 'prev')) return true;
+    if (act.type === 'panic') return true;
+    return false;
+  }
 
   function clearDragHighlights() {
     document.querySelectorAll('.pad.drag-over, .pad.dragging, .page-tab.drag-over').forEach((el) => {
       el.classList.remove('drag-over', 'dragging');
     });
+  }
+
+  function clearSelection() {
+    selectedPads.clear();
+    lastSelectedIdx = null;
+    updateSelectionUi();
+  }
+
+  function updateSelectionUi() {
+    const grid = $('grid');
+    if (grid) {
+      grid.querySelectorAll('.pad').forEach((btn) => {
+        const idx = Number(btn.dataset.idx);
+        btn.classList.toggle('selected', selectedPads.has(idx));
+      });
+    }
+    const countEl = $('sel-count');
+    if (countEl) countEl.textContent = `${selectedPads.size} selected`;
+    const selModeBtn = $('btn-sel-mode');
+    if (selModeBtn) selModeBtn.classList.toggle('on', selectMode);
+
+    const hasSel = selectedPads.size > 0;
+    const dupBtn = $('btn-sel-dup');
+    if (dupBtn) dupBtn.disabled = !hasSel;
+    const moveSel = $('sel-move-page');
+    if (moveSel) {
+      moveSel.disabled = !hasSel;
+      const curId = Deck.cfg.activePageId;
+      moveSel.innerHTML = '<option value="">Move to Page…</option>';
+      for (const p of Deck.cfg.pages) {
+        if (p.id !== curId) {
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          opt.textContent = p.name || 'Page';
+          moveSel.appendChild(opt);
+        }
+      }
+    }
+    const colBtn = $('btn-sel-color');
+    if (colBtn) colBtn.disabled = !hasSel;
+    const clrBtn = $('btn-sel-clear');
+    if (clrBtn) clrBtn.disabled = !hasSel;
   }
 
   function padFallbackLabel(p, i, cols = 8) {
@@ -140,7 +256,10 @@
 
   Deck.updateMacroTicks = () => {
     const grid = $('grid');
-    for (const t of Deck.getActivePageTicks()) {
+    if (!grid) return;
+    const activeTicks = Deck.getActivePageTicks();
+    const activeIndices = new Set(activeTicks.map((t) => t.idx));
+    for (const t of activeTicks) {
       const btn = grid.querySelector(`.pad[data-idx="${t.idx}"]`);
       if (!btn) continue;
       let sub = btn.querySelector('.sub');
@@ -150,8 +269,23 @@
         sub.className = 'sub';
         btn.appendChild(sub);
       }
-      if (sub) sub.textContent = txt;
+      if (sub) {
+        sub.textContent = txt;
+        sub.style.display = txt ? '' : 'none';
+      }
+      const ctx = btn.querySelector('.ctx');
+      if (ctx) ctx.style.display = txt ? 'none' : '';
     }
+    grid.querySelectorAll('.pad:not(.stats-pad)').forEach((btn) => {
+      const idx = Number(btn.dataset.idx);
+      if (!activeIndices.has(idx)) {
+        const sub = btn.querySelector('.sub');
+        if (sub) sub.remove();
+        const ctx = btn.querySelector('.ctx');
+        if (ctx) ctx.style.display = '';
+        btn.classList.remove('running');
+      }
+    });
   };
 
   Deck.updateStatsPads = () => {
@@ -187,7 +321,10 @@
       b.dataset.pageId = d.id;
       b.textContent = d.name || 'Page';
       b.title = `${d.name} (${d.cols}×${d.rows})`;
-      b.addEventListener('click', () => Deck.setActivePage(d.id));
+      b.addEventListener('click', () => {
+        clearSelection();
+        Deck.setActivePage(d.id);
+      });
       b.addEventListener('dragover', (e) => {
         if (!Deck.editMode || dragIdx === null || d.id === Deck.getActivePage().id) return;
         e.preventDefault();
@@ -226,8 +363,33 @@
       const el = document.createElement('button');
       el.type = 'button';
       el.dataset.idx = i;
-      el.addEventListener('click', () => {
+      el.addEventListener('click', (e) => {
         if (Date.now() - justDroppedAt < 250) return;
+        if (Deck.editMode) {
+          if (e.ctrlKey || e.metaKey) {
+            if (selectedPads.has(i)) selectedPads.delete(i);
+            else selectedPads.add(i);
+            lastSelectedIdx = i;
+            updateSelectionUi();
+            return;
+          }
+          if (e.shiftKey && lastSelectedIdx !== null) {
+            const start = Math.min(lastSelectedIdx, i);
+            const end = Math.max(lastSelectedIdx, i);
+            for (let k = start; k <= end; k++) selectedPads.add(k);
+            updateSelectionUi();
+            return;
+          }
+          if (selectMode) {
+            if (selectedPads.has(i)) selectedPads.delete(i);
+            else selectedPads.add(i);
+            lastSelectedIdx = i;
+            updateSelectionUi();
+            return;
+          }
+          Deck.openPadEditor(i);
+          return;
+        }
         Deck.onPadClick(i);
       });
       el.addEventListener('contextmenu', (e) => { e.preventDefault(); Deck.openPadEditor(i); });
@@ -248,9 +410,11 @@
         clearDragHighlights();
       });
       el.addEventListener('dragover', (e) => {
-        if (!Deck.editMode || dragIdx === null || dragIdx === i) return;
+        if (!Deck.editMode) return;
+        const isPalette = paletteDragItem !== null;
+        if (!isPalette && (dragIdx === null || dragIdx === i)) return;
         e.preventDefault();
-        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        if (e.dataTransfer) e.dataTransfer.dropEffect = isPalette ? 'copy' : 'move';
         el.classList.add('drag-over');
       });
       el.addEventListener('dragleave', (e) => {
@@ -259,9 +423,45 @@
       el.addEventListener('drop', (e) => {
         e.preventDefault();
         clearDragHighlights();
+        if (!Deck.editMode) return;
         const activePage = Deck.getActivePage();
         const pads = activePage.pads;
-        if (!Deck.editMode || dragIdx === null || dragIdx === i || dragIdx >= pads.length || i >= pads.length) return;
+        if (i >= pads.length) return;
+
+        let paletteData = paletteDragItem;
+        if (!paletteData && e.dataTransfer) {
+          try {
+            const json = e.dataTransfer.getData('application/json');
+            if (json) {
+              const parsed = JSON.parse(json);
+              if (parsed?.source === 'palette' && parsed.action) paletteData = parsed.action;
+            }
+          } catch {}
+        }
+
+        if (paletteData) {
+          paletteDragItem = null;
+          justDroppedAt = Date.now();
+          if (typeof Deck.abortPadTimer === 'function') {
+            Deck.abortPadTimer(activePage.id, i);
+          }
+          if (isSelfContained(paletteData)) {
+            const newPad = JSON.parse(JSON.stringify(paletteData));
+            delete newPad.isLive;
+            if (!newPad.color) {
+              newPad.color = newPad.type === 'scene' ? '#991b1b' : COLORS[0];
+            }
+            pads[i] = Deck.normalizePad(newPad);
+            Deck.saveCfg();
+            Deck.renderGrid();
+            Deck.setMsg(`Assigned ${pads[i].label || pads[i].type} to pad ${i + 1}`);
+          } else {
+            Deck.openPadEditor(i, activePage.id, paletteData);
+          }
+          return;
+        }
+
+        if (dragIdx === null || dragIdx === i || dragIdx >= pads.length) return;
         if (typeof Deck.abortPadTimer === 'function') {
           Deck.abortPadTimer(activePage.id, dragIdx);
           Deck.abortPadTimer(activePage.id, i);
@@ -287,27 +487,31 @@
       if (!el) return;
       const rt = Deck.getPadRuntime(i, page.id);
       const active = Deck.isPadActive(p);
+      const isRunning = Boolean(rt.running);
       el.className = 'pad'
         + (p.type === 'none' ? ' empty' : '')
         + (p.type === 'stats' ? ' stats-pad' : '')
         + (Deck.editMode ? ' edit-mode' : '')
+        + (selectedPads.has(i) ? ' selected' : '')
         + (active ? ' active' : '')
-        + (rt.running ? ' running' : '');
+        + (isRunning ? ' running' : '');
       el.style.background = p.color && p.type !== 'none' ? p.color : '';
       el.draggable = Deck.editMode && p.type !== 'none';
       const subText = p.type === 'stats' ? Deck.formatStatsText(p.mode || 'all') : tickText(rt);
+      const ctxText = (typeof Deck.getPadContextSubtitle === 'function') ? Deck.getPadContextSubtitle(p) : '';
       const lbl = p.label || padFallbackLabel(p, i, page.cols);
       const tipParts = [lbl || `Pad ${i + 1}`];
+      if (ctxText) tipParts.push(`[${ctxText}]`);
       if (p.type === 'stats' && subText) tipParts.push(`(${subText})`);
       if (TAGS[p.type]) tipParts.push(`[${TAGS[p.type]}]`);
-      if (p.hotkey) tipParts.push(`(${p.hotkey})`);
       el.title = tipParts.join(' ');
       el.innerHTML = `<i class="led"></i>${TAGS[p.type] ? `<span class="tag">${TAGS[p.type]}</span>` : ''}`
         + `${p.icon ? `<span class="ico">${esc(p.icon)}</span>` : ''}`
         + `<span class="lbl">${esc(lbl)}</span>`
-        + `${subText ? `<span class="sub">${esc(subText)}</span>` : ''}`
-        + `${p.hotkey ? `<span class="hk">${esc(p.hotkey)}</span>` : ''}`;
+        + `${ctxText ? `<span class="ctx"${isRunning ? ' style="display:none"' : ''}>${esc(ctxText)}</span>` : ''}`
+        + `${subText ? `<span class="sub">${esc(subText)}</span>` : ''}`;
     });
+    updateSelectionUi();
   };
 
   function allSceneTargets() {
@@ -819,14 +1023,6 @@
     });
   }
 
-  function updateHotkeyUi() {
-    const btn = $('f-hotkey-btn');
-    if (!btn) return;
-    btn.classList.toggle('on', isRecordingHotkey);
-    if (isRecordingHotkey) btn.textContent = 'Press any key… (Esc to cancel)';
-    else btn.textContent = draftPad?.hotkey || 'None (click to record)';
-  }
-
   function drawPadFields() {
     const f = $('f-fields');
     f.innerHTML = '';
@@ -856,20 +1052,26 @@
     }
   }
 
-  Deck.openPadEditor = (idx, pageId) => {
+  Deck.openPadEditor = (idx, pageId, prefillAction) => {
     const page = pageId ? (Deck.cfg.pages.find((d) => d.id === pageId) || Deck.getActivePage()) : Deck.getActivePage();
     if (!page.pads[idx]) return;
     editingIdx = idx;
     editingPageId = page.id;
-    isRecordingHotkey = false;
     draftPad = JSON.parse(JSON.stringify(page.pads[idx]));
+
+    if (prefillAction) {
+      Object.assign(draftPad, JSON.parse(JSON.stringify(prefillAction)));
+      if (draftPad.type === 'scene' && (!draftPad.color || draftPad.color === COLORS[0] || draftPad.color === '#222733')) {
+        draftPad.color = '#991b1b';
+      }
+    }
+
     if (!draftPad.steps) draftPad.steps = [];
     const cols = page.cols || 8;
     $('dlg-title').textContent = `Edit Pad R${Math.floor(idx / cols) + 1}C${(idx % cols) + 1} (${page.name})`;
     $('f-label').value = draftPad.label || '';
     $('f-icon').value = draftPad.icon || '';
     $('f-type').value = draftPad.type || 'none';
-    updateHotkeyUi();
 
     const icoBox = $('f-icons');
     if (icoBox && !icoBox.children.length) {
@@ -966,6 +1168,7 @@
   }
 
   Deck.onObsConnected = () => {
+    renderPalette();
     if (promptedAutoImportThisSession) return;
     if (!Deck.isStarterDeck()) return;
     if (document.querySelector('dialog[open]')) return;
@@ -974,20 +1177,191 @@
     openAutoImportWizard();
   };
 
-  $('f-type').addEventListener('change', drawPadFields);
+  // Command Palette Builder & Filter
+  function createPaletteItemEl(it) {
+    const el = document.createElement('div');
+    el.className = 'palette-item';
+    el.draggable = true;
+    el.innerHTML = `<span class="pal-ico">${esc(it.icon || '⚡')}</span>`
+      + `<span class="pal-lbl">${esc(it.label)}</span>`
+      + `<span class="pal-tag">${esc(it.tag || 'ACT')}</span>`;
+
+    el.addEventListener('dragstart', (e) => {
+      paletteDragItem = it.action;
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'copy';
+        e.dataTransfer.setData('application/json', JSON.stringify({ source: 'palette', action: it.action }));
+        e.dataTransfer.setData('text/plain', `palette:${it.action.type}`);
+      }
+    });
+    el.addEventListener('dragend', () => {
+      paletteDragItem = null;
+      clearDragHighlights();
+    });
+    return el;
+  }
+
+  function renderPalette() {
+    const container = $('palette-list');
+    if (!container) return;
+    container.innerHTML = '';
+
+    for (const cat of PALETTE_CATEGORIES) {
+      const details = document.createElement('details');
+      details.className = 'palette-cat';
+      details.id = cat.id;
+      details.open = true;
+
+      const sum = document.createElement('summary');
+      sum.textContent = cat.title;
+      details.appendChild(sum);
+
+      const itemsWrap = document.createElement('div');
+      itemsWrap.className = 'palette-items';
+      for (const it of cat.items) {
+        itemsWrap.appendChild(createPaletteItemEl(it));
+      }
+      details.appendChild(itemsWrap);
+      container.appendChild(details);
+    }
+
+    // Category 5: Live OBS Items (if connected)
+    const liveCat = document.createElement('details');
+    liveCat.className = 'palette-cat';
+    liveCat.id = 'palette-cat-live';
+    liveCat.open = true;
+
+    const liveSum = document.createElement('summary');
+    liveSum.textContent = 'Live OBS Items';
+    liveCat.appendChild(liveSum);
+
+    const liveWrap = document.createElement('div');
+    liveWrap.className = 'palette-items';
+
+    if (Deck.obs.status === 'ok') {
+      const { obs } = Deck;
+      let hasLive = false;
+
+      // Live Scenes
+      (obs.scenes || []).forEach((sc) => {
+        hasLive = true;
+        liveWrap.appendChild(createPaletteItemEl({
+          label: sc,
+          icon: '🎬',
+          tag: 'SCN',
+          action: { type: 'scene', mode: 'named', sceneName: sc, label: sc, icon: '🎬', color: '#991b1b', isLive: true },
+        }));
+      });
+
+      // Live Sources
+      for (const [scName, items] of Object.entries(obs.itemsByScene || {})) {
+        (items || []).forEach((it) => {
+          hasLive = true;
+          liveWrap.appendChild(createPaletteItemEl({
+            label: `${it.sourceName} (${scName})`,
+            icon: '📺',
+            tag: 'SRC',
+            action: { type: 'source', sceneName: scName, sourceName: it.sourceName, mode: 'toggle', label: it.sourceName, icon: '📺', isLive: true },
+          }));
+        });
+      }
+
+      // Live Filters
+      for (const [srcName, flts] of Object.entries(obs.filtersBySource || {})) {
+        (flts || []).forEach((f) => {
+          hasLive = true;
+          liveWrap.appendChild(createPaletteItemEl({
+            label: `${f.filterName} (${srcName})`,
+            icon: '✨',
+            tag: 'FLT',
+            action: { type: 'filter', sourceName: srcName, filterName: f.filterName, mode: 'toggle', label: f.filterName, icon: '✨', isLive: true },
+          }));
+        });
+      }
+
+      // Live Inputs (Mute)
+      (obs.inputs || []).forEach((inp) => {
+        hasLive = true;
+        liveWrap.appendChild(createPaletteItemEl({
+          label: inp,
+          icon: '🎙️',
+          tag: 'MUT',
+          action: { type: 'mute', inputName: inp, mode: 'toggle', label: inp, icon: '🎙️', isLive: true },
+        }));
+      });
+
+      if (!hasLive) {
+        const hint = document.createElement('div');
+        hint.className = 'palette-hint';
+        hint.textContent = 'No scenes or sources found in OBS.';
+        liveWrap.appendChild(hint);
+      }
+    } else {
+      const hint = document.createElement('div');
+      hint.className = 'palette-hint';
+      hint.textContent = 'Connect OBS to see live items';
+      liveWrap.appendChild(hint);
+    }
+    liveCat.appendChild(liveWrap);
+    container.appendChild(liveCat);
+
+    filterPalette();
+  }
+
+  function filterPalette() {
+    const q = ($('palette-search')?.value || '').trim().toLowerCase();
+    const cats = document.querySelectorAll('.palette-cat');
+    cats.forEach((cat) => {
+      let catMatches = 0;
+      const items = cat.querySelectorAll('.palette-item');
+      items.forEach((item) => {
+        const text = (item.textContent || '').toLowerCase();
+        const matches = !q || text.includes(q);
+        item.style.display = matches ? 'flex' : 'none';
+        if (matches) catMatches++;
+      });
+      cat.style.display = (!items.length || catMatches > 0) ? '' : 'none';
+      if (q && catMatches > 0) cat.open = true;
+    });
+  }
+
+  Deck.renderPalette = renderPalette;
+
+  $('palette-search')?.addEventListener('input', filterPalette);
+  $('palette-close')?.addEventListener('click', () => {
+    const pal = $('palette');
+    if (!pal) return;
+    pal.classList.remove('open');
+    pal.classList.add('collapsed');
+  });
+  $('btn-palette')?.addEventListener('click', () => {
+    const pal = $('palette');
+    if (!pal) return;
+    if (window.innerWidth <= 600) {
+      pal.classList.toggle('open');
+    } else {
+      pal.classList.toggle('collapsed');
+    }
+  });
+
+  // Pad Editor Events
+  $('f-type').addEventListener('change', () => {
+    if ($('f-type').value === 'scene') {
+      if (!draftPad.color || draftPad.color === COLORS[0] || draftPad.color === '#222733') {
+        draftPad.color = '#991b1b';
+        const swBox = $('f-colors');
+        if (swBox) {
+          swBox.querySelectorAll('.sw').forEach((b) => {
+            b.classList.toggle('sel', b.title === '#991b1b');
+          });
+        }
+      }
+    }
+    drawPadFields();
+  });
+
   $('dlg-close').addEventListener('click', () => $('pad-dlg').close());
   $('btn-pad-cancel').addEventListener('click', () => $('pad-dlg').close());
-  $('pad-dlg').addEventListener('close', () => { isRecordingHotkey = false; updateHotkeyUi(); });
-
-  $('f-hotkey-btn').addEventListener('click', () => {
-    isRecordingHotkey = !isRecordingHotkey;
-    updateHotkeyUi();
-  });
-  $('btn-hotkey-clear').addEventListener('click', () => {
-    isRecordingHotkey = false;
-    if (draftPad) draftPad.hotkey = '';
-    updateHotkeyUi();
-  });
 
   $('btn-pad-clear').addEventListener('click', () => {
     const page = Deck.cfg.pages.find((d) => d.id === editingPageId) || Deck.getActivePage();
@@ -997,8 +1371,18 @@
     Deck.renderGrid();
   });
 
+  $('btn-pad-dup').addEventListener('click', () => {
+    const dstIdx = Deck.duplicatePad(editingIdx, editingPageId, editingPageId);
+    if (dstIdx >= 0) {
+      $('pad-dlg').close();
+      Deck.setMsg(`Duplicated pad to slot ${dstIdx + 1}`);
+      Deck.renderGrid();
+    } else {
+      Deck.setMsg('Page is full — cannot duplicate');
+    }
+  });
+
   $('pad-form').addEventListener('submit', () => {
-    isRecordingHotkey = false;
     draftPad.label = $('f-label').value.trim();
     draftPad.icon = $('f-icon').value.trim();
     const saved = Deck.normalizePad(draftPad);
@@ -1027,12 +1411,86 @@
     }
   });
 
+  // Edit Selection Bar Events
+  $('btn-sel-mode')?.addEventListener('click', () => {
+    selectMode = !selectMode;
+    updateSelectionUi();
+    Deck.setMsg(selectMode ? 'Select mode: click pads to select / deselect' : 'Select mode off');
+  });
+
+  $('btn-sel-all')?.addEventListener('click', () => {
+    const page = Deck.getActivePage();
+    const nonEmpty = page.pads.map((p, idx) => p && p.type !== 'none' ? idx : -1).filter((idx) => idx >= 0);
+    if (selectedPads.size === nonEmpty.length && nonEmpty.length > 0) {
+      page.pads.forEach((_, idx) => selectedPads.add(idx));
+    } else {
+      (nonEmpty.length ? nonEmpty : page.pads.map((_, idx) => idx)).forEach((idx) => selectedPads.add(idx));
+    }
+    updateSelectionUi();
+  });
+
+  $('btn-sel-none')?.addEventListener('click', clearSelection);
+
+  $('btn-sel-dup')?.addEventListener('click', () => {
+    if (!selectedPads.size) return;
+    const newIndices = Deck.duplicatePads(Array.from(selectedPads));
+    if (newIndices && newIndices.length) {
+      Deck.setMsg(`Duplicated ${newIndices.length} pad(s)`);
+      selectedPads = new Set(newIndices);
+      updateSelectionUi();
+    } else {
+      Deck.setMsg('Page is full — could not duplicate');
+    }
+  });
+
+  $('sel-move-page')?.addEventListener('change', () => {
+    const targetPageId = $('sel-move-page').value;
+    if (!targetPageId || !selectedPads.size) return;
+    const targetPage = Deck.cfg.pages.find((p) => p.id === targetPageId);
+    const moved = Deck.movePadsToPage(Array.from(selectedPads), targetPageId);
+    clearSelection();
+    Deck.setMsg(`Moved ${moved.length} pad(s) to ${targetPage ? targetPage.name : 'target page'}`);
+    $('sel-move-page').value = '';
+  });
+
+  const selPop = $('sel-color-pop');
+  if (selPop) {
+    COLORS.forEach((c) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'sw';
+      b.style.background = c;
+      b.title = c;
+      b.addEventListener('click', () => {
+        if (!selectedPads.size) return;
+        Deck.setPadColors(Array.from(selectedPads), c);
+        selPop.hidden = true;
+        Deck.setMsg(`Recolored ${selectedPads.size} pad(s)`);
+        updateSelectionUi();
+      });
+      selPop.appendChild(b);
+    });
+  }
+  $('btn-sel-color')?.addEventListener('click', () => {
+    if (selPop) selPop.hidden = !selPop.hidden;
+  });
+
+  $('btn-sel-clear')?.addEventListener('click', () => {
+    if (!selectedPads.size) return;
+    const count = selectedPads.size;
+    Deck.clearPads(Array.from(selectedPads));
+    clearSelection();
+    Deck.setMsg(`Cleared ${count} pad(s)`);
+  });
+
   // Page & Grid Settings Dialog
   $('btn-deck-add').addEventListener('click', () => {
+    clearSelection();
     const created = Deck.addPage({ switchTo: true });
     Deck.setMsg(`Added Page "${created.name}" (${created.cols}×${created.rows})`);
   });
   $('btn-deck-dup').addEventListener('click', () => {
+    clearSelection();
     const cur = Deck.getActivePage();
     const copy = Deck.duplicatePage(cur.id);
     if (copy) Deck.setMsg(`Duplicated "${cur.name}" -> "${copy.name}"`);
@@ -1128,11 +1586,20 @@
   $('btn-conn-toggle').addEventListener('click', () => $('conn-bar').classList.toggle('open'));
   $('btn-ws-connect').addEventListener('click', () => Deck.connectObs({ manual: true }));
   $('btn-ws-disconnect').addEventListener('click', () => Deck.disconnectObs(true));
-  $('btn-sync').addEventListener('click', Deck.syncObsState);
+  $('btn-sync').addEventListener('click', async () => {
+    await Deck.syncObsState();
+    renderPalette();
+  });
   $('btn-edit').addEventListener('click', () => {
     Deck.editMode = !Deck.editMode;
     $('btn-edit').classList.toggle('on', Deck.editMode);
-    Deck.setMsg(Deck.editMode ? 'Edit mode: click pad to configure, drag to swap or move to Page tab' : 'Run mode');
+    document.body.classList.toggle('edit-mode', Deck.editMode);
+    if (!Deck.editMode) {
+      clearSelection();
+      const pal = $('palette');
+      if (pal) pal.classList.remove('open');
+    }
+    Deck.setMsg(Deck.editMode ? 'Edit mode: drag commands from palette, click pad to configure' : 'Run mode');
     Deck.renderGrid();
   });
   $('btn-panic').addEventListener('click', Deck.runPanic);
@@ -1154,6 +1621,7 @@
     if (!file) return;
     try {
       const d = JSON.parse(await file.text());
+      clearSelection();
       Deck.cfg = Deck.migrateConfig(d);
       $('ws-host').value = Deck.cfg.ws.host;
       $('ws-port').value = Deck.cfg.ws.port;
@@ -1167,6 +1635,7 @@
   });
   $('btn-reset-layout').addEventListener('click', () => {
     if (!confirm('Reset all Pages, pads, and PANIC steps to starter defaults?')) return;
+    clearSelection();
     for (const p of Deck.cfg.pages) {
       if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(p.id);
     }
@@ -1178,31 +1647,12 @@
     Deck.setMsg('Deck reset to starter defaults');
   });
 
-  // Global Keyboard Shortcuts & Hotkey Recorder
-  document.addEventListener('keydown', (e) => {
-    if (isRecordingHotkey) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.key === 'Escape') {
-        isRecordingHotkey = false;
-        updateHotkeyUi();
-        return;
-      }
-      const hk = Deck.hotkeyFromEvent(e);
-      if (!hk) return;
-      isRecordingHotkey = false;
-      if (draftPad) draftPad.hotkey = hk;
-      updateHotkeyUi();
-      return;
-    }
-    if (Deck.handleKeyDown(e)) e.preventDefault();
-  }, true);
-
   // Boot
   if ($('version-badge') && Deck.VERSION) $('version-badge').textContent = `v${Deck.VERSION}`;
   $('ws-host').value = Deck.cfg.ws.host;
   $('ws-port').value = Deck.cfg.ws.port;
   $('ws-pass').value = Deck.cfg.ws.password;
+  renderPalette();
   Deck.renderGrid();
   Deck.connectObs({ isBoot: true });
 })();

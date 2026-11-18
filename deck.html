@@ -15,6 +15,7 @@
   <button id="btn-conn-toggle" class="btn sm" title="WebSocket connection settings">WS</button>
   <button id="btn-sync" class="btn sm" title="Refresh OBS scenes, sources, filters, hotkeys, and outputs">↻ Sync</button>
   <button id="btn-edit" class="btn sm" title="Toggle Edit Mode to configure, drag-swap, or move pads across Pages">✎ Edit</button>
+  <button id="btn-palette" class="btn sm" title="Toggle Command Palette in Edit Mode">Commands</button>
   <button id="btn-auto-import" class="btn sm" title="Auto-Import Pages from connected OBS Studio (read-only)">🪄 Auto-Import</button>
   <div class="spacer"></div>
   <button id="btn-panic-cfg" class="btn sm" title="Configure PANIC reset steps">⚙ Panic</button>
@@ -40,12 +41,38 @@
   <button id="btn-deck-cfg" class="btn sm" title="Rename Page, resize grid, or delete Page">8×8 ⚙</button>
 </div>
 
-<div id="grid" class="grid" aria-label="8 by 8 OBS Deck Page"></div>
+<div id="select-bar" class="bar select-bar">
+  <button type="button" id="btn-sel-mode" class="btn sm" title="Toggle Click-to-Select mode">Select</button>
+  <span id="sel-count" class="sel-count">0 selected</span>
+  <button type="button" id="btn-sel-all" class="btn sm">Select All</button>
+  <button type="button" id="btn-sel-none" class="btn sm">Clear Sel</button>
+  <span class="sel-sep">|</span>
+  <button type="button" id="btn-sel-dup" class="btn sm" title="Duplicate selected pads into empty slots">Duplicate</button>
+  <select id="sel-move-page" class="btn sm" title="Move selected pads to chosen Page">
+    <option value="">Move to Page…</option>
+  </select>
+  <div id="sel-color-wrap" class="sel-color-wrap">
+    <button type="button" id="btn-sel-color" class="btn sm" title="Recolor selected pads">Color…</button>
+    <div id="sel-color-pop" class="swatches sel-swatches" hidden></div>
+  </div>
+  <button type="button" id="btn-sel-clear" class="btn sm panic" title="Clear selected pads to empty">Clear</button>
+</div>
+
+<div id="deck-body" class="deck-body">
+  <div id="grid" class="grid" aria-label="8 by 8 OBS Deck Page"></div>
+  <aside id="palette" class="palette" aria-label="Command Palette">
+    <div class="palette-h">
+      <input id="palette-search" type="search" placeholder="Search commands…" aria-label="Search commands">
+      <button type="button" id="palette-close" class="btn sm" title="Close Palette">✕</button>
+    </div>
+    <div id="palette-list" class="palette-list"></div>
+  </aside>
+</div>
 
 <div class="status">
   <span id="scene-info">Program: —</span>
   <span id="msg-info">Ready</span>
-  <a id="version-badge" class="ver" href="https://github.com/JWCow/obs-virtual-deck/releases" target="_blank" rel="noopener noreferrer" title="View OBS Virtual Deck releases on GitHub">v2.1.0</a>
+  <a id="version-badge" class="ver" href="https://github.com/JWCow/obs-virtual-deck/releases" target="_blank" rel="noopener noreferrer" title="View OBS Virtual Deck releases on GitHub">v2.2.0</a>
 </div>
 
 <dialog id="pad-dlg">
@@ -57,13 +84,6 @@
     </div>
     <div class="row"><label>Quick Icons</label><div id="f-icons" class="icon-presets"></div></div>
     <div class="row"><label>Color</label><div id="f-colors" class="swatches"></div></div>
-    <div class="row">
-      <label>Keyboard Shortcut</label>
-      <div class="hotkey-row">
-        <button type="button" id="f-hotkey-btn" class="btn sm hotkey-btn">None (click to record)</button>
-        <button type="button" id="btn-hotkey-clear" class="btn sm" title="Clear shortcut">Clear</button>
-      </div>
-    </div>
     <div class="row"><label for="f-type">Action</label>
       <select id="f-type">
         <option value="none">Empty / None</option>
@@ -104,6 +124,7 @@
     <div id="f-fields" class="frm"></div>
     <div class="dlg-f">
       <button type="button" id="btn-pad-clear" class="btn sm">Clear</button>
+      <button type="button" id="btn-pad-dup" class="btn sm" title="Duplicate pad to next empty slot">Duplicate</button>
       <div class="spacer"></div>
       <button type="button" id="btn-pad-cancel" class="btn sm">Cancel</button>
       <button type="submit" class="btn sm on">Save</button>

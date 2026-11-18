@@ -290,50 +290,32 @@ try {
   assert.equal(state.filters['Webcam'][0].filterEnabled, false, 'PANIC disabled active auto-off filter');
   console.log('  ✓ auto-off non-destructive ticks, re-click early cancel & PANIC abort');
 
-  // 8. Hotkey guardrails: Ctrl+Shift+1 works in Run mode, ignored in inputs/dialogs/Edit mode, Esc cancels recording safely
+  // 8. Removal of local hotkey UI, red scene pad default & OBS Hotkey action execution
   await page.click('#btn-edit');
   await pad(6).click();
   await page.selectOption('#f-type', 'scene');
   await page.locator('#f-fields select').first().selectOption('BRB');
-  // Test Escape while recording hotkey does NOT close #pad-dlg
-  await page.click('#f-hotkey-btn');
-  assert.match(await page.textContent('#f-hotkey-btn'), /Press any key/);
-  await page.keyboard.press('Escape');
-  assert.equal(await page.evaluate(() => document.getElementById('pad-dlg').open), true, 'Esc during hotkey record keeps dialog open');
-  assert.match(await page.textContent('#f-hotkey-btn'), /None/);
-  // Record Ctrl+Shift+1
-  await page.click('#f-hotkey-btn');
-  await page.keyboard.press('Control+Shift+Digit1');
-  assert.equal((await page.textContent('#f-hotkey-btn')).trim(), 'Ctrl+Shift+1');
+  // Verify local hotkey recorder #f-hotkey-btn is omitted
+  assert.equal(await page.locator('#f-hotkey-btn').count(), 0, '#f-hotkey-btn omitted from Pad Editor');
+  assert.equal(await page.evaluate(() => document.querySelectorAll('#grid .pad')[6].querySelector('.hk')), null, 'no .hk badge on pad');
   await page.click('#pad-form button[type="submit"]');
+  assert.equal(await page.evaluate(() => document.querySelectorAll('#grid .pad')[6].style.backgroundColor), 'rgb(153, 27, 27)', 'pad 6 is red #991b1b');
 
-  // Ignored in Edit mode
+  // Verify dock-level hotkeys are removed in Run mode
+  await page.click('#btn-edit');
   state.programScene = 'Main Cam';
   broadcast('CurrentProgramSceneChanged', { sceneName: 'Main Cam' });
   await page.waitForFunction(() => document.getElementById('scene-info').textContent === 'Program: Main Cam');
   await page.keyboard.press('Control+Shift+Digit1');
   await page.waitForTimeout(100);
-  assert.equal(state.programScene, 'Main Cam', 'hotkey ignored in Edit mode');
+  assert.equal(state.programScene, 'Main Cam', 'local keyboard hotkeys disabled');
 
-  // Ignored when input focused in Run mode
-  await page.click('#btn-edit');
-  await page.focus('#ws-host');
-  await page.keyboard.press('Control+Shift+Digit1');
-  await page.waitForTimeout(100);
-  assert.equal(state.programScene, 'Main Cam', 'hotkey ignored when input focused');
-
-  // Ignored when a dialog is open
-  await page.click('#btn-deck-cfg');
-  await page.keyboard.press('Control+Shift+Digit1');
-  await page.waitForTimeout(100);
-  assert.equal(state.programScene, 'Main Cam', 'hotkey ignored when dialog open');
-  await page.click('#btn-deck-cancel');
-
-  // Fires in Run mode when focus is not in an input
-  await page.evaluate(() => document.activeElement?.blur?.());
-  await page.keyboard.press('Control+Shift+Digit1');
-  await page.waitForFunction(() => document.getElementById('scene-info').textContent === 'Program: BRB');
-  console.log('  ✓ hotkey guardrails (Ctrl+Shift+1, Esc record cancel, edit/input/dialog ignore)');
+  // Verify OBS-native Hotkey action still triggers TriggerHotkeyByName
+  await page.evaluate(async () => {
+    await Deck.execAction({ type: 'hotkey', hotkeyName: 'OBSBasic.StartRecording' });
+  });
+  assert.ok(state.triggeredHotkeys.includes('OBSBasic.StartRecording'), 'OBS Hotkey action type works');
+  console.log('  ✓ local hotkey UI removal + red scene default + OBS Hotkey action execution');
 
   // 9. Offline Dropdown "(saved)" preservation & manual `✎` fallback
   await page.click('#btn-ws-disconnect');
@@ -437,8 +419,8 @@ try {
 
   assert.deepEqual(pageErrors, [], `unexpected page errors: ${pageErrors.join('; ')}`);
 
-  // 13. Release build check: npm run build:release produces clean valid ZIPs for v2.1.0
-  assert.equal(PKG.version, '2.1.0', 'package.json version is 2.1.0');
+  // 13. Release build check: npm run build:release produces clean valid ZIPs for v2.2.0
+  assert.equal(PKG.version, '2.2.0', 'package.json version is 2.2.0');
   execFileSync(process.execPath, [join(__dirname, 'scripts', 'build-release.mjs')], { cwd: __dirname, stdio: 'pipe' });
   const zipPath = join(__dirname, 'dist', 'obs-virtual-deck.zip');
   const latestZipPath = join(__dirname, 'dist', 'obs-virtual-deck-latest.zip');

@@ -1,7 +1,7 @@
 {
   "name": "obs-virtual-deck",
-  "version": "2.1.0",
-  "description": "Zero-backend virtual Stream Deck for OBS Studio (obs-websocket v5) with multiple pages, custom grids, timed toggles, macros, and shortcuts — runs in an OBS Custom Browser Dock or any browser",
+  "version": "2.2.0",
+  "description": "Zero-backend virtual Stream Deck for OBS Studio (obs-websocket v5) with command palette drag-and-drop, multi-select editing, context subtitles, red scenes, multiple pages, custom grids, timed toggles, and macros — runs in an OBS Custom Browser Dock or any browser",
   "type": "module",
   "scripts": {
     "test": "node test-deck.mjs && node test-deck-edge.mjs",

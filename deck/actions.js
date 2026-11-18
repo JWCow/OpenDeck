@@ -711,33 +711,7 @@
     }
   }
 
-  Deck.findPadByHotkey = (hotkeyOrEvent, page = Deck.getActivePage()) => {
-    const target = typeof hotkeyOrEvent === 'string'
-      ? Deck.normalizeHotkey(hotkeyOrEvent)
-      : Deck.hotkeyFromEvent(hotkeyOrEvent);
-    if (!target || !page) return null;
-    for (let i = 0; i < page.pads.length; i++) {
-      const p = page.pads[i];
-      if (p && p.type !== 'none' && p.hotkey && Deck.normalizeHotkey(p.hotkey) === target) {
-        return { page, idx: i, pad: p };
-      }
-    }
-    return null;
-  };
-
-  Deck.handleKeyDown = (ev) => {
-    if (!ev || ev.repeat || Deck.editMode) return false;
-    if (typeof document !== 'undefined') {
-      if (document.querySelector('dialog[open]')) return false;
-      const el = ev.target;
-      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return false;
-    }
-    const match = Deck.findPadByHotkey(ev);
-    if (!match) return false;
-    if (typeof ev.preventDefault === 'function') ev.preventDefault();
-    Deck.onPadClick(match.idx, match.page.id);
-    return true;
-  };
+  Deck.handleKeyDown = () => false;
 
   Deck.isPadActive = isPadActive;
   Deck.execAction = execAction;

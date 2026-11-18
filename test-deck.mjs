@@ -61,7 +61,7 @@ try {
   await page.click('#btn-edit');
   const pad = (i) => page.locator('#grid .pad').nth(i);
 
-  // Pad 0: Switch Scene -> Slides + quick icon chip + hotkey F2
+  // Pad 0: Switch Scene -> Slides + quick icon chip + auto red color
   await pad(0).click();
   await page.selectOption('#f-type', 'scene');
   assert.equal(await page.locator('#f-fields select').first().isVisible(), true, 'dropdown visible by default');
@@ -71,12 +71,12 @@ try {
   await page.locator('#f-fields select').first().selectOption('Slides');
   await page.locator('#f-icons .ico-chip').first().click();
   assert.ok((await page.inputValue('#f-icon')).length > 0, 'quick icon chip populates icon');
-  await page.click('#f-hotkey-btn');
-  await page.keyboard.press('F2');
-  assert.equal((await page.textContent('#f-hotkey-btn')).trim(), 'F2', 'hotkey recorder captured F2');
+  // Verify local hotkey recorder #f-hotkey-btn is omitted
+  assert.equal(await page.locator('#f-hotkey-btn').count(), 0, '#f-hotkey-btn omitted from Pad Editor');
   await page.fill('#f-label', 'Go Slides');
   await page.click('#pad-form button[type="submit"]');
-  assert.equal((await pad(0).locator('.hk').textContent()).trim(), 'F2', 'hotkey badge rendered on pad');
+  assert.equal(await pad(0).locator('.hk').count(), 0, '.hk badge omitted from pad');
+  assert.equal(await page.evaluate(() => document.querySelectorAll('#grid .pad')[0].style.backgroundColor), 'rgb(153, 27, 27)', 'Pad 0 background is red #991b1b');
 
   // Pad 1: Source Visibility -> Main Cam / Lower Third (toggle)
   await pad(1).click();
@@ -87,6 +87,7 @@ try {
   await page.locator('#f-fields select').nth(1).selectOption('Lower Third');
   await page.fill('#f-label', 'Lower 3rd');
   await page.click('#pad-form button[type="submit"]');
+  assert.equal((await pad(1).locator('.ctx').textContent()).trim(), 'Main Cam', 'Source pad displays parent scene name in .ctx');
 
   // Pad 2: Filter Control -> Webcam / Blur (toggle)
   await pad(2).click();
@@ -99,6 +100,7 @@ try {
   await page.locator('#f-fields select').nth(1).selectOption('Blur');
   await page.fill('#f-label', 'Cam Blur');
   await page.click('#pad-form button[type="submit"]');
+  assert.equal((await pad(2).locator('.ctx').textContent()).trim(), 'Webcam', 'Filter pad displays source name in .ctx');
 
   // Pad 3: Source Solo -> Main Cam / Webcam (solo)
   await pad(3).click();
@@ -132,19 +134,19 @@ try {
   await page.locator('#f-fields select').first().selectOption('<img src=x onerror="window.__xss=1"> #cam');
   await page.click('#pad-form button[type="submit"]');
   assert.equal(await page.evaluate(() => window.__xss), undefined, 'OBS names are HTML-escaped');
-  console.log('  ✓ dropdown-first editor + quick icons + hotkey record + XSS escaping');
+  console.log('  ✓ dropdown-first editor + quick icons + context subtitles + XSS escaping');
 
   // Switch back to Run mode
   await page.click('#btn-edit');
 
-  // 5. Execute Scene switch via hotkey F2 + live event feedback
-  await page.keyboard.press('F2');
+  // 5. Execute Scene switch via Pad click + live event feedback
+  await pad(0).click();
   await page.waitForFunction(() => document.getElementById('scene-info').textContent === 'Program: Slides');
-  assert.ok((await pad(0).getAttribute('class')).includes('active'), 'scene pad active on match via F2');
+  assert.ok((await pad(0).getAttribute('class')).includes('active'), 'scene pad active on match');
   broadcast('CurrentProgramSceneChanged', { sceneName: 'Main Cam' });
   state.programScene = 'Main Cam';
   await page.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'));
-  console.log('  ✓ keyboard shortcut (F2) + live CurrentProgramSceneChanged feedback');
+  console.log('  ✓ scene pad red styling + click switch + live CurrentProgramSceneChanged feedback');
 
   // 6. Source toggle & solo mode
   await pad(1).click();
@@ -250,17 +252,21 @@ try {
   await page.fill('#f-auto-off', '0.5');
   await page.fill('#f-label', 'Flash Blur');
   await page.click('#pad-form button[type="submit"]');
+  assert.equal((await pad(8).locator('.ctx').textContent()).trim(), 'Webcam', 'pad 8 displays context subtitle');
   await page.click('#btn-edit');
 
   await pad(8).click();
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[8].className.includes('running'));
   assert.ok((await pad(8).getAttribute('class')).includes('active'), 'auto-off pad turns active');
   assert.match(await pad(8).locator('.sub').textContent(), /\d+\.\ds/, 'auto-off displays countdown');
+  assert.equal(await page.evaluate(() => document.querySelectorAll('#grid .pad')[8].querySelector('.ctx')?.style.display), 'none', '.ctx yields to countdown display');
   assert.equal(state.filters['Webcam'][0].filterEnabled, true);
   await page.waitForFunction(() => !document.querySelectorAll('#grid .pad')[8].className.includes('running'), null, { timeout: 2500 });
   assert.equal(state.filters['Webcam'][0].filterEnabled, false, 'auto-off automatically disabled filter');
   assert.equal((await pad(8).getAttribute('class')).includes('active'), false, 'auto-off cleared active LED');
-  console.log('  ✓ auto-off timed toggle (ON -> countdown -> auto OFF)');
+  assert.equal(await page.evaluate(() => document.querySelectorAll('#grid .pad')[8].querySelector('.ctx')?.style.display), '', '.ctx restored after countdown finishes');
+  assert.equal((await pad(8).locator('.ctx').textContent()).trim(), 'Webcam', '.ctx restored as Webcam');
+  console.log('  ✓ auto-off timed toggle (ON -> countdown -> auto OFF with context subtitle restore)');
 
   // 12. Multiple Pages, Custom Grid Sizing, Cross-Page Drag & `page` navigation pad
   await page.click('#btn-deck-add');
@@ -602,7 +608,161 @@ try {
   assert.ok(state.calls.some((c) => c.requestType === 'TriggerMediaInputAction' && c.requestData.inputName === 'Photo Slideshow' && c.requestData.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_NEXT'));
   console.log('  ✓ all 7 new v2.1.0 OBS v5 actions (Next/Prev Scene, Stats, Hotkey, Chapter, Monitor, Transform PiP, Image Swap)');
 
+  // 13c. Right-Hand Command Palette: Search, Drag-to-Pad (self-contained, target-specific & live OBS items)
+  await page.locator('#deck-tabs .page-tab').nth(0).click();
+  await page.waitForFunction(() => document.querySelectorAll('#grid .pad').length === 64);
+  await page.click('#btn-edit');
+  assert.equal(await page.locator('#palette').isVisible(), true, 'command palette visible in Edit mode');
+
+  // Search filter
+  await page.fill('#palette-search', 'Record');
+  const visItems = await page.evaluate(() => {
+    const items = [...document.querySelectorAll('.palette-item')];
+    return items.filter((el) => el.style.display !== 'none').map((el) => el.querySelector('.pal-lbl')?.textContent);
+  });
+  assert.ok(visItems.some((t) => t && t.includes('Record')), 'search filters matching items');
+  assert.ok(!visItems.includes('Scene Transition'), 'search hides non-matching items');
+  await page.fill('#palette-search', '');
+
+  // Drag self-contained command (Studio Mode) onto empty slot (pad 12)
+  await page.evaluate(() => {
+    const it = [...document.querySelectorAll('.palette-item')].find((el) => el.querySelector('.pal-lbl')?.textContent === 'Studio Mode');
+    const dst = document.querySelectorAll('#grid .pad')[12];
+    const dt = new DataTransfer();
+    it.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    dst.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    dst.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    it.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+  assert.equal(await page.evaluate(() => document.getElementById('pad-dlg').open), false, 'self-contained drop assigns without modal');
+  assert.equal(await page.evaluate(() => Deck.getActivePads()[12].type), 'studio', 'pad 12 assigned Studio Mode');
+
+  // Drag target-specific command (Filter Toggle) onto empty slot (pad 13)
+  await page.evaluate(() => {
+    const it = [...document.querySelectorAll('.palette-item')].find((el) => el.querySelector('.pal-lbl')?.textContent === 'Filter Toggle');
+    const dst = document.querySelectorAll('#grid .pad')[13];
+    const dt = new DataTransfer();
+    it.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    dst.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    dst.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    it.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+  assert.equal(await page.evaluate(() => document.getElementById('pad-dlg').open), true, 'target-specific drop opens pad editor');
+  assert.equal(await page.inputValue('#f-type'), 'filter', 'pad editor pre-selected filter action');
+  await page.click('#btn-pad-cancel');
+
+  // Drag live OBS item (Live scene "BRB") onto empty slot (pad 14)
+  await page.evaluate(() => {
+    const liveCat = document.getElementById('palette-cat-live');
+    const it = [...liveCat.querySelectorAll('.palette-item')].find((el) => el.querySelector('.pal-lbl')?.textContent === 'BRB');
+    const dst = document.querySelectorAll('#grid .pad')[14];
+    const dt = new DataTransfer();
+    it.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    dst.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    dst.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    it.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+  assert.equal(await page.evaluate(() => document.getElementById('pad-dlg').open), false, 'live item drop assigns without modal');
+  assert.equal(await page.evaluate(() => Deck.getActivePads()[14].sceneName), 'BRB', 'pad 14 assigned BRB scene');
+  assert.equal(await page.evaluate(() => Deck.getActivePads()[14].color), '#991b1b', 'live scene pad assigned red #991b1b');
+  console.log('  ✓ command palette (search filter, drag-to-pad self-contained, target-specific & live OBS items)');
+
+  // 13d. Edit-Mode Multi-Select, Batch Actions & Pad Editor Duplicate
+  await page.waitForTimeout(280);
+  // Ctrl+Click multi-select
+  await pad(0).click({ modifiers: ['Control'] });
+  await pad(1).click({ modifiers: ['Control'] });
+  assert.equal(await page.locator('#grid .pad.selected').count(), 2, '2 pads selected via Ctrl+Click');
+  assert.equal(await page.textContent('#sel-count'), '2 selected');
+
+  // Shift+Click range select
+  await pad(3).click({ modifiers: ['Shift'] });
+  assert.equal(await page.locator('#grid .pad.selected').count(), 4, 'range selected via Shift+Click');
+
+  // Clear selection button
+  await page.click('#btn-sel-none');
+  assert.equal(await page.locator('#grid .pad.selected').count(), 0, 'Clear Sel cleared selection');
+
+  // Select mode toggle
+  await page.click('#btn-sel-mode');
+  assert.ok((await page.locator('#btn-sel-mode').getAttribute('class')).includes('on'), 'Select mode on');
+  await pad(0).click();
+  await pad(1).click();
+  assert.equal(await page.locator('#grid .pad.selected').count(), 2, 'Select mode selected pads without modifiers');
+  await page.click('#btn-sel-mode'); // toggle off
+
+  // Single Pad Editor Duplicate button
+  await page.click('#btn-sel-none');
+  await pad(0).click();
+  await page.waitForSelector('#pad-dlg[open]');
+  await page.click('#btn-pad-dup');
+  await page.waitForFunction(() => !document.getElementById('pad-dlg').open);
+  assert.match(await page.textContent('#msg-info'), /Duplicated pad to slot/, 'Pad Editor Duplicate cloned pad');
+
+  // Batch Duplicate
+  await page.click('#btn-sel-none');
+  await pad(12).click({ modifiers: ['Control'] });
+  await pad(14).click({ modifiers: ['Control'] });
+  await page.click('#btn-sel-dup');
+  assert.match(await page.textContent('#msg-info'), /Duplicated 2 pad\(s\)/, 'Batch Duplicate cloned selected pads');
+
+  // Batch Recolor
+  await page.click('#btn-sel-color');
+  await page.locator('#sel-color-pop .sw[title="#581c87"]').click();
+  const recolored = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll('#grid .pad.selected')).map((el) => el.style.backgroundColor);
+  });
+  assert.ok(recolored.length > 0 && recolored.every((c) => c === 'rgb(88, 28, 135)'), 'Batch Recolor applied #581c87 to selected pads');
+
+  // Batch Clear
+  await page.click('#btn-sel-clear');
+  assert.equal(await page.locator('#grid .pad.selected').count(), 0, 'Batch Clear cleared selected pads');
+
+  // Exit Edit mode clears selection
+  await page.click('#btn-edit');
+  assert.equal(await page.locator('#palette').isVisible(), false, 'palette hidden in Run mode');
+  console.log('  ✓ edit-mode multi-select (Ctrl/Shift/Select mode), batch duplicate/recolor/clear & pad editor duplicate');
+
+  // 13e. Typography & Proportional Sizing check across viewports
+  await page.setViewportSize({ width: 1000, height: 700 });
+  await page.waitForTimeout(60);
+  const desktopTypography = await page.evaluate(() => {
+    const padWithLabel = document.querySelector('#grid .pad:not(.empty)');
+    const lbl = padWithLabel?.querySelector('.lbl');
+    const ico = padWithLabel?.querySelector('.ico');
+    const btn = document.querySelector('.bar .btn');
+    const tab = document.querySelector('#deck-tabs .page-tab');
+    return {
+      lblSize: lbl ? parseFloat(window.getComputedStyle(lbl).fontSize) : 0,
+      icoSize: ico ? parseFloat(window.getComputedStyle(ico).fontSize) : 0,
+      btnSize: btn ? parseFloat(window.getComputedStyle(btn).fontSize) : 0,
+      tabSize: tab ? parseFloat(window.getComputedStyle(tab).fontSize) : 0,
+      docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    };
+  });
+  assert.equal(desktopTypography.docOverflow, false, 'zero horizontal overflow at 1000x700');
+  assert.ok(desktopTypography.lblSize >= 13, `pad label scales above 11px on desktop (got ${desktopTypography.lblSize}px)`);
+  assert.ok(desktopTypography.icoSize >= 20, `pad icon scales up proportionally on desktop (got ${desktopTypography.icoSize}px)`);
+  assert.ok(desktopTypography.btnSize >= 12, `toolbar button font size comfortable (got ${desktopTypography.btnSize}px)`);
+  assert.ok(desktopTypography.tabSize >= 12, `page tab font size comfortable (got ${desktopTypography.tabSize}px)`);
+
+  // Narrow dock (360x420) check
+  await page.setViewportSize({ width: 360, height: 420 });
+  await page.waitForTimeout(60);
+  const narrowAudit = await page.evaluate(() => {
+    return {
+      docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      bodyOverflow: document.body.scrollWidth > document.body.clientWidth,
+    };
+  });
+  assert.equal(narrowAudit.docOverflow, false, 'zero horizontal overflow at 360x420 narrow dock');
+  assert.equal(narrowAudit.bodyOverflow, false, 'body fits within 360px width without overflow');
+  await page.setViewportSize({ width: 1280, height: 720 });
+  console.log('  ✓ typography & proportional scaling (desktop 1000x700 label >= 13px + narrow 360x420 zero overflow)');
+
   // Delete temporary 3rd page before export check so Pages = 2
+  await page.locator('#deck-tabs .page-tab').nth(2).click();
+  await page.waitForFunction(() => document.querySelectorAll('#grid .pad').length === 12);
   await page.click('#btn-deck-cfg');
   await page.click('#btn-deck-del');
   await page.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 2);
@@ -659,6 +819,28 @@ try {
   const mutatingCalls = state.calls.slice(callsBeforeWiz).filter((c) => /^(Create|Set|Remove|Press|Trigger)/.test(c.requestType));
   assert.equal(mutatingCalls.length, 0, 'Auto-Import is strictly read-only against OBS');
 
+  // Verify red scene pad styling in Auto-Import + parent context subtitles on sources
+  const scenePadColors = await page.evaluate(() => {
+    const sp = Deck.cfg.pages.find((p) => p.name === 'Scenes');
+    return sp ? sp.pads.filter((p) => p.type === 'scene').map((p) => ({ label: p.label, mode: p.mode, color: p.color })) : [];
+  });
+  assert.ok(scenePadColors.length > 0, 'Auto-Import generated scene pads');
+  for (const sp of scenePadColors) {
+    if (sp.mode === 'prev' || sp.mode === 'next') {
+      assert.equal(sp.color, '#115e59', 'Prev/Next Scene pads retain teal accent');
+    } else {
+      assert.equal(sp.color, '#991b1b', `Auto-imported Scene pad "${sp.label}" has red color #991b1b`);
+    }
+  }
+
+  const sourcePadCtx = await page.evaluate(() => {
+    const sp = Deck.cfg.pages.find((p) => p.name === 'Sources');
+    return sp ? sp.pads.filter((p) => p.type === 'source').map((p) => ({ label: p.label, sceneName: p.sceneName, ctx: Deck.getPadContextSubtitle(p) })) : [];
+  });
+  for (const sp of sourcePadCtx) {
+    assert.equal(sp.ctx, sp.sceneName, `Source pad "${sp.label}" context subtitle matches parent scene`);
+  }
+
   // Test importing a legacy v1 JSON layout
   const v1Path = join(tmpDir, 'legacy-v1.json');
   const v1Pads = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
@@ -686,6 +868,17 @@ try {
   await page.setInputFiles('#file-import', v20Path);
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].textContent.includes('D2 Slides'));
   assert.equal(await page.evaluate(() => Deck.cfg.pages[0].pads[0].pageId), 'deck-2', 'v2.0.0 deckId migrated to pageId');
+
+  // Test importing a legacy JSON layout with local hotkeys (stripped safely)
+  const vLegacyHkPath = join(tmpDir, 'legacy-hotkey.json');
+  const lhPads = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+  lhPads[0] = { type: 'scene', sceneName: 'BRB', label: 'Legacy HK', hotkey: 'Ctrl+Shift+1', icon: '', color: '#991b1b' };
+  fs.writeFileSync(vLegacyHkPath, JSON.stringify({ version: 2, pages: [{ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads: lhPads }], panicSteps: [] }));
+  await page.setInputFiles('#file-import', vLegacyHkPath);
+  await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].textContent.includes('Legacy HK'));
+  const importedP0 = await page.evaluate(() => Deck.getActivePads()[0]);
+  assert.equal(importedP0.hotkey, undefined, 'legacy hotkey property stripped on import');
+  assert.equal(await page.locator('#grid .pad').nth(0).locator('.hk').count(), 0, 'no .hk badge rendered');
 
   // Re-import v2.1.0 export
   await page.setInputFiles('#file-import', exportPath);
