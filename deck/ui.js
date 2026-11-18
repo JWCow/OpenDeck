@@ -682,7 +682,7 @@
     const t = obj.type;
 
     if (t === 'scene') {
-      if (!obj.mode) obj.mode = 'named';
+      if (!['named', 'next', 'prev'].includes(obj.mode)) obj.mode = 'named';
       const sceneRow = makeObsSelect('Scene Name', obj.sceneName, obs.scenes, (v) => { obj.sceneName = v; }, 'Select scene…').el;
       const syncVis = () => { sceneRow.hidden = (obj.mode || 'named') !== 'named'; };
       container.append(
@@ -1013,8 +1013,12 @@
       const body = document.createElement('div');
       body.className = 'frm';
       sel.addEventListener('change', () => {
-        st.type = sel.value;
-        if (st.type === 'wait' && st.delayMs == null) st.delayMs = 2000;
+        const nextType = sel.value;
+        for (const k of Object.keys(st)) {
+          if (k !== 'type') delete st[k];
+        }
+        st.type = nextType;
+        if (st.type === 'wait') st.delayMs = 2000;
         renderActionFields(body, st, allowWait);
       });
       renderActionFields(body, st, allowWait);
