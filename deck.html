@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OBS Virtual Deck (8×8)</title>
+<link rel="stylesheet" href="deck/deck.css">
+<script defer src="deck/obs-ws.js"></script>
+<script defer src="deck/actions.js"></script>
+<script defer src="deck/ui.js"></script>
+</head>
+<body>
+<div class="bar">
+  <span id="conn-pill" class="pill bad"><i class="dot"></i><span id="conn-text">Disconnected</span></span>
+  <button id="btn-conn-toggle" class="btn sm" title="WebSocket settings">WS</button>
+  <button id="btn-sync" class="btn sm" title="Refresh OBS scenes, sources, filters">↻ Sync</button>
+  <button id="btn-edit" class="btn sm">✎ Edit</button>
+  <div class="spacer"></div>
+  <button id="btn-panic-cfg" class="btn sm" title="Configure PANIC steps">⚙ Panic</button>
+  <button id="btn-panic" class="btn sm panic" title="Abort macros &amp; run PANIC reset">⚡ PANIC</button>
+  <button id="btn-export" class="btn sm">Export</button>
+  <button id="btn-import" class="btn sm">Import</button>
+  <input id="file-import" type="file" accept=".json,application/json" hidden>
+</div>
+
+<div id="conn-bar" class="bar conn">
+  <label>Host <input id="ws-host" class="w-host" placeholder="127.0.0.1"></label>
+  <label>Port <input id="ws-port" class="w-port" type="number" placeholder="4455"></label>
+  <label>Pass <input id="ws-pass" class="w-pass" type="password" placeholder="(optional)"></label>
+  <button id="btn-ws-connect" class="btn sm on">Connect</button>
+  <button id="btn-ws-disconnect" class="btn sm">Disconnect</button>
+  <button id="btn-reset-layout" class="btn sm" title="Restore starter layout">Reset Deck</button>
+</div>
+
+<div id="grid" class="grid" aria-label="8 by 8 OBS Deck"></div>
+
+<div class="status">
+  <span id="scene-info">Program: —</span>
+  <span id="msg-info">Ready</span>
+</div>
+
+<dialog id="pad-dlg">
+  <div class="dlg-h"><span id="dlg-title">Edit Pad</span><button id="dlg-close" class="btn sm">✕</button></div>
+  <form id="pad-form" class="frm" method="dialog">
+    <div class="row2">
+      <div class="row"><label>Label</label><input id="f-label" maxlength="32" placeholder="Cam Blur"></div>
+      <div class="row"><label>Icon</label><input id="f-icon" maxlength="8" placeholder="🎬"></div>
+    </div>
+    <div class="row"><label>Color</label><div id="f-colors" class="swatches"></div></div>
+    <div class="row"><label>Action</label>
+      <select id="f-type">
+        <option value="none">Empty / None</option>
+        <option value="scene">Switch Scene</option>
+        <option value="source">Source Visibility</option>
+        <option value="filter">Filter Control</option>
+        <option value="mute">Input Mute</option>
+        <option value="macro">Timed Macro</option>
+        <option value="panic">PANIC Reset</option>
+      </select>
+    </div>
+    <div id="f-fields" class="frm"></div>
+    <div class="dlg-f">
+      <button type="button" id="btn-pad-clear" class="btn sm">Clear</button>
+      <div class="spacer"></div>
+      <button type="button" id="btn-pad-cancel" class="btn sm">Cancel</button>
+      <button type="submit" class="btn sm on">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="panic-dlg">
+  <div class="dlg-h"><span>PANIC Reset Steps</span><button id="panic-close" class="btn sm">✕</button></div>
+  <div class="frm">
+    <div style="font-size:11px;color:var(--muted)">Runs when ⚡ PANIC is pressed (after aborting all running timed macros). If empty, disables all active deck filters.</div>
+    <div id="panic-steps" class="steps"></div>
+    <div class="dlg-f">
+      <button type="button" id="btn-panic-add" class="btn sm">+ Step</button>
+      <button type="button" id="btn-panic-pull" class="btn sm">Add Deck Filters (Off)</button>
+      <div class="spacer"></div>
+      <button type="button" id="btn-panic-save" class="btn sm on">Save</button>
+    </div>
+  </div>
+</dialog>
+</body>
+</html>

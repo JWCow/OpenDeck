@@ -1,0 +1,13 @@
+{
+  "name": "obs-virtual-deck",
+  "version": "1.0.0",
+  "description": "Zero-backend 8x8 virtual Stream Deck for OBS Studio (obs-websocket v5) — runs in an OBS Custom Browser Dock or any browser",
+  "type": "module",
+  "scripts": {
+    "test": "node test-deck.mjs && node test-deck-edge.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.58.2",
+    "ws": "^8.21.0"
+  }
+}
