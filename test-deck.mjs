@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Hermetic Playwright E2E test for obs-builder/deck.html against a local fake obs-websocket v5 server.
+// Hermetic Playwright E2E test for deck.html against a local fake obs-websocket v5 server.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';

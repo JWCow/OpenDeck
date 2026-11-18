@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Edge-case Playwright E2E tests for obs-builder/deck.html (groups, live events, non-destructive ticks, PANIC resilience, narrow dock).
+// Edge-case Playwright E2E tests for deck.html (groups, live events, non-destructive ticks, PANIC resilience, narrow dock).
 import assert from 'node:assert/strict';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
