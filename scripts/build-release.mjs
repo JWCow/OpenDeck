@@ -197,6 +197,9 @@ function main() {
   // Write ZIPs
   const zipBuffer = buildZip(entries);
   const zipNames = [
+    `opendeck-v${version}.zip`,
+    'opendeck-latest.zip',
+    'opendeck.zip',
     `obs-virtual-deck-v${version}.zip`,
     'obs-virtual-deck-latest.zip',
     'obs-virtual-deck.zip',
@@ -205,7 +208,7 @@ function main() {
     fs.writeFileSync(path.join(DIST_DIR, name), zipBuffer);
   }
 
-  console.log(`Built OBS Virtual Deck v${version} release (${entries.length} files, ${zipBuffer.length} bytes ZIP):`);
+  console.log(`Built OpenDeck (obs-virtual-deck) v${version} release (${entries.length} files, ${zipBuffer.length} bytes ZIP):`);
   for (const entry of entries) {
     console.log(`  - ${entry.zipPath}${entry.executable ? ' (executable)' : ''}`);
   }

@@ -33,6 +33,35 @@ try {
   assert.equal(await page.locator('#grid .pad').count(), 64, '8x8 grid has 64 pads');
   assert.match(await page.locator('#grid .pad').nth(63).textContent(), /PANIC/, 'pad 64 seeded as PANIC');
   assert.equal((await page.textContent('#version-badge')).trim(), `v${PKG.version}`, 'version badge matches package.json');
+  assert.equal(await page.title(), 'OpenDeck - Virtual Deck for OBS Studio', 'page title branded OpenDeck');
+  assert.equal((await page.textContent('.brand-title')).trim(), 'OpenDeck', 'brand title is OpenDeck');
+  assert.equal((await page.textContent('.brand-sub')).trim(), 'OBS Studio', 'brand subtitle is OBS Studio');
+
+  // Font Scaler: 5 levels (sm, md, lg, xl, xxl) with default xl (+4pt) and persistence
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.fontSize), 'xl', 'default font scale is xl (+4pt)');
+  await page.click('#btn-font-dec');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.fontSize), 'lg', 'decremented font scale to lg');
+  await page.click('#btn-font-dec');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.fontSize), 'md', 'decremented font scale to md');
+  await page.click('#btn-font-inc');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.fontSize), 'lg', 'incremented font scale to lg');
+  await page.click('#btn-font-inc');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.fontSize), 'xl', 'incremented font scale back to xl');
+  assert.equal(await page.evaluate(() => localStorage.getItem('opendeck_font_scale')), 'xl', 'font scale saved in localStorage');
+
+  // Theme Toggle: Dark <-> Light theme, colors, icon toggle & persistence
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark', 'default theme is dark');
+  assert.equal((await page.textContent('#btn-theme')).trim(), '☀️', 'dark theme displays sun icon');
+  await page.click('#btn-theme');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'light', 'toggled to light theme');
+  assert.equal((await page.textContent('#btn-theme')).trim(), '🌙', 'light theme displays moon icon');
+  assert.equal(await page.evaluate(() => localStorage.getItem('opendeck_theme')), 'light', 'theme saved to localStorage');
+  const lightBg = await page.evaluate(() => window.getComputedStyle(document.body).backgroundColor);
+  assert.equal(lightBg, 'rgb(248, 250, 252)', 'body background updated to light studio slate #f8fafc');
+  await page.click('#btn-theme');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark', 'toggled back to dark theme');
+  assert.equal((await page.textContent('#btn-theme')).trim(), '☀️', 'restored sun icon');
+  console.log('  ✓ OpenDeck branding + font scaler (A-/A+ 5-level cycling) + dark/light studio theme');
 
   // 2. Wrong password -> 4009 Auth Failed (no tight reconnect loop)
   await page.click('#btn-conn-toggle');
@@ -61,14 +90,29 @@ try {
   await page.click('#btn-edit');
   const pad = (i) => page.locator('#grid .pad').nth(i);
 
-  // Pad 0: Switch Scene -> Slides + quick icon chip + auto red color
+  // Pad 0: Switch Scene -> Slides + quick icon chip + auto red color + auto-label dropdown sync
   await pad(0).click();
   await page.selectOption('#f-type', 'scene');
   assert.equal(await page.locator('#f-fields select').first().isVisible(), true, 'dropdown visible by default');
   assert.equal(await page.locator('#f-fields input[type="text"]').first().isVisible(), false, 'manual text input hidden by default');
   const sceneOpts = await page.locator('#f-fields select').first().locator('option').allTextContents();
   assert.ok(sceneOpts.includes('Slides') && sceneOpts.includes('Main Cam'), 'scenes auto-listed');
-  await page.locator('#f-fields select').first().selectOption('Slides');
+
+  // Verify Dropdown Auto-Label synchronization
+  const sceneSel = page.locator('#f-fields select').first();
+  await sceneSel.selectOption('Main Cam');
+  assert.equal(await page.inputValue('#f-label'), 'Main Cam', 'selecting Main Cam auto-populates #f-label');
+  await sceneSel.selectOption('Slides');
+  assert.equal(await page.inputValue('#f-label'), 'Slides', 'changing to Slides updates #f-label');
+  // Manual typing preserves custom name on subsequent select changes
+  await page.fill('#f-label', 'Custom Nickname');
+  await sceneSel.selectOption('BRB');
+  assert.equal(await page.inputValue('#f-label'), 'Custom Nickname', 'manual custom nickname preserved');
+  // Clearing label allows auto-sync to resume
+  await page.fill('#f-label', '');
+  await sceneSel.selectOption('Slides');
+  assert.equal(await page.inputValue('#f-label'), 'Slides', 'cleared label resumes auto-labeling');
+
   await page.locator('#f-icons .ico-chip').first().click();
   assert.ok((await page.inputValue('#f-icon')).length > 0, 'quick icon chip populates icon');
   // Verify local hotkey recorder #f-hotkey-btn is omitted
@@ -135,6 +179,64 @@ try {
   await page.click('#pad-form button[type="submit"]');
   assert.equal(await page.evaluate(() => window.__xss), undefined, 'OBS names are HTML-escaped');
   console.log('  ✓ dropdown-first editor + quick icons + context subtitles + XSS escaping');
+
+  // 4b. Custom Pad Graphics: Upload -> 128x128 canvas -> Fit Icon vs Full Face -> hideLabel -> removal
+  const testPngBuffer = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAVklEQVR4nO3BAQ0AAADCoPdPbQ43oAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4DbgIAAE4tE2gAAAAAElFTkSuQmCC',
+    'base64'
+  );
+  const testImgPath = join(tmpDir, 'test-pad-graphic.png');
+  fs.writeFileSync(testImgPath, testPngBuffer);
+
+  await pad(15).click();
+  await page.selectOption('#f-type', 'scene');
+  await page.locator('#f-fields select').first().selectOption('Slides');
+  assert.equal(await page.inputValue('#f-label'), 'Slides');
+  await page.setInputFiles('#f-image-file', testImgPath);
+  await page.waitForFunction(() => !document.getElementById('btn-remove-image').hidden);
+  assert.equal(await page.locator('#btn-remove-image').isVisible(), true, 'Remove Image button shown after upload');
+
+  // Fit Icon mode (default)
+  await page.selectOption('#f-image-fit', 'icon');
+  await page.click('#pad-form button[type="submit"]');
+  await page.waitForFunction(() => !document.getElementById('pad-dlg').open);
+  assert.equal(await pad(15).locator('.pad-icon-img').count(), 1, 'pad renders <img class="pad-icon-img">');
+  assert.ok((await pad(15).locator('.pad-icon-img').getAttribute('src')).startsWith('data:image/'), 'pad-icon-img has data URL');
+  assert.equal(await pad(15).locator('.lbl').textContent(), 'Slides', 'label text is Slides');
+  assert.equal(await page.evaluate(() => document.querySelectorAll('#grid .pad')[15].querySelector('.lbl')?.style.display !== 'none'), true, 'label not hidden in Fit Icon mode');
+
+  // Full Face mode + Hide Text
+  await pad(15).click();
+  await page.selectOption('#f-image-fit', 'fill');
+  await page.check('#f-image-hidelabel');
+  await page.click('#pad-form button[type="submit"]');
+  await page.waitForFunction(() => !document.getElementById('pad-dlg').open);
+  assert.ok((await pad(15).getAttribute('class')).includes('full-face'), 'pad has .full-face class');
+  assert.ok((await pad(15).getAttribute('class')).includes('hide-label'), 'pad has .hide-label class');
+  assert.equal(await page.evaluate(() => document.querySelectorAll('#grid .pad')[15].querySelector('.lbl')?.style.display === 'none'), true, 'label hidden when hideLabel is checked');
+  assert.equal(await pad(15).locator('.pad-icon-img').count(), 0, 'no separate icon img in Full Face mode');
+
+  // Configure Pad 16 with custom image for export/import verification later
+  await pad(16).click();
+  await page.selectOption('#f-type', 'scene');
+  await page.locator('#f-fields select').first().selectOption('Main Cam');
+  await page.setInputFiles('#f-image-file', testImgPath);
+  await page.waitForFunction(() => !document.getElementById('btn-remove-image').hidden);
+  await page.selectOption('#f-image-fit', 'icon');
+  await page.click('#pad-form button[type="submit"]');
+  await page.waitForFunction(() => !document.getElementById('pad-dlg').open);
+  assert.equal(await pad(16).locator('.pad-icon-img').count(), 1, 'pad 16 has custom icon image');
+
+  // Remove Image on pad 15
+  await pad(15).click();
+  await page.click('#btn-remove-image');
+  assert.equal(await page.locator('#btn-remove-image').isVisible(), false, 'Remove Image hidden after clear');
+  await page.uncheck('#f-image-hidelabel');
+  await page.click('#pad-form button[type="submit"]');
+  await page.waitForFunction(() => !document.getElementById('pad-dlg').open);
+  assert.equal(await pad(15).locator('.pad-icon-img').count(), 0, 'pad-icon-img removed from pad');
+  assert.equal((await pad(15).getAttribute('class')).includes('full-face'), false, 'full-face class removed');
+  console.log('  ✓ custom pad graphics (128x128 canvas downscale, Fit Icon vs Full Face, hideLabel, removal)');
 
   // Switch back to Run mode
   await page.click('#btn-edit');
@@ -667,6 +769,35 @@ try {
   assert.equal(await page.evaluate(() => Deck.getActivePads()[14].color), '#991b1b', 'live scene pad assigned red #991b1b');
   console.log('  ✓ command palette (search filter, drag-to-pad self-contained, target-specific & live OBS items)');
 
+  // Palette Splitter: Resizer element, drag-to-resize, double-click snap to 320px & native tooltips
+  assert.equal(await page.locator('#palette-resizer').isVisible(), true, 'palette resizer visible in Edit mode');
+
+  // Native hover tooltips
+  const palTooltips = await page.evaluate(() => {
+    return [...document.querySelectorAll('.palette-item')].map((el) => el.getAttribute('title'));
+  });
+  assert.ok(palTooltips.length > 5, 'palette items have title tooltips');
+  assert.ok(palTooltips.every((t) => t && t.trim().length > 0), 'every palette item has non-empty title tooltip');
+
+  // Drag-resize palette splitter to widen sidebar
+  const initialPaletteW = await page.evaluate(() => document.getElementById('palette').getBoundingClientRect().width);
+  const resizerBox = await page.locator('#palette-resizer').boundingBox();
+  assert.ok(resizerBox, 'palette-resizer has bounding box');
+  await page.mouse.move(resizerBox.x + resizerBox.width / 2, resizerBox.y + 120);
+  await page.mouse.down();
+  await page.mouse.move(resizerBox.x - 70, resizerBox.y + 120);
+  await page.mouse.up();
+  const draggedW = await page.evaluate(() => document.getElementById('palette').getBoundingClientRect().width);
+  assert.ok(draggedW >= initialPaletteW + 50, `palette width increased after drag (was ${initialPaletteW}, now ${draggedW})`);
+  assert.equal(await page.evaluate(() => localStorage.getItem('opendeck_palette_w')), String(Math.round(draggedW)), 'palette width saved in localStorage');
+
+  // Double-click resets to default 320px
+  await page.locator('#palette-resizer').dblclick();
+  const resetPaletteW = await page.evaluate(() => document.getElementById('palette').getBoundingClientRect().width);
+  assert.equal(Math.round(resetPaletteW), 320, 'double click snapped palette width back to 320px');
+  assert.equal(await page.evaluate(() => localStorage.getItem('opendeck_palette_w')), '320', '320px persisted after double-click snap');
+  console.log('  ✓ palette splitter (drag-resize, double-click snap to 320px, native tooltips & persistence)');
+
   // 13d. Edit-Mode Multi-Select, Batch Actions & Pad Editor Duplicate
   await page.waitForTimeout(280);
   // Ctrl+Click multi-select
@@ -787,6 +918,8 @@ try {
   assert.equal(exported.ws.password, undefined, 'password is not leaked in exported JSON');
   assert.equal(exported.ws.manualPort, undefined, 'manualPort is not leaked in exported JSON');
   assert.ok(exported.panicSteps.length >= 1, 'panicSteps exported');
+  assert.ok(exported.pages[0].pads[16].image, 'exported JSON includes pad.image');
+  assert.equal(exported.pages[0].pads[16].imageFit, 'icon');
 
   const badPath = join(tmpDir, 'bad.json');
   fs.writeFileSync(badPath, '{"notPads":true}');
@@ -884,6 +1017,8 @@ try {
   await page.setInputFiles('#file-import', exportPath);
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].textContent.includes('Go Slides'));
   assert.equal(await page.locator('#deck-tabs .page-tab').count(), 2, 'v2.1.0 import restored multi-page layout');
+  assert.equal(await pad(16).locator('.pad-icon-img').count(), 1, 'custom image restored on re-import');
+  assert.ok((await pad(16).locator('.pad-icon-img').getAttribute('src')).startsWith('data:image/'), 'restored pad image src is data URL');
   console.log('  ✓ v2.1.0 localStorage + Export/Import + Auto-Import Wizard + v1 & v2.0.0 JSON migration');
 
   // 15. No-auth OBS WebSocket v5 server handshake

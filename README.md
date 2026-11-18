@@ -1,12 +1,12 @@
-# OBS Virtual Deck
+# OpenDeck (formerly OBS Virtual Deck)
 
 [![Latest Release](https://img.shields.io/github/v/release/JWCow/obs-virtual-deck?label=Latest%20Release&color=2563eb)](https://github.com/JWCow/obs-virtual-deck/releases/latest)
-[![Download ZIP](https://img.shields.io/badge/Download-obs--virtual--deck.zip-16a34a?logo=github)](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/obs-virtual-deck.zip)
-[![Version](https://img.shields.io/badge/Version-v2.2.0-7c3aed)](https://github.com/JWCow/obs-virtual-deck/releases)
+[![Download ZIP](https://img.shields.io/badge/Download-opendeck--v2.2.1.zip-16a34a?logo=github)](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck-v2.2.1.zip)
+[![Version](https://img.shields.io/badge/Version-v2.2.1-7c3aed)](https://github.com/JWCow/obs-virtual-deck/releases)
 [![Platforms](https://img.shields.io/badge/Platforms-macOS%20%26%20Windows-334155)](#quick-start-macos--windows)
 [![Zero Backend](https://img.shields.io/badge/Architecture-Zero%20Backend%20(file%3A%2F%2F)-0f766e)](#project-structure)
 
-An open-source, zero-backend **virtual Stream Deck** for **OBS Studio** (`obs-websocket` v5), built for **live streamers, content creators, educators, and presenters** on **macOS and Windows**.
+**OpenDeck** is an open-source, zero-backend **virtual Stream Deck** for **OBS Studio** (`obs-websocket` v5), built for **live streamers, content creators, educators, and presenters** on **macOS and Windows**.
 
 Download the ZIP, load `deck.html` into an **OBS Custom Browser Dock** (or any modern browser), and control scenes, sources, PiP transforms, audio monitoring, filters, media, images, recording chapters, live telemetry, timed toggles, and macros—with **no Node.js, no Python, no OBS plugins, and no build step required**.
 
@@ -14,16 +14,25 @@ Download the ZIP, load `deck.html` into an **OBS Custom Browser Dock** (or any m
 
 ## Download Latest Version (ZIP)
 
-**[⬇️ Download obs-virtual-deck.zip (Latest Release)](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/obs-virtual-deck.zip)**
+**[⬇️ Download opendeck-v2.2.1.zip (Latest Release)](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck-v2.2.1.zip)**  
+*(Backward-compatible alias: [obs-virtual-deck.zip](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/obs-virtual-deck.zip))*
 
 - Always downloads the newest release ZIP in one click (no `node_modules` or test files included).
 - Browse all versions, changelogs, and release assets on the **[Releases page](https://github.com/JWCow/obs-virtual-deck/releases)**.
 
-> **Upgrading from v1, v2.0.0, or v2.1.0?** Your existing layout, pages, pads, and PANIC steps migrate **automatically and losslessly** to v2.2.0 the first time you open the updated `deck.html` at the same `file://` path (legacy local keyboard shortcut fields are cleaned safely). *(Tip: click **Export** first if you want a backup `.json` file.)*
+> **Upgrading from previous versions?** Your existing layout, pages, pads, and PANIC steps migrate **automatically and losslessly** to OpenDeck v2.2.1 the first time you open the updated `deck.html` at the same `file://` path (supporting both `opendeck_config` and legacy `obs_deck_config_v2` / `obs_virtual_deck_v2` storage keys). *(Tip: click **Export** first if you want a backup `.json` file.)*
 
 ---
 
 ## Features & OBS Actions
+
+### New in v2.2.1
+- **🔤 Stepped Font Scaler (`A-` / `A+`):** Top-bar font size control offering 5 discrete stepping levels (`sm` 12px, `md` 14px, `lg` 16px, `xl` 18px [+4pt default], `xxl` 20px). Proportional CSS variables scale pad labels, subtitles, button text, and dialogs smoothly with `localStorage` persistence, fulfilling touchscreen and high-DPI monitor readability requirements.
+- **↔️ Resizable Palette Splitter & Hover Tooltips:** Freely drag-resize the right-hand Command Palette sidebar width between 260px and 550px via the vertical splitter handle (`#palette-resizer`) to read long, untruncated scene, source, and filter names. Double-clicking the handle snaps it back to the default 320px width immediately. Full untruncated names are displayed in native HTML `title` tooltips across all palette items. Width persists across sessions in `localStorage`.
+- **🌓 Dark & Light Studio Themes:** Seamlessly switch between the default deep navy Dark Theme and a clean studio Light Theme (`--bg: #f8fafc; --panel: #ffffff; --text: #0f172a`) via the top-bar Sun/Moon toggle (`#btn-theme`). Active tally states (Red Scene `#dc2626`, Green Source `#16a34a`, Purple Filter `#9333ea`) remain rich and high-contrast for instant recognition in daytime studios or bright classrooms. Persists in `localStorage`.
+- **🖼️ Custom Pad Graphics & Client-Side Resizer:** Upload custom PNG, JPEG, WebP, GIF, or SVG artwork directly in the Pad Editor. An in-memory 128×128 HTML5 `<canvas>` aspect-crops and downscales images into lightweight Base64 data URLs (~6–12 KB) stored in `pad.image`. Supports **"Fit Icon"** mode (icon above label) and **"Full Face"** mode (edge-to-edge pad graphic), with an optional **"Hide Text"** toggle for pure graphical buttons and instant removal via "Remove Image". Graphics are fully preserved in JSON exports and imports with zero backend storage requirements.
+- **🔄 Dropdown Auto-Label Synchronization:** When configuring a pad in the Pad Editor, selecting any Scene, Source, Filter, Media, or Audio Input from the target dropdown automatically synchronizes the Label field (`#f-label`) with the selected item's name. Manual custom nicknames entered by the user are preserved and never overwritten on subsequent dropdown changes.
+- **🚀 OpenDeck Brand Identity:** Rebranded UI header, page title, and documentation to OpenDeck with 100% backward-compatible config loading.
 
 ### Workflow & Usability
 - **🎛️ Stream Deck-Style Command Palette:** In **`✎ Edit`** mode, open a searchable, categorized right-hand Command Palette (*Broadcast & Outputs*, *Scenes & Sources*, *Filters & Audio*, *Media & Tools*, plus live connected OBS items). Drag any command directly onto any Pad slot. Self-contained actions (Stream, Record, Virtual Cam, Replay, Snapshot, Stats, PANIC, and live items) configure and save instantly; target actions pre-populate the Pad Editor for one-click assignment.
@@ -121,11 +130,11 @@ If the setup helper reported that OBS WebSocket is not enabled yet:
 ### 3. Add as a Custom Browser Dock in OBS Studio
 
 1. In OBS Studio, open **`Docks` → `Custom Browser Docks...`**.
-2. Set **Dock Name** to: `OBS Virtual Deck`
+2. Set **Dock Name** to: `OpenDeck` (or `OBS Virtual Deck`)
 3. Under **URL**, paste the `file:///...` URL copied by the setup helper (or enter it manually):
    - **Windows example:** `file:///C:/Users/YourName/Documents/obs-virtual-deck/deck.html`
    - **macOS example:** `file:///Users/YourName/Documents/obs-virtual-deck/deck.html`
-4. Click **`Apply`**, then **`Close`**, and dock the floating **OBS Virtual Deck** panel onto any edge of OBS.
+4. Click **`Apply`**, then **`Close`**, and dock the floating **OpenDeck** panel onto any edge of OBS.
 
 > **Spaces in paths:** Encode spaces as `%20` if entering manually (the setup helpers handle this automatically).
 > **Separate monitor / browser option:** You can also open `deck.html` directly in Chrome, Edge, Safari, or Firefox.
@@ -231,4 +240,4 @@ npm test                          # run both hermetic Playwright E2E suites
 npm run build:release             # build release ZIPs in dist/
 ```
 
-Tagging `vX.Y.Z` (matching `package.json` and `Deck.VERSION`) triggers `.github/workflows/release.yml` to verify version parity, run `npm test`, run `npm run build:release`, and publish `obs-virtual-deck.zip`, `obs-virtual-deck-latest.zip`, and `obs-virtual-deck-vX.Y.Z.zip` to GitHub Releases.
+Tagging `vX.Y.Z` (matching `package.json` and `Deck.VERSION`) triggers `.github/workflows/release.yml` to verify version parity, run `npm test`, run `npm run build:release`, and publish `opendeck-vX.Y.Z.zip`, `obs-virtual-deck.zip`, `obs-virtual-deck-latest.zip`, and `obs-virtual-deck-vX.Y.Z.zip` to GitHub Releases.

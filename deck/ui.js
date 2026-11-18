@@ -128,6 +128,151 @@
   let lastSelectedIdx = null;
   let selectMode = false;
 
+  // OpenDeck v2.2.1 State & Utilities
+  const FONT_SCALES = ['sm', 'md', 'lg', 'xl', 'xxl'];
+  const DEFAULT_FONT_SCALE = 'xl';
+  const DEFAULT_PALETTE_W = 320;
+  const MIN_PALETTE_W = 260;
+  const MAX_PALETTE_W = 550;
+
+  let labelTouched = false;
+  let prevTargetName = '';
+
+  function getFontScale() {
+    try {
+      const saved = localStorage.getItem('opendeck_font_scale');
+      if (FONT_SCALES.includes(saved)) return saved;
+    } catch {}
+    return DEFAULT_FONT_SCALE;
+  }
+
+  function setFontScale(scale) {
+    if (!FONT_SCALES.includes(scale)) scale = DEFAULT_FONT_SCALE;
+    document.documentElement.dataset.fontSize = scale;
+    try {
+      localStorage.setItem('opendeck_font_scale', scale);
+    } catch {}
+  }
+
+  function initFontScaler() {
+    setFontScale(getFontScale());
+    $('btn-font-dec')?.addEventListener('click', () => {
+      const cur = document.documentElement.dataset.fontSize || DEFAULT_FONT_SCALE;
+      const idx = FONT_SCALES.indexOf(cur);
+      if (idx > 0) setFontScale(FONT_SCALES[idx - 1]);
+    });
+    $('btn-font-inc')?.addEventListener('click', () => {
+      const cur = document.documentElement.dataset.fontSize || DEFAULT_FONT_SCALE;
+      const idx = FONT_SCALES.indexOf(cur);
+      if (idx < FONT_SCALES.length - 1) setFontScale(FONT_SCALES[idx + 1]);
+    });
+  }
+
+  function getTheme() {
+    try {
+      const saved = localStorage.getItem('opendeck_theme');
+      if (saved === 'light' || saved === 'dark') return saved;
+    } catch {}
+    return 'dark';
+  }
+
+  function applyTheme(theme) {
+    const t = (theme === 'light') ? 'light' : 'dark';
+    document.documentElement.dataset.theme = t;
+    try {
+      localStorage.setItem('opendeck_theme', t);
+    } catch {}
+    const btn = $('btn-theme');
+    if (btn) {
+      btn.textContent = (t === 'light') ? '🌙' : '☀️';
+      btn.title = (t === 'light') ? 'Switch to Dark Theme' : 'Switch to Light Theme';
+    }
+  }
+
+  function initTheme() {
+    applyTheme(getTheme());
+    $('btn-theme')?.addEventListener('click', () => {
+      const cur = document.documentElement.dataset.theme || 'dark';
+      applyTheme(cur === 'light' ? 'dark' : 'light');
+    });
+  }
+
+  function setPaletteWidth(w, save = true) {
+    const palette = $('palette');
+    if (!palette) return;
+    const clamped = Math.max(MIN_PALETTE_W, Math.min(MAX_PALETTE_W, Math.round(w)));
+    palette.style.width = `${clamped}px`;
+    palette.style.setProperty('--palette-w', `${clamped}px`);
+    if (save) {
+      try {
+        localStorage.setItem('opendeck_palette_w', String(clamped));
+      } catch {}
+    }
+  }
+
+  function initPaletteResizer() {
+    const resizer = $('palette-resizer');
+    const palette = $('palette');
+    if (!resizer || !palette) return;
+
+    try {
+      const saved = parseInt(localStorage.getItem('opendeck_palette_w'), 10);
+      if (Number.isFinite(saved) && saved >= MIN_PALETTE_W && saved <= MAX_PALETTE_W) {
+        setPaletteWidth(saved, false);
+      }
+    } catch {}
+
+    let isDragging = false;
+    let startX = 0;
+    let startW = 0;
+
+    resizer.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      isDragging = true;
+      startX = e.clientX;
+      startW = palette.getBoundingClientRect().width || DEFAULT_PALETTE_W;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+
+      const onMouseMove = (ev) => {
+        if (!isDragging) return;
+        const delta = startX - ev.clientX;
+        setPaletteWidth(startW + delta, false);
+      };
+
+      const onMouseUp = () => {
+        if (!isDragging) return;
+        isDragging = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+        const curW = palette.getBoundingClientRect().width;
+        setPaletteWidth(curW, true);
+      };
+
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    });
+
+    resizer.addEventListener('dblclick', () => {
+      setPaletteWidth(DEFAULT_PALETTE_W, true);
+    });
+  }
+
+  function maybeAutoSyncLabel(newTargetName) {
+    const lblInput = $('f-label');
+    if (!lblInput) return;
+    const currentVal = lblInput.value.trim();
+    if (!labelTouched || !currentVal || currentVal === prevTargetName) {
+      if (newTargetName) {
+        lblInput.value = newTargetName;
+        if (draftPad) draftPad.label = newTargetName;
+      }
+    }
+    prevTargetName = newTargetName || '';
+  }
+
   function isSelfContained(act) {
     if (!act) return false;
     if (act.isLive) return true;
@@ -477,39 +622,71 @@
     }
   }
 
+  function renderPad(p, i, el, page) {
+    if (!el) return;
+    const rt = Deck.getPadRuntime(i, page.id);
+    const active = Deck.isPadActive(p);
+    const isRunning = Boolean(rt.running);
+    const isFullFace = Boolean(p.image && p.imageFit === 'fill');
+    const isDragOver = el.classList.contains('drag-over');
+    const isDraggingEl = el.classList.contains('dragging');
+    el.className = 'pad'
+      + (p.type === 'none' ? ' empty' : '')
+      + (p.type === 'stats' ? ' stats-pad' : '')
+      + (Deck.editMode ? ' edit-mode' : '')
+      + (selectedPads.has(i) ? ' selected' : '')
+      + (active ? ' active' : '')
+      + (isRunning ? ' running' : '')
+      + (isFullFace ? ' full-face' : '')
+      + (p.hideLabel ? ' hide-label' : '')
+      + (isDragOver ? ' drag-over' : '')
+      + (isDraggingEl ? ' dragging' : '');
+    if (isFullFace) {
+      el.style.backgroundColor = p.color && p.type !== 'none' ? p.color : '';
+      el.style.backgroundImage = `url("${p.image}")`;
+      el.style.backgroundSize = 'cover';
+      el.style.backgroundPosition = 'center';
+    } else {
+      el.style.backgroundImage = '';
+      el.style.backgroundSize = '';
+      el.style.backgroundPosition = '';
+      el.style.background = p.color && p.type !== 'none' ? p.color : '';
+    }
+    el.draggable = Deck.editMode && p.type !== 'none';
+    const subText = p.type === 'stats' ? Deck.formatStatsText(p.mode || 'all') : tickText(rt);
+    const ctxText = (typeof Deck.getPadContextSubtitle === 'function') ? Deck.getPadContextSubtitle(p) : '';
+    const lbl = p.label || padFallbackLabel(p, i, page.cols);
+    const tipParts = [lbl || `Pad ${i + 1}`];
+    if (ctxText) tipParts.push(`[${ctxText}]`);
+    if (p.type === 'stats' && subText) tipParts.push(`(${subText})`);
+    if (TAGS[p.type]) tipParts.push(`[${TAGS[p.type]}]`);
+    el.title = tipParts.join(' ');
+
+    let iconHtml = '';
+    if (p.image && p.imageFit !== 'fill') {
+      iconHtml = `<img class="pad-icon-img" src="${esc(p.image)}" alt="">`;
+    } else if (!p.image && p.icon) {
+      iconHtml = `<span class="ico">${esc(p.icon)}</span>`;
+    }
+
+    const lblHtml = `<span class="lbl"${p.hideLabel ? ' style="display:none"' : ''}>${esc(lbl)}</span>`;
+    const ctxHtml = ctxText ? `<span class="ctx"${(isRunning || p.hideLabel) ? ' style="display:none"' : ''}>${esc(ctxText)}</span>` : '';
+
+    el.innerHTML = `<i class="led"></i>${TAGS[p.type] ? `<span class="tag">${TAGS[p.type]}</span>` : ''}`
+      + iconHtml
+      + lblHtml
+      + ctxHtml
+      + `${subText ? `<span class="sub">${esc(subText)}</span>` : ''}`;
+  }
+  Deck.renderPad = renderPad;
+
   Deck.renderGrid = () => {
     const page = Deck.getActivePage();
     renderPageBar();
     initGrid(page);
     const btns = $('grid').children;
     page.pads.forEach((p, i) => {
-      const el = btns[i];
-      if (!el) return;
-      const rt = Deck.getPadRuntime(i, page.id);
-      const active = Deck.isPadActive(p);
-      const isRunning = Boolean(rt.running);
-      el.className = 'pad'
-        + (p.type === 'none' ? ' empty' : '')
-        + (p.type === 'stats' ? ' stats-pad' : '')
-        + (Deck.editMode ? ' edit-mode' : '')
-        + (selectedPads.has(i) ? ' selected' : '')
-        + (active ? ' active' : '')
-        + (isRunning ? ' running' : '');
-      el.style.background = p.color && p.type !== 'none' ? p.color : '';
-      el.draggable = Deck.editMode && p.type !== 'none';
-      const subText = p.type === 'stats' ? Deck.formatStatsText(p.mode || 'all') : tickText(rt);
-      const ctxText = (typeof Deck.getPadContextSubtitle === 'function') ? Deck.getPadContextSubtitle(p) : '';
-      const lbl = p.label || padFallbackLabel(p, i, page.cols);
-      const tipParts = [lbl || `Pad ${i + 1}`];
-      if (ctxText) tipParts.push(`[${ctxText}]`);
-      if (p.type === 'stats' && subText) tipParts.push(`(${subText})`);
-      if (TAGS[p.type]) tipParts.push(`[${TAGS[p.type]}]`);
-      el.title = tipParts.join(' ');
-      el.innerHTML = `<i class="led"></i>${TAGS[p.type] ? `<span class="tag">${TAGS[p.type]}</span>` : ''}`
-        + `${p.icon ? `<span class="ico">${esc(p.icon)}</span>` : ''}`
-        + `<span class="lbl">${esc(lbl)}</span>`
-        + `${ctxText ? `<span class="ctx"${isRunning ? ' style="display:none"' : ''}>${esc(ctxText)}</span>` : ''}`
-        + `${subText ? `<span class="sub">${esc(subText)}</span>` : ''}`;
+      renderPad(p, i, btns[i], page);
     });
     updateSelectionUi();
   };
@@ -683,7 +860,7 @@
 
     if (t === 'scene') {
       if (!['named', 'next', 'prev'].includes(obj.mode)) obj.mode = 'named';
-      const sceneRow = makeObsSelect('Scene Name', obj.sceneName, obs.scenes, (v) => { obj.sceneName = v; }, 'Select scene…').el;
+      const sceneRow = makeObsSelect('Scene Name', obj.sceneName, obs.scenes, (v) => { obj.sceneName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select scene…').el;
       const syncVis = () => { sceneRow.hidden = (obj.mode || 'named') !== 'named'; };
       container.append(
         sceneRow,
@@ -704,7 +881,7 @@
         'Source Name',
         obj.sourceName,
         (obs.itemsByScene[obj.sceneName] || []).map((x) => x.sourceName),
-        (v) => { obj.sourceName = v; },
+        (v) => { obj.sourceName = v; if (!allowWait) maybeAutoSyncLabel(v); },
         'Select source…'
       );
       container.append(
@@ -726,7 +903,7 @@
         'Source Name',
         obj.sourceName,
         (obs.itemsByScene[obj.sceneName] || []).map((x) => x.sourceName),
-        (v) => { obj.sourceName = v; },
+        (v) => { obj.sourceName = v; if (!allowWait) maybeAutoSyncLabel(v); },
         'Select source…'
       );
       container.append(
@@ -757,7 +934,7 @@
         'Filter Name',
         obj.filterName,
         (obs.filtersBySource[obj.sourceName] || []).map((f) => f.filterName),
-        (v) => { obj.filterName = v; },
+        (v) => { obj.filterName = v; if (!allowWait) maybeAutoSyncLabel(v); },
         'Select filter…'
       );
       if (obj.sourceName && obs.status === 'ok') loadFlts(obj.sourceName);
@@ -771,7 +948,7 @@
       if (!allowWait) container.appendChild(makeAutoOffField(obj));
     } else if (t === 'mute') {
       container.append(
-        makeObsSelect('Input Name', obj.inputName, obs.inputs, (v) => { obj.inputName = v; }, 'Select audio input…').el,
+        makeObsSelect('Input Name', obj.inputName, obs.inputs, (v) => { obj.inputName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select audio input…').el,
         makeSelect('Mode', obj.mode || 'toggle', [
           ['toggle', 'Toggle'], ['mute', 'Mute'], ['unmute', 'Unmute'],
         ], (v) => { obj.mode = v; })
@@ -780,7 +957,7 @@
     } else if (t === 'monitor') {
       if (!obj.monitorType) obj.monitorType = 'cycle';
       container.append(
-        makeObsSelect('Audio Input', obj.inputName, obs.inputs, (v) => { obj.inputName = v; }, 'Select audio input…').el,
+        makeObsSelect('Audio Input', obj.inputName, obs.inputs, (v) => { obj.inputName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select audio input…').el,
         makeSelect('Monitor Mode', obj.monitorType, [
           ['cycle', 'Cycle (Off → Mon Only → Both)'],
           ['OBS_MONITORING_TYPE_NONE', 'Monitor Off'],
@@ -850,12 +1027,12 @@
       );
     } else if (t === 'hotkey') {
       container.appendChild(
-        makeObsSelect('OBS Hotkey', obj.hotkeyName, obs.hotkeys || [], (v) => { obj.hotkeyName = v; }, 'Select OBS hotkey…').el
+        makeObsSelect('OBS Hotkey', obj.hotkeyName, obs.hotkeys || [], (v) => { obj.hotkeyName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select OBS hotkey…').el
       );
     } else if (t === 'media') {
       const mediaOpts = obs.mediaInputs?.length ? obs.mediaInputs : obs.inputs;
       container.append(
-        makeObsSelect('Media Input', obj.inputName, mediaOpts, (v) => { obj.inputName = v; }, 'Select media source…').el,
+        makeObsSelect('Media Input', obj.inputName, mediaOpts, (v) => { obj.inputName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select media source…').el,
         makeSelect('Playback Action', obj.mediaAction || 'play_pause', [
           ['play_pause', 'Play / Pause'],
           ['play', 'Play'],
@@ -873,7 +1050,7 @@
       const fileRow = makeTextInput('Image File Path', obj.filePath || '', 'C:/path/to/slide.png', (v) => { obj.filePath = v; });
       const syncVis = () => { fileRow.hidden = (obj.mode || 'set_file') !== 'set_file'; };
       container.append(
-        makeObsSelect('Image / Slideshow Input', obj.inputName, imageOpts, (v) => { obj.inputName = v; }, 'Select image or slideshow…').el,
+        makeObsSelect('Image / Slideshow Input', obj.inputName, imageOpts, (v) => { obj.inputName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select image or slideshow…').el,
         makeSelect('Mode', obj.mode, [
           ['set_file', 'Set Image File'],
           ['next', 'Slideshow: Next'],
@@ -885,7 +1062,7 @@
       syncVis();
     } else if (t === 'screenshot') {
       container.append(
-        makeObsSelect('Source / Scene (blank = Program)', obj.sourceName, allFilterSources(), (v) => { obj.sourceName = v; }, 'Current Program Scene').el,
+        makeObsSelect('Source / Scene (blank = Program)', obj.sourceName, allFilterSources(), (v) => { obj.sourceName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Current Program Scene').el,
         makeSelect('Image Format', obj.imageFormat || 'png', [
           ['png', 'PNG'], ['jpg', 'JPEG'], ['webp', 'WebP'],
         ], (v) => { obj.imageFormat = v; }),
@@ -896,7 +1073,7 @@
       const urlRow = makeTextInput('URL', obj.url || '', 'https://example.com', (v) => { obj.url = v; });
       const syncVis = () => { urlRow.hidden = (obj.mode || 'refresh') !== 'set_url'; };
       container.append(
-        makeObsSelect('Browser Source', obj.inputName, browserOpts, (v) => { obj.inputName = v; }, 'Select browser source…').el,
+        makeObsSelect('Browser Source', obj.inputName, browserOpts, (v) => { obj.inputName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select browser source…').el,
         makeSelect('Mode', obj.mode || 'refresh', [
           ['refresh', 'Refresh Cache'], ['set_url', 'Update URL'],
         ], (v) => { obj.mode = v; syncVis(); }),
@@ -916,16 +1093,16 @@
         if (Number.isFinite(n)) obj.volumeDb = Math.max(-100, Math.min(26, n));
       });
       container.append(
-        makeObsSelect('Audio Input', obj.inputName, obs.inputs, (v) => { obj.inputName = v; }, 'Select input…').el,
+        makeObsSelect('Audio Input', obj.inputName, obs.inputs, (v) => { obj.inputName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select input…').el,
         makeSelect('Mode', obj.mode, [
           ['set', 'Set Volume (dB)'], ['step', 'Step Volume (+/- dB)'],
         ], (v) => { obj.mode = v; }),
         dbRow
       );
     } else if (t === 'profile') {
-      container.appendChild(makeObsSelect('OBS Profile', obj.profileName, obs.profiles || [], (v) => { obj.profileName = v; }, 'Select profile…').el);
+      container.appendChild(makeObsSelect('OBS Profile', obj.profileName, obs.profiles || [], (v) => { obj.profileName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select profile…').el);
     } else if (t === 'collection') {
-      container.appendChild(makeObsSelect('Scene Collection', obj.collectionName, obs.collections || [], (v) => { obj.collectionName = v; }, 'Select collection…').el);
+      container.appendChild(makeObsSelect('Scene Collection', obj.collectionName, obs.collections || [], (v) => { obj.collectionName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select collection…').el);
     } else if (t === 'transition') {
       const durRow = document.createElement('div');
       durRow.className = 'row';
@@ -938,7 +1115,7 @@
         if (Number.isFinite(n) && n >= 0) obj.durationMs = Math.round(n);
       });
       container.append(
-        makeObsSelect('Transition', obj.transitionName, obs.transitions || [], (v) => { obj.transitionName = v; }, 'Select transition…').el,
+        makeObsSelect('Transition', obj.transitionName, obs.transitions || [], (v) => { obj.transitionName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select transition…').el,
         durRow
       );
     } else if (t === 'page') {
@@ -1077,6 +1254,17 @@
     $('f-icon').value = draftPad.icon || '';
     $('f-type').value = draftPad.type || 'none';
 
+    // Auto-Label tracking state
+    const currentTarget = draftPad.sceneName || draftPad.sourceName || draftPad.filterName || draftPad.inputName || draftPad.hotkeyName || '';
+    prevTargetName = currentTarget;
+    labelTouched = Boolean(draftPad.label && currentTarget && draftPad.label !== currentTarget);
+
+    // Custom Pad Graphics state
+    if ($('f-image-file')) $('f-image-file').value = '';
+    if ($('btn-remove-image')) $('btn-remove-image').hidden = !draftPad.image;
+    if ($('f-image-fit')) $('f-image-fit').value = draftPad.imageFit === 'fill' ? 'fill' : 'icon';
+    if ($('f-image-hidelabel')) $('f-image-hidelabel').checked = Boolean(draftPad.hideLabel);
+
     const icoBox = $('f-icons');
     if (icoBox && !icoBox.children.length) {
       for (const emo of ICON_PRESETS) {
@@ -1186,6 +1374,7 @@
     const el = document.createElement('div');
     el.className = 'palette-item';
     el.draggable = true;
+    el.title = it.label || '';
     el.innerHTML = `<span class="pal-ico">${esc(it.icon || '⚡')}</span>`
       + `<span class="pal-lbl">${esc(it.label)}</span>`
       + `<span class="pal-tag">${esc(it.tag || 'ACT')}</span>`;
@@ -1364,6 +1553,73 @@
     drawPadFields();
   });
 
+  $('f-label')?.addEventListener('input', () => {
+    labelTouched = Boolean($('f-label').value.trim());
+  });
+
+  $('btn-upload-image')?.addEventListener('click', () => {
+    $('f-image-file')?.click();
+  });
+
+  $('f-image-file')?.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        const size = Math.min(img.width, img.height);
+        const sx = (img.width - size) / 2;
+        const sy = (img.height - size) / 2;
+        ctx.drawImage(img, sx, sy, size, size, 0, 0, 128, 128);
+        let dataUrl = '';
+        try {
+          dataUrl = canvas.toDataURL('image/webp', 0.85);
+          if (!dataUrl || !dataUrl.startsWith('data:image/webp')) {
+            dataUrl = canvas.toDataURL('image/png');
+          }
+        } catch {
+          dataUrl = canvas.toDataURL('image/png');
+        }
+        if (draftPad) {
+          draftPad.image = dataUrl;
+          if (!draftPad.imageFit) {
+            draftPad.imageFit = $('f-image-fit')?.value || 'icon';
+          }
+        }
+        if ($('btn-remove-image')) $('btn-remove-image').hidden = false;
+        e.target.value = '';
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  $('btn-remove-image')?.addEventListener('click', () => {
+    if (draftPad) {
+      delete draftPad.image;
+      delete draftPad.imageFit;
+    }
+    if ($('btn-remove-image')) $('btn-remove-image').hidden = true;
+    if ($('f-image-file')) $('f-image-file').value = '';
+  });
+
+  $('f-image-fit')?.addEventListener('change', (e) => {
+    if (draftPad) {
+      draftPad.imageFit = e.target.value;
+    }
+  });
+
+  $('f-image-hidelabel')?.addEventListener('change', (e) => {
+    if (draftPad) {
+      draftPad.hideLabel = e.target.checked;
+    }
+  });
+
   $('dlg-close').addEventListener('click', () => $('pad-dlg').close());
   $('btn-pad-cancel').addEventListener('click', () => $('pad-dlg').close());
 
@@ -1389,6 +1645,12 @@
   $('pad-form').addEventListener('submit', () => {
     draftPad.label = $('f-label').value.trim();
     draftPad.icon = $('f-icon').value.trim();
+    if ($('f-image-fit')) draftPad.imageFit = $('f-image-fit').value;
+    if ($('f-image-hidelabel')) draftPad.hideLabel = $('f-image-hidelabel').checked;
+    if (!draftPad.image) {
+      delete draftPad.image;
+      delete draftPad.imageFit;
+    }
     const saved = Deck.normalizePad(draftPad);
     if (saved.type === 'macro') {
       saved.steps = (draftPad.steps || []).map((st) => (
@@ -1652,6 +1914,9 @@
   });
 
   // Boot
+  initFontScaler();
+  initTheme();
+  initPaletteResizer();
   if ($('version-badge') && Deck.VERSION) $('version-badge').textContent = `v${Deck.VERSION}`;
   $('ws-host').value = Deck.cfg.ws.host;
   $('ws-port').value = Deck.cfg.ws.port;

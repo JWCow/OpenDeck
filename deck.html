@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OBS Virtual Deck</title>
+<title>OpenDeck - Virtual Deck for OBS Studio</title>
 <link rel="stylesheet" href="deck/deck.css">
 <script defer src="deck/obs-ws.js"></script>
 <script defer src="deck/actions.js"></script>
@@ -11,6 +11,10 @@
 </head>
 <body>
 <div class="bar">
+  <div class="brand" title="OpenDeck for OBS Studio">
+    <span class="brand-title">OpenDeck</span>
+    <span class="brand-sub">OBS Studio</span>
+  </div>
   <span id="conn-pill" class="pill bad"><i class="dot"></i><span id="conn-text">Disconnected</span></span>
   <button id="btn-conn-toggle" class="btn sm" title="WebSocket connection settings">WS</button>
   <button id="btn-sync" class="btn sm" title="Refresh OBS scenes, sources, filters, hotkeys, and outputs">↻ Sync</button>
@@ -18,6 +22,11 @@
   <button id="btn-palette" class="btn sm" title="Toggle Command Palette in Edit Mode">Commands</button>
   <button id="btn-auto-import" class="btn sm" title="Auto-Import Pages from connected OBS Studio (read-only)">🪄 Auto-Import</button>
   <div class="spacer"></div>
+  <div class="font-scale-ctrl">
+    <button id="btn-font-dec" class="btn sm" type="button" title="Decrease font size (A-)">A-</button>
+    <button id="btn-font-inc" class="btn sm" type="button" title="Increase font size (A+)">A+</button>
+  </div>
+  <button id="btn-theme" class="btn sm" type="button" title="Toggle Dark/Light Theme">☀️</button>
   <button id="btn-panic-cfg" class="btn sm" title="Configure PANIC reset steps">⚙ Panic</button>
   <button id="btn-panic" class="btn sm panic" title="Abort running Timed Macros &amp; Auto-Off timers and run PANIC reset">⚡ PANIC</button>
   <button id="btn-export" class="btn sm" title="Export Deck configuration as JSON (passwords omitted)">Export</button>
@@ -60,6 +69,7 @@
 
 <div id="deck-body" class="deck-body">
   <div id="grid" class="grid" aria-label="8 by 8 OBS Deck Page"></div>
+  <div id="palette-resizer" class="palette-resizer" title="Drag to resize palette (double-click to reset)"></div>
   <aside id="palette" class="palette" aria-label="Command Palette">
     <div class="palette-h">
       <input id="palette-search" type="search" placeholder="Search commands…" aria-label="Search commands">
@@ -72,7 +82,7 @@
 <div class="status">
   <span id="scene-info">Program: —</span>
   <span id="msg-info">Ready</span>
-  <a id="version-badge" class="ver" href="https://github.com/JWCow/obs-virtual-deck/releases" target="_blank" rel="noopener noreferrer" title="View OBS Virtual Deck releases on GitHub">v2.2.0</a>
+  <a id="version-badge" class="ver" href="https://github.com/JWCow/obs-virtual-deck/releases" target="_blank" rel="noopener noreferrer" title="View OpenDeck releases on GitHub">v2.2.1</a>
 </div>
 
 <dialog id="pad-dlg">
@@ -83,6 +93,19 @@
       <div class="row"><label for="f-icon">Icon</label><input id="f-icon" maxlength="8" placeholder="🎬"></div>
     </div>
     <div class="row"><label>Quick Icons</label><div id="f-icons" class="icon-presets"></div></div>
+    <div class="row">
+      <label>Custom Image</label>
+      <div class="image-upload-row">
+        <input type="file" id="f-image-file" accept="image/*" hidden>
+        <button type="button" id="btn-upload-image" class="btn sm">Upload Image…</button>
+        <button type="button" id="btn-remove-image" class="btn sm bad" hidden>Remove Image</button>
+        <select id="f-image-fit">
+          <option value="icon">Fit Icon</option>
+          <option value="fill">Full Face</option>
+        </select>
+        <label class="chk-label"><input type="checkbox" id="f-image-hidelabel"> Hide Text</label>
+      </div>
+    </div>
     <div class="row"><label>Color</label><div id="f-colors" class="swatches"></div></div>
     <div class="row"><label for="f-type">Action</label>
       <select id="f-type">

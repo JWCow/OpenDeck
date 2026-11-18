@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.2.0';
+  const VERSION = '2.2.1';
   const STORAGE_KEY = 'obs_virtual_deck_v2';
   const LEGACY_STORAGE_KEY = 'obs_virtual_deck_v1';
   const PROBE_PORTS = [4455, 4456, 4457, 4458, 4444];
@@ -224,6 +224,16 @@
       if (out.mode === 'set_file' && raw.filePath) out.filePath = String(raw.filePath);
     }
 
+    if (!isStep) {
+      if (typeof raw.image === 'string' && raw.image.trim()) {
+        out.image = raw.image;
+        out.imageFit = raw.imageFit === 'fill' ? 'fill' : 'icon';
+      }
+      if (Boolean(raw.hideLabel)) {
+        out.hideLabel = true;
+      }
+    }
+
     if (!isStep && AUTO_OFF_TYPES.has(type)) {
       const ms = sanitizeAutoOff(raw.autoOffMs);
       if (ms > 0) out.autoOffMs = ms;
@@ -343,19 +353,33 @@
     };
     let state = base;
     try {
-      const rawV2 = localStorage.getItem(STORAGE_KEY);
-      if (rawV2) {
-        const parsed = JSON.parse(rawV2);
-        state = migrateConfig(parsed);
-        if (parsed && Array.isArray(parsed.decks) && !Array.isArray(parsed.pages)) {
-          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+      const rawOpenDeck = localStorage.getItem('opendeck_config');
+      const rawDeckV2 = localStorage.getItem('obs_deck_config_v2');
+      const rawVirtV2 = localStorage.getItem(STORAGE_KEY);
+      const rawVirtV1 = localStorage.getItem(LEGACY_STORAGE_KEY);
+
+      let rawToMigrate = null;
+      if (rawVirtV2) {
+        if (rawVirtV2.includes('"decks"')) {
+          rawToMigrate = rawVirtV2;
+        } else {
+          rawToMigrate = rawOpenDeck || rawVirtV2;
         }
+      } else if (rawVirtV1) {
+        rawToMigrate = rawVirtV1;
+      } else if (rawDeckV2) {
+        rawToMigrate = rawDeckV2;
+      }
+
+      if (rawToMigrate) {
+        state = migrateConfig(JSON.parse(rawToMigrate));
+        try {
+          const json = JSON.stringify(state);
+          localStorage.setItem('opendeck_config', json);
+          localStorage.setItem(STORAGE_KEY, json);
+        } catch {}
       } else {
-        const rawV1 = localStorage.getItem(LEGACY_STORAGE_KEY);
-        if (rawV1) {
-          state = migrateConfig(JSON.parse(rawV1));
-          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
-        }
+        try { localStorage.removeItem('opendeck_config'); } catch {}
       }
     } catch {}
 
@@ -491,7 +515,11 @@
   };
 
   Deck.saveCfg = () => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(Deck.cfg)); } catch {}
+    try {
+      const json = JSON.stringify(Deck.cfg);
+      localStorage.setItem('opendeck_config', json);
+      localStorage.setItem(STORAGE_KEY, json);
+    } catch {}
     Deck.syncStatsPolling();
   };
 

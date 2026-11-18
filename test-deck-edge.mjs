@@ -125,14 +125,39 @@ try {
   assert.equal(migratedV20.pages[0].pads[0].pageId, 'deck-2', 'page pad deckId migrated to pageId');
   assert.ok((await page.locator('#grid .pad').nth(1).textContent()).includes('D2 BRB'));
 
+  // 1c. obs_deck_config_v2 -> opendeck_config backward-compatible migration & pad image field defaults
+  await page.evaluate((p) => {
+    const pads = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+    pads[0] = { type: 'scene', sceneName: 'Slides', label: 'Legacy V2 Scene', icon: '📺', color: '#991b1b' };
+    localStorage.removeItem('opendeck_config');
+    localStorage.removeItem('obs_virtual_deck_v2');
+    localStorage.setItem('obs_deck_config_v2', JSON.stringify({
+      version: 2,
+      ws: { host: '127.0.0.1', port: p, password: '' },
+      pages: [{ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads }],
+      panicSteps: [],
+    }));
+  }, port);
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  const migratedOpenDeck = await page.evaluate(() => JSON.parse(localStorage.getItem('opendeck_config') || 'null'));
+  assert.ok(migratedOpenDeck, 'migrated to opendeck_config storage key');
+  assert.equal(migratedOpenDeck.pages[0].pads[0].label, 'Legacy V2 Scene');
+  assert.equal(migratedOpenDeck.pages[0].pads[0].image, undefined);
+  assert.equal(migratedOpenDeck.pages[0].pads[0].imageFit, undefined);
+  assert.equal(Boolean(migratedOpenDeck.pages[0].pads[0].hideLabel), false);
+  assert.ok((await page.locator('#grid .pad').nth(0).textContent()).includes('Legacy V2 Scene'));
+
   // Reset back to clean defaults before continuing
   await page.evaluate(() => {
     localStorage.removeItem('obs_virtual_deck_v1');
     localStorage.removeItem('obs_virtual_deck_v2');
+    localStorage.removeItem('obs_deck_config_v2');
+    localStorage.removeItem('opendeck_config');
   });
   await page.reload();
   await page.waitForSelector('#grid .pad');
-  console.log('  ✓ v1 & v2.0.0 (decks[]) -> v2.1.0 (pages[]) lossless localStorage migration');
+  console.log('  ✓ v1, v2.0.0 & v2.2.0 -> OpenDeck v2.2.1 lossless localStorage migration');
 
   // 2. ws://host:port normalization + no-auth connect + dismiss auto-import prompt
   await page.click('#btn-conn-toggle');
@@ -417,17 +442,61 @@ try {
   }
   console.log('  ✓ Group PiP transform + ?port= query param + probeObsPorts + 4009 stops cleanly');
 
+  // 12b. Font Scaler & Palette Splitter bounds clamping, and theme persistence across reloads
+  await page.evaluate(() => {
+    localStorage.removeItem('opendeck_font_scale');
+    for (let i = 0; i < 6; i++) document.getElementById('btn-font-dec')?.click();
+  });
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.fontSize), 'sm', 'font scale clamped at sm minimum');
+  await page.evaluate(() => {
+    for (let i = 0; i < 6; i++) document.getElementById('btn-font-inc')?.click();
+  });
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.fontSize), 'xxl', 'font scale clamped at xxl maximum');
+
+  // Theme persistence across page reload
+  await page.evaluate(() => {
+    localStorage.setItem('opendeck_theme', 'light');
+  });
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'light', 'light theme restored on reload from localStorage');
+  assert.equal((await page.textContent('#btn-theme')).trim(), '🌙', 'moon button shown on light theme reload');
+
+  // Palette width clamping on startup
+  await page.evaluate(() => {
+    localStorage.setItem('opendeck_palette_w', '9999');
+  });
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  const clampedPaletteMax = await page.evaluate(() => parseInt(document.getElementById('palette')?.style.width || '0', 10));
+  assert.ok(clampedPaletteMax <= 550, 'palette width loaded from storage clamps at 550px');
+  // Reset back to dark theme & default font size
+  await page.evaluate(() => {
+    localStorage.removeItem('opendeck_theme');
+    localStorage.removeItem('opendeck_font_scale');
+    localStorage.removeItem('opendeck_palette_w');
+    document.documentElement.dataset.theme = 'dark';
+    document.documentElement.dataset.fontSize = 'xl';
+  });
+  console.log('  ✓ font scaler & palette width bounds clamping + theme persistence');
+
   assert.deepEqual(pageErrors, [], `unexpected page errors: ${pageErrors.join('; ')}`);
 
-  // 13. Release build check: npm run build:release produces clean valid ZIPs for v2.2.0
-  assert.equal(PKG.version, '2.2.0', 'package.json version is 2.2.0');
+  // 13. Release build check: npm run build:release produces clean valid ZIPs for OpenDeck v2.2.1
+  assert.equal(PKG.version, '2.2.1', 'package.json version is 2.2.1');
   execFileSync(process.execPath, [join(__dirname, 'scripts', 'build-release.mjs')], { cwd: __dirname, stdio: 'pipe' });
   const zipPath = join(__dirname, 'dist', 'obs-virtual-deck.zip');
   const latestZipPath = join(__dirname, 'dist', 'obs-virtual-deck-latest.zip');
   const verZipPath = join(__dirname, 'dist', `obs-virtual-deck-v${PKG.version}.zip`);
+  const opendeckZipPath = join(__dirname, 'dist', 'opendeck.zip');
+  const opendeckLatestZipPath = join(__dirname, 'dist', 'opendeck-latest.zip');
+  const opendeckVerZipPath = join(__dirname, 'dist', `opendeck-v${PKG.version}.zip`);
   assert.ok(fs.existsSync(zipPath), 'dist/obs-virtual-deck.zip exists');
   assert.ok(fs.existsSync(latestZipPath), 'dist/obs-virtual-deck-latest.zip exists');
   assert.ok(fs.existsSync(verZipPath), `dist/obs-virtual-deck-v${PKG.version}.zip exists`);
+  assert.ok(fs.existsSync(opendeckZipPath), 'dist/opendeck.zip exists');
+  assert.ok(fs.existsSync(opendeckLatestZipPath), 'dist/opendeck-latest.zip exists');
+  assert.ok(fs.existsSync(opendeckVerZipPath), `dist/opendeck-v${PKG.version}.zip exists`);
 
   const entries = parseZipEntries(fs.readFileSync(zipPath));
   const names = entries.map((e) => e.name);

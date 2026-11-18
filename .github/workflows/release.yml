@@ -57,6 +57,9 @@ jobs:
         with:
           generate_release_notes: true
           files: |
+            dist/opendeck.zip
+            dist/opendeck-latest.zip
+            dist/opendeck-v*.zip
             dist/obs-virtual-deck.zip
             dist/obs-virtual-deck-latest.zip
             dist/obs-virtual-deck-v*.zip
