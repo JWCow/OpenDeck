@@ -1,4 +1,4 @@
-# OpenDeck (formerly OBS Virtual Deck)
+# OpenDeck
 
 [![Latest Release](https://img.shields.io/github/v/release/JWCow/obs-virtual-deck?label=Latest%20Release&color=2563eb)](https://github.com/JWCow/obs-virtual-deck/releases/latest)
 [![Download ZIP](https://img.shields.io/badge/Download-opendeck--v2.2.1.zip-16a34a?logo=github)](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck-v2.2.1.zip)
