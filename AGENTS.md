@@ -38,6 +38,13 @@ Guidance for AI coding agents working in this repository.
 8. **Narrow OBS Dock responsiveness:**
    - Any layout or CSS change must preserve zero horizontal overflow at `360×420`.
 
+## Adding a New Pad Action Type
+
+Keep action definitions consistent across all three runtime files:
+1. `deck/obs-ws.js` — allow the new `type` and sanitize its fields in `normalizePad()`.
+2. `deck/actions.js` — handle active LED state in `isPadActive()` and execution in `execAction()`.
+3. `deck/ui.js` — add its 3-letter badge in `TAGS`, default text in `padFallbackLabel()`, editor inputs in `renderActionFields()`, and (if macro/panic-compatible) `renderStepList()`.
+
 ## Verification
 
 No live OBS instance is required. Run both hermetic Playwright E2E suites after any change:

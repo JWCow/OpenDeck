@@ -13,7 +13,7 @@ Download the folder, drop `deck.html` into an **OBS Custom Browser Dock** (or op
 - **Live state LEDs:** green active indicator stays in sync with OBS (even when you switch scenes or toggle sources/filters directly inside OBS).
 - **6 pad action types:**
   - **Switch Scene (`SCN`)** — switch the live Program scene.
-  - **Source Visibility (`SRC`)** — `Toggle`, `Show`, `Hide`, or **`Solo (Hide Others)`** on any scene or OBS group.
+  - **Source Visibility (`SRC`)** — `Toggle`, `Show`, `Hide`, or **`Solo (Hide Others)`** (shows the target source and hides all other items in that scene or OBS group).
   - **Filter Control (`FLT`)** — `Toggle`, `Enable`, or `Disable` any filter on a source, scene, or group.
   - **Input Mute (`AUD`)** — `Toggle`, `Mute`, or `Unmute` any audio input (green LED = muted).
   - **Timed Macro (`MCR`)** — chain Scene, Source, Filter, Mute, and `Wait (ms)` steps with a live countdown; click again mid-run to cancel.
@@ -35,9 +35,10 @@ Download the folder, drop `deck.html` into an **OBS Custom Browser Dock** (or op
 ### 1. Download the Deck
 
 1. On GitHub, click the green **`<> Code`** button → **`Download ZIP`**.
-2. Unzip the file into a **permanent folder** you won't move or delete later, for example:
-   - **Windows:** `C:\Users\<YourName>\Documents\obs-virtual-deck`
-   - **macOS:** `/Users/<YourName>/Documents/obs-virtual-deck`
+2. Unzip the file into a **permanent folder** you won't move or delete later.
+   - GitHub names the extracted folder `obs-virtual-deck-main` — rename it to `obs-virtual-deck` (and make sure `deck.html` is directly inside that folder, not nested inside another `obs-virtual-deck-main` subfolder):
+   - **Windows:** `C:\Users\<YourName>\Documents\obs-virtual-deck\deck.html`
+   - **macOS:** `/Users/<YourName>/Documents/obs-virtual-deck/deck.html`
 
 > **Tip:** Avoid moving the folder after you set up your OBS dock. Your saved pad layout is stored in OBS's browser `localStorage` per file path. (You can always use **Export** to back up your layout as a `.json` file first.)
 
@@ -141,7 +142,7 @@ Choose **`Timed Macro`** to run multiple steps in sequence:
 |---|---|
 | Pill stays red (`Disconnected`) | Confirm OBS is running, `Tools → WebSocket Server Settings → Enable WebSocket server` is checked, and Port is `4455`. |
 | Pill says `Auth Failed` | Password does not match OBS `Show Connect Info`. Re-enter the password in `WS` and click **`Connect`**. |
-| OBS Dock is blank / white | Check that the URL starts with **`file:///`** (three slashes) and ends with **`/deck.html`**. Encode any spaces as `%20`. |
+| OBS Dock is blank / white | Check that the URL starts with **`file:///`** (three slashes), points directly to **`deck.html`** (watch out for nested `obs-virtual-deck-main` folders), and encodes any spaces as `%20`. On **macOS**, also check `System Settings → Privacy & Security → Files and Folders` so OBS Studio can read `Documents`/`Downloads`. |
 | `Pick OBS…` dropdown is empty or missing a new scene | Connect first, then click **`↻ Sync`**. |
 | Layout vanished after moving the folder | `localStorage` is tied to the exact file path. Move the folder back, click **`Export`**, then **`Import`** at the new path. |
 | Pad shows an error in the bottom bar | Usually a renamed/deleted OBS scene, source, or filter. Click **`↻ Sync`** and update the pad. |
