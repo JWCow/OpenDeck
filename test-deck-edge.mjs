@@ -558,6 +558,70 @@ try {
     }
   }
 
+  // 15. Fake OBS server seam: request log (read & clear), on-demand events, slideshow settings, and close with code & reason
+  const seamObs = createFakeObs(false);
+  await new Promise((r) => seamObs.wss.once('listening', r));
+  const seamPort = seamObs.wss.address().port;
+  try {
+    assert.deepEqual(seamObs.state.inputSettings['Photo Slideshow'], {
+      files: [{ value: '/img/slide1.png', hidden: false, selected: false }],
+    }, 'slideshow input settings seeded');
+
+    const ctxSeam = await browser.newContext();
+    const pageSeam = await ctxSeam.newPage();
+    pageSeam.on('pageerror', (e) => pageErrors.push(e.message));
+    await pageSeam.goto(`${DECK_URL}?port=${seamPort}`);
+    await pageSeam.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+
+    // Read and clear ordered request log
+    assert.ok(seamObs.state.calls.some((c) => c.requestType === 'GetSceneList'), 'request log recorded initial GetSceneList');
+    seamObs.state.calls.length = 0;
+    assert.equal(seamObs.state.calls.length, 0, 'request log cleared');
+
+    await pageSeam.evaluate(() => Deck.obsCall('SetCurrentProgramScene', { sceneName: 'BRB' }));
+    assert.deepEqual(seamObs.state.calls, [
+      { requestType: 'SetCurrentProgramScene', requestData: { sceneName: 'BRB' } },
+    ], 'ordered request log recorded exact requestType and requestData');
+
+    // Emit on-demand events and observe state sync / Deck response
+    seamObs.state.calls.length = 0;
+    seamObs.broadcast('SceneNameChanged', { oldSceneName: 'BRB', sceneName: 'Break Room' });
+    assert.equal(seamObs.state.scenes.includes('Break Room'), true, 'fake server updated scene name on SceneNameChanged');
+    assert.equal(seamObs.state.scenes.includes('BRB'), false, 'old scene name replaced');
+    await pageSeam.waitForFunction(() => document.getElementById('scene-info').textContent === 'Program: Break Room');
+    assert.ok(seamObs.state.calls.some((c) => c.requestType === 'GetSceneList'), 'SceneNameChanged triggered GetSceneList');
+
+    seamObs.broadcast('InputNameChanged', { oldInputName: 'Mic/Aux', inputName: 'Host Mic' });
+    assert.equal(seamObs.state.inputs.includes('Host Mic'), true, 'fake server updated input name on InputNameChanged');
+    await pageSeam.waitForFunction(() => Deck.obs.inputs.includes('Host Mic'));
+
+    seamObs.broadcast('SceneRemoved', { sceneName: 'Slides' });
+    assert.equal(seamObs.state.scenes.includes('Slides'), false, 'fake server removed scene on SceneRemoved');
+
+    seamObs.broadcast('MediaInputActionTriggered', {
+      inputName: 'Intro Video',
+      mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY',
+    });
+    assert.equal(seamObs.state.mediaStates['Intro Video'], 'OBS_MEDIA_STATE_PLAYING', 'fake server updated media state on MediaInputActionTriggered');
+
+    seamObs.broadcast('InputVolumeChanged', { inputName: 'Host Mic', inputVolumeDb: -18, inputVolumeMul: 0.125 });
+    await pageSeam.waitForFunction(() => Deck.obs.volumes['Host Mic'] === -18);
+
+    // Close connection with chosen close code and reason
+    const closedEvent = pageSeam.evaluate(() => new Promise((resolve) => {
+      Deck.obs.ws.addEventListener('close', (ev) => resolve({ code: ev.code, reason: ev.reason }), { once: true });
+    }));
+    seamObs.closeAll(4009, 'Custom close reason');
+    const closeInfo = await closedEvent;
+    assert.deepEqual(closeInfo, { code: 4009, reason: 'Custom close reason' }, 'closed with chosen code and reason');
+    await pageSeam.waitForFunction(() => document.getElementById('conn-text').textContent === 'Auth Failed');
+
+    await ctxSeam.close();
+    console.log('  ✓ fake OBS server seam (request log, on-demand events, slideshow settings & close with code/reason)');
+  } finally {
+    seamObs.wss.close();
+  }
+
   console.log('\nPASS: all deck edge E2E checks succeeded.');
 } finally {
   if (browser) await browser.close();
