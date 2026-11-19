@@ -628,6 +628,195 @@ try {
     seamObs.wss.close();
   }
 
+  // 16. Output stop protection and in-flight guard (#5)
+  const outObs = createFakeObs(false);
+  await new Promise((r) => outObs.wss.once('listening', r));
+  const outPort = outObs.wss.address().port;
+  try {
+    const ctxOut = await browser.newContext();
+    const pageOut = await ctxOut.newPage();
+    pageOut.on('pageerror', (e) => pageErrors.push(e.message));
+    await pageOut.goto(`${DECK_URL}?port=${outPort}`);
+    await pageOut.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageOut.waitForTimeout(100);
+    if (await pageOut.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageOut.click('#btn-wiz-cancel');
+    }
+
+    // Configure pads for testing:
+    // Slot 0: Stream toggle
+    // Slot 1: Record toggle
+    // Slot 2: Virtual Cam toggle
+    // Slot 3: Replay Buffer toggle
+    // Slot 4: Stream stop
+    // Slot 5: Macro with wait and stop
+    // Slot 6: PANIC pad
+    await pageOut.evaluate(() => {
+      const page = Deck.getActivePage();
+      page.pads[0] = { type: 'output', target: 'stream', mode: 'toggle', label: 'Stream' };
+      page.pads[1] = { type: 'output', target: 'record', mode: 'toggle', label: 'Record' };
+      page.pads[2] = { type: 'output', target: 'vcam', mode: 'toggle', label: 'Virtual Cam' };
+      page.pads[3] = { type: 'output', target: 'replay', mode: 'toggle', label: 'Replay Buffer' };
+      page.pads[4] = { type: 'output', target: 'stream', mode: 'stop', label: 'Stop Stream' };
+      page.pads[5] = {
+        type: 'macro',
+        label: 'Stream Macro',
+        steps: [
+          { type: 'wait', delayMs: 1500 },
+          { type: 'output', target: 'stream', mode: 'stop' },
+        ],
+      };
+      page.pads[6] = { type: 'panic', label: 'PANIC' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+
+    const padEl = (idx) => pageOut.locator('#grid .pad').nth(idx);
+
+    // AC 4: A double-tap on an idle output Pad sends exactly one request
+    outObs.state.calls.length = 0;
+    await Promise.all([
+      padEl(0).click(),
+      padEl(0).click(),
+    ]);
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, true, 'stream started');
+    const streamStartCalls = outObs.state.calls.filter((c) => c.requestType === 'ToggleStream' || c.requestType === 'StartStream');
+    assert.equal(streamStartCalls.length, 1, 'double-tap on idle output Pad sends exactly one request');
+
+    // AC 1: A single tap on a live Stream Pad sends no stop request and shows the armed state
+    outObs.state.calls.length = 0;
+    await padEl(0).click();
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleStream' || c.requestType === 'StopStream').length, 0, 'single tap sends no stop request');
+    assert.ok((await padEl(0).getAttribute('class')).includes('armed'), 'pad shows armed state class');
+    const armedMsg = await pageOut.textContent('#msg-info');
+    assert.match(armedMsg, /armed/i, 'footer message shows armed confirmation warning');
+
+    // AC 3: The armed state expires on its own
+    await pageOut.waitForTimeout(2100);
+    assert.equal((await padEl(0).getAttribute('class')).includes('armed'), false, 'armed state expired after ~2 seconds');
+    assert.equal(outObs.state.outputs.stream, true, 'output stream still running after armed state expires');
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleStream' || c.requestType === 'StopStream').length, 0, 'no stop request sent on expiration');
+
+    // AC 2: A second tap within the window sends the stop request
+    outObs.state.calls.length = 0;
+    await padEl(0).click(); // tap 1: arms
+    assert.ok((await padEl(0).getAttribute('class')).includes('armed'), 'pad armed on first tap');
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleStream' || c.requestType === 'StopStream').length, 0, 'no stop sent yet');
+    await padEl(0).click(); // tap 2: confirms stop
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, false, 'second tap stopped the stream');
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleStream' || c.requestType === 'StopStream').length, 1, 'stop request sent on second tap');
+    assert.equal((await padEl(0).getAttribute('class')).includes('armed'), false, 'armed state cleared on stop');
+
+    // AC 2 (hold): A hold sends the stop request
+    await padEl(0).click(); // start stream again
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, true, 'stream running for hold test');
+    outObs.state.calls.length = 0;
+    await padEl(0).click({ delay: 650 }); // press and hold
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, false, 'hold stopped the stream');
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleStream' || c.requestType === 'StopStream').length, 1, 'hold sent stop request');
+    assert.equal((await padEl(0).getAttribute('class')).includes('armed'), false, 'armed state cleared after hold stop');
+
+    // Stop protection also applies to Record, Virtual Cam, Replay Buffer, and mode: stop
+    // Record toggle
+    await padEl(1).click(); // start record
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[1].className.includes('active'));
+    assert.equal(outObs.state.outputs.record, true);
+    outObs.state.calls.length = 0;
+    await padEl(1).click(); // tap 1: arm
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleRecord' || c.requestType === 'StopRecord').length, 0);
+    assert.ok((await padEl(1).getAttribute('class')).includes('armed'), 'record pad armed');
+    await padEl(1).click(); // tap 2: stop
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[1].className.includes('active'));
+    assert.equal(outObs.state.outputs.record, false, 'record stopped on second tap');
+
+    // Virtual Cam toggle
+    await padEl(2).click(); // start vcam
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[2].className.includes('active'));
+    assert.equal(outObs.state.outputs.vcam, true);
+    outObs.state.calls.length = 0;
+    await padEl(2).click(); // tap 1: arm
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleVirtualCam' || c.requestType === 'StopVirtualCam').length, 0);
+    assert.ok((await padEl(2).getAttribute('class')).includes('armed'), 'vcam pad armed');
+    await padEl(2).click(); // tap 2: stop
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[2].className.includes('active'));
+    assert.equal(outObs.state.outputs.vcam, false, 'vcam stopped on second tap');
+
+    // Replay Buffer toggle
+    await padEl(3).click(); // start replay
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[3].className.includes('active'));
+    assert.equal(outObs.state.outputs.replay, true);
+    outObs.state.calls.length = 0;
+    await padEl(3).click(); // tap 1: arm
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleReplayBuffer' || c.requestType === 'StopReplayBuffer').length, 0);
+    assert.ok((await padEl(3).getAttribute('class')).includes('armed'), 'replay pad armed');
+    await padEl(3).click(); // tap 2: stop
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[3].className.includes('active'));
+    assert.equal(outObs.state.outputs.replay, false, 'replay stopped on second tap');
+
+    // Mode: 'stop' pad
+    await padEl(0).click(); // start stream
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, true);
+    outObs.state.calls.length = 0;
+    await padEl(4).click(); // tap 1: arm stop pad
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'StopStream').length, 0);
+    assert.ok((await padEl(4).getAttribute('class')).includes('armed'), 'mode:stop pad armed');
+    await padEl(4).click(); // tap 2: stop stream
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, false, 'mode:stop pad stopped stream on second tap');
+
+    // AC 5: Tapping a running Timed Macro still cancels it; PANIC always runs
+    await padEl(5).click(); // start macro (1.5s wait step)
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[5].className.includes('running'));
+    await padEl(5).click(); // cancel macro
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[5].className.includes('running'));
+    assert.match(await pageOut.textContent('#msg-info'), /Cancelled macro/);
+
+    await padEl(6).click(); // PANIC always runs
+    assert.match(await pageOut.textContent('#msg-info'), /PANIC executed/);
+
+    // AC 6: Stop steps inside Timed Macros and PANIC run without confirmation
+    // Test PANIC stop step
+    await padEl(0).click(); // start stream
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, true);
+    await pageOut.evaluate(() => {
+      Deck.cfg.panicSteps = [{ type: 'output', target: 'stream', mode: 'stop' }];
+    });
+    outObs.state.calls.length = 0;
+    await padEl(6).click(); // trigger PANIC
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, false, 'PANIC stopped stream without confirmation');
+    assert.ok(outObs.state.calls.some((c) => c.requestType === 'StopStream'), 'StopStream executed by PANIC');
+
+    // Test Timed Macro stop step without confirmation
+    await padEl(0).click(); // start stream
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, true);
+    await pageOut.evaluate(() => {
+      Deck.cfg.pages[0].pads[5] = {
+        type: 'macro',
+        label: 'Instant Stop Macro',
+        steps: [{ type: 'output', target: 'stream', mode: 'stop' }],
+      };
+      Deck.renderGrid();
+    });
+    outObs.state.calls.length = 0;
+    await padEl(5).click(); // run macro
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, false, 'Timed Macro stop step stopped stream without confirmation');
+    assert.ok(outObs.state.calls.some((c) => c.requestType === 'StopStream'), 'StopStream executed by Timed Macro');
+
+    await ctxOut.close();
+    console.log('  ✓ output stop protection and in-flight guard (#5)');
+  } finally {
+    outObs.wss.close();
+  }
+
   console.log('\nPASS: all deck edge E2E checks succeeded.');
 } finally {
   if (browser) await browser.close();
