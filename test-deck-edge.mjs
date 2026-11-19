@@ -2156,6 +2156,9 @@ try {
       const pageHold = await ctxHold.newPage();
       await pageHold.goto(`${DECK_URL}?port=${holdPort}`);
       await pageHold.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+      if (await pageHold.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+        await pageHold.click('#btn-wiz-cancel');
+      }
 
       // Configure pads via Deck API
       await pageHold.evaluate(() => {
@@ -2263,6 +2266,36 @@ try {
       await pageHold.evaluate(() => Deck.setActivePage(Deck.cfg.pages[1].id));
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'page switch released and restored');
       assert.equal(await pageHold.evaluate(() => Deck.isPadHeld(0, Deck.cfg.pages[0].id)), false, 'held state cleared on page switch');
+
+      // Switch back to Page 1
+      await pageHold.evaluate(() => {
+        Deck.setActivePage(Deck.cfg.pages[0].id);
+        const p = Deck.getActivePage();
+        p.pads[0] = Deck.normalizePad({ type: 'mute', inputName: 'Mic/Aux', mode: 'mute', hold: true, label: 'Cough' });
+        p.pads[1] = Deck.normalizePad({ type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'enable', autoOffMs: 2000, label: 'AutoBlur' });
+        Deck.saveCfg();
+        Deck.renderGrid();
+      });
+
+      // Page switch preserves running Auto-Off on old page (does not cancel it)
+      holdObs.state.calls.length = 0;
+      const autoOffPad = pageHold.locator('#grid .pad').nth(1);
+      await autoOffPad.click();
+      assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetSourceFilterEnabled' && c.requestData.filterEnabled === true), 'auto-off started on page 1');
+      await pageHold.waitForFunction(() => Deck.activeAutoOffs.size > 0);
+      holdObs.state.calls.length = 0;
+      // Switch to Page 2 while Auto-Off is running
+      await pageHold.evaluate(() => Deck.setActivePage(Deck.cfg.pages[1].id));
+      const autoOffStart = Date.now();
+      let autoOffReversed = false;
+      while (Date.now() - autoOffStart < 3000) {
+        if (holdObs.state.calls.some((c) => c.requestType === 'SetSourceFilterEnabled' && c.requestData.filterEnabled === false)) {
+          autoOffReversed = true;
+          break;
+        }
+        await pageHold.waitForTimeout(50);
+      }
+      assert.ok(autoOffReversed, 'auto-off reversal request arrived after switching to page 2');
 
       // Switch back to Page 1
       await pageHold.evaluate(() => {

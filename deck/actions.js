@@ -685,7 +685,6 @@
   }
 
   Deck.heldPads = Deck.heldPads || new Map();
-  Deck.pendingHoldRestores = Deck.pendingHoldRestores || [];
 
   function isPadHeld(idx, pageId = Deck.cfg.activePageId) {
     return Deck.heldPads.has(timerKey(pageId, idx));
@@ -745,7 +744,7 @@
     }
   }
 
-  async function releaseHold(key) {
+  async function releaseHoldKey(key) {
     const entry = Deck.heldPads.get(key);
     if (!entry) return;
     Deck.heldPads.delete(key);
@@ -763,24 +762,41 @@
       try {
         if (Deck.obs?.ws && Deck.obs.ws.readyState === 1) {
           await execAction(entry.restoreAction);
-        } else {
-          Deck.pendingHoldRestores.push(entry.restoreAction);
         }
-      } catch (e) {
-        Deck.pendingHoldRestores.push(entry.restoreAction);
-      }
+      } catch {}
     }
   }
 
-  async function holdRelease(idx, pageId = Deck.cfg.activePageId) {
-    const key = timerKey(pageId, idx);
-    await releaseHold(key);
-  }
-
-  async function releaseAllHeld() {
+  async function releaseHold(target, idx) {
     if (!Deck.heldPads || Deck.heldPads.size === 0) return;
-    const keys = [...Deck.heldPads.keys()];
-    await Promise.all(keys.map(releaseHold));
+
+    if (target === undefined) {
+      const keys = [...Deck.heldPads.keys()];
+      await Promise.all(keys.map(releaseHoldKey));
+      return;
+    }
+
+    if (typeof target === 'string' && idx !== undefined) {
+      await releaseHoldKey(timerKey(target, idx));
+      return;
+    }
+
+    if (typeof target === 'number') {
+      const pageId = typeof idx === 'string' ? idx : Deck.cfg.activePageId;
+      await releaseHoldKey(timerKey(pageId, target));
+      return;
+    }
+
+    if (typeof target === 'string') {
+      if (target.includes(':')) {
+        await releaseHoldKey(target);
+        return;
+      }
+      const prefix = `${target}:`;
+      const keys = [...Deck.heldPads.keys()].filter((k) => k.startsWith(prefix));
+      await Promise.all(keys.map(releaseHoldKey));
+      return;
+    }
   }
 
   Deck.abortPadTimer = (pageId, idx) => {
@@ -788,7 +804,7 @@
     abortMacro(key);
     abortAutoOff(key);
     disarmPad(key);
-    releaseHold(key);
+    releaseHold(pageId, idx);
   };
 
   Deck.abortPageTimers = (pageId) => {
@@ -796,7 +812,7 @@
     for (const k of [...Deck.activeMacros.keys()]) if (k.startsWith(prefix)) abortMacro(k);
     for (const k of [...Deck.activeAutoOffs.keys()]) if (k.startsWith(prefix)) abortAutoOff(k);
     for (const k of [...Deck.armedPads.keys()]) if (k.startsWith(prefix)) disarmPad(k);
-    for (const k of [...Deck.heldPads.keys()]) if (k.startsWith(prefix)) releaseHold(k);
+    releaseHold(pageId);
   };
 
   Deck.getPadRuntime = (idx, pageId = Deck.cfg.activePageId) => {
@@ -876,9 +892,8 @@
       const runningArmed = [...armedPads.keys()];
       runningArmed.forEach(disarmPad);
     }
-    if (Deck.heldPads) {
-      const runningHeld = [...Deck.heldPads.keys()];
-      await Promise.all(runningHeld.map(releaseHold));
+    if (Deck.heldPads && Deck.heldPads.size > 0) {
+      await releaseHold();
     }
     let ran = 0;
     const errs = [];
@@ -948,10 +963,10 @@
 
     if (p.hold && Deck.HOLD_TYPES && Deck.HOLD_TYPES.has(p.type)) {
       if (Deck.heldPads.has(key)) {
-        await holdRelease(idx, page.id);
+        await releaseHold(page.id, idx);
       } else {
         await holdPress(idx, page.id);
-        await holdRelease(idx, page.id);
+        await releaseHold(page.id, idx);
       }
       return;
     }
@@ -1005,9 +1020,7 @@
 
   if (typeof window !== 'undefined') {
     window.addEventListener('blur', () => {
-      if (Deck.heldPads && Deck.heldPads.size > 0) {
-        releaseAllHeld();
-      }
+      releaseHold();
     });
   }
 
@@ -1024,7 +1037,6 @@
   Deck.runPanic = runPanic;
   Deck.onPadClick = onPadClick;
   Deck.holdPress = holdPress;
-  Deck.holdRelease = holdRelease;
-  Deck.releaseAllHeld = releaseAllHeld;
+  Deck.releaseHold = releaseHold;
   Deck.isPadHeld = isPadHeld;
 })();

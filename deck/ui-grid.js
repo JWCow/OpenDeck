@@ -289,7 +289,7 @@
         const page = Deck.getActivePage();
         const p = page?.pads[i];
         if (p?.hold && Deck.HOLD_TYPES && Deck.HOLD_TYPES.has(p.type)) {
-          Deck.holdRelease(i, page.id);
+          Deck.releaseHold(page.id, i);
         }
       };
 

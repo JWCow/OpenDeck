@@ -712,8 +712,9 @@
   Deck.setActivePage = (pageId) => {
     const page = Deck.cfg.pages.find((d) => d.id === pageId);
     if (!page) return null;
-    if (page.id !== Deck.cfg.activePageId) {
-      if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(Deck.cfg.activePageId);
+    const oldPageId = Deck.cfg.activePageId;
+    if (page.id !== oldPageId) {
+      if (typeof Deck.releaseHold === 'function') Deck.releaseHold(oldPageId);
     }
     Deck.cfg.activePageId = page.id;
     Deck.saveCfg();
@@ -2020,13 +2021,6 @@
         try { await Deck.syncTransforms(); } catch {}
       }
 
-      if (Deck.pendingHoldRestores && Deck.pendingHoldRestores.length > 0) {
-        const pending = Deck.pendingHoldRestores.splice(0, Deck.pendingHoldRestores.length);
-        for (const act of pending) {
-          try { await Deck.execAction(act); } catch {}
-        }
-      }
-
       Deck.updateSceneHeader();
       Deck.scheduleRenderGrid();
       Deck.syncStatsPolling();
@@ -2292,8 +2286,8 @@
 
   Deck.disconnectObs = (manual = true) => {
     const { obs } = Deck;
-    if (typeof Deck.releaseAllHeld === 'function') {
-      try { Deck.releaseAllHeld(); } catch {}
+    if (typeof Deck.releaseHold === 'function') {
+      try { Deck.releaseHold(); } catch {}
     }
     obs.manualClose = manual;
     clearTimeout(obs.reconnectTimer);
@@ -2427,8 +2421,8 @@
 
     ws.onclose = async (ev) => {
       if (obs.ws !== ws) return;
-      if (typeof Deck.releaseAllHeld === 'function') {
-        try { Deck.releaseAllHeld(); } catch {}
+      if (typeof Deck.releaseHold === 'function') {
+        try { Deck.releaseHold(); } catch {}
       }
       obs.ws = null;
       obs.activeSync = null;
