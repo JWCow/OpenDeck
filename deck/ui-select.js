@@ -96,23 +96,27 @@
 
   $('btn-sel-dup')?.addEventListener('click', () => {
     if (!selectedPads.size) return;
-    const newIndices = Deck.duplicatePads(Array.from(selectedPads));
-    if (newIndices && newIndices.length) {
-      Deck.setMsg(`Duplicated ${newIndices.length} pad(s)`);
-      selectedPads = new Set(newIndices);
-      updateSelectionUi();
-    } else {
-      Deck.setMsg('Page is full — could not duplicate');
-    }
+    Deck.pushHistory(() => {
+      const newIndices = Deck.duplicatePads(Array.from(selectedPads));
+      if (newIndices && newIndices.length) {
+        Deck.setMsg(`Duplicated ${newIndices.length} pad(s)`);
+        selectedPads = new Set(newIndices);
+        updateSelectionUi();
+      } else {
+        Deck.setMsg('Page is full — could not duplicate');
+      }
+    });
   });
 
   $('sel-move-page')?.addEventListener('change', () => {
     const targetPageId = $('sel-move-page').value;
     if (!targetPageId || !selectedPads.size) return;
     const targetPage = Deck.cfg.pages.find((p) => p.id === targetPageId);
-    const moved = Deck.movePadsToPage(Array.from(selectedPads), targetPageId);
-    clearSelection();
-    Deck.setMsg(`Moved ${moved.length} pad(s) to ${targetPage ? targetPage.name : 'target page'}`);
+    Deck.pushHistory(() => {
+      const moved = Deck.movePadsToPage(Array.from(selectedPads), targetPageId);
+      clearSelection();
+      Deck.setMsg(`Moved ${moved.length} pad(s) to ${targetPage ? targetPage.name : 'target page'}`);
+    });
     $('sel-move-page').value = '';
   });
 
@@ -126,10 +130,12 @@
       b.title = c;
       b.addEventListener('click', () => {
         if (!selectedPads.size) return;
-        Deck.setPadColors(Array.from(selectedPads), c);
-        selPop.hidden = true;
-        Deck.setMsg(`Recolored ${selectedPads.size} pad(s)`);
-        updateSelectionUi();
+        Deck.pushHistory(() => {
+          Deck.setPadColors(Array.from(selectedPads), c);
+          selPop.hidden = true;
+          Deck.setMsg(`Recolored ${selectedPads.size} pad(s)`);
+          updateSelectionUi();
+        });
       });
       selPop.appendChild(b);
     });
@@ -141,10 +147,15 @@
   $('btn-sel-clear')?.addEventListener('click', () => {
     if (!selectedPads.size) return;
     const count = selectedPads.size;
-    Deck.clearPads(Array.from(selectedPads));
-    clearSelection();
-    Deck.setMsg(`Cleared ${count} pad(s)`);
+    Deck.pushHistory(() => {
+      Deck.clearPads(Array.from(selectedPads));
+      clearSelection();
+      Deck.setMsg(`Cleared ${count} pad(s)`);
+    });
   });
+
+  $('btn-undo')?.addEventListener('click', () => Deck.undo());
+  $('btn-redo')?.addEventListener('click', () => Deck.redo());
 
   Deck.getSelectedPads = () => selectedPads;
   Deck.clearSelection = clearSelection;

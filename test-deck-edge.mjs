@@ -1278,6 +1278,274 @@ try {
     outObs.wss.close();
   }
 
+  // 17. Undo and redo in Edit Mode (#15)
+  const undoObs = createFakeObs(false);
+  await new Promise((r) => undoObs.wss.once('listening', r));
+  const undoPort = undoObs.wss.address().port;
+  try {
+    const ctxUndo = await browser.newContext();
+    const pageUndo = await ctxUndo.newPage();
+    pageUndo.on('pageerror', (e) => pageErrors.push(e.message));
+    pageUndo.on('dialog', (dlg) => dlg.accept());
+    await pageUndo.goto(`${DECK_URL}?port=${undoPort}`);
+    await pageUndo.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageUndo.waitForTimeout(100);
+    if (await pageUndo.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageUndo.click('#btn-wiz-cancel');
+    }
+
+    // Enter Edit Mode
+    await pageUndo.click('#btn-edit');
+    assert.ok(await pageUndo.evaluate(() => Deck.editMode), 'Edit Mode enabled');
+
+    // Undo & Redo buttons exist in Edit Mode and are initially disabled
+    const undoBtn = pageUndo.locator('#btn-undo');
+    const redoBtn = pageUndo.locator('#btn-redo');
+    assert.equal(await undoBtn.count(), 1, '#btn-undo button exists in Edit Mode');
+    assert.equal(await redoBtn.count(), 1, '#btn-redo button exists in Edit Mode');
+    assert.equal(await undoBtn.isDisabled(), true, 'Undo button initially disabled');
+    assert.equal(await redoBtn.isDisabled(), true, 'Redo button initially disabled');
+
+    const padEl = (idx) => pageUndo.locator('#grid .pad').nth(idx);
+
+    // 1. Pad Editor Save action
+    await padEl(0).click();
+    await pageUndo.waitForSelector('#pad-dlg[open]');
+    await pageUndo.fill('#f-label', 'UndoTestPad');
+    await pageUndo.click('#pad-form button[type="submit"]');
+    await pageUndo.waitForFunction(() => !document.getElementById('pad-dlg').open);
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'UndoTestPad');
+    assert.equal(await undoBtn.isDisabled(), false, 'Undo button enabled after Pad Editor save');
+    assert.equal(await redoBtn.isDisabled(), true, 'Redo button disabled after new edit');
+
+    // Undo via button
+    undoObs.state.calls.length = 0;
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), '', 'Pad Editor save undone');
+    assert.equal(await undoBtn.isDisabled(), true, 'Undo button disabled when stack empty');
+    assert.equal(await redoBtn.isDisabled(), false, 'Redo button enabled after undo');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during Undo');
+
+    // Redo via button
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'UndoTestPad', 'Pad Editor save redone');
+    assert.equal(await undoBtn.isDisabled(), false, 'Undo button enabled after redo');
+    assert.equal(await redoBtn.isDisabled(), true, 'Redo button disabled after redo');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during Redo');
+
+    // 2. Drag swap on grid
+    await pageUndo.evaluate(() => {
+      const p0 = document.querySelectorAll('#grid .pad')[0];
+      const p1 = document.querySelectorAll('#grid .pad')[1];
+      const dt = new DataTransfer();
+      p0.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      p1.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      p1.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      p0.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    });
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[1].label), 'UndoTestPad', 'Pads swapped');
+
+    // Undo via Ctrl+Z keyboard shortcut
+    undoObs.state.calls.length = 0;
+    await pageUndo.keyboard.press('Control+z');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'UndoTestPad', 'Drag swap undone via Ctrl+Z');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[1].label), '');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during Ctrl+Z');
+
+    // Redo via Ctrl+Shift+Z
+    await pageUndo.keyboard.press('Control+Shift+z');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[1].label), 'UndoTestPad', 'Drag swap redone via Ctrl+Shift+Z');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during Ctrl+Shift+Z');
+
+    // 3. Multi-select bulk actions: bulk recolor in ONE step
+    await pageUndo.waitForTimeout(300);
+    await pageUndo.evaluate(() => {
+      const page = Deck.getActivePage();
+      page.pads[2] = { type: 'scene', sceneName: 'Scene A', label: 'Scene A', color: '#1e293b' };
+      page.pads[3] = { type: 'scene', sceneName: 'Scene B', label: 'Scene B', color: '#1e293b' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+    // Select pads 2 and 3
+    await pageUndo.click('#btn-sel-none');
+    await padEl(2).click({ modifiers: ['Control'] });
+    await padEl(3).click({ modifiers: ['Control'] });
+    assert.equal(await pageUndo.locator('#grid .pad.selected').count(), 2);
+
+    // Bulk recolor to #991b1b
+    await pageUndo.click('#btn-sel-color');
+    await pageUndo.locator('#sel-color-pop .sw[title="#991b1b"]').click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].color), '#991b1b');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].color), '#991b1b');
+
+    // Undo bulk recolor in ONE step
+    undoObs.state.calls.length = 0;
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].color), '#1e293b', 'Pad 2 color reverted');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].color), '#1e293b', 'Pad 3 color reverted in same step');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during bulk undo');
+
+    // Redo bulk recolor in ONE step
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].color), '#991b1b');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].color), '#991b1b');
+
+    // 4. Bulk clear in ONE step
+    await padEl(2).click({ modifiers: ['Control'] });
+    await padEl(3).click({ modifiers: ['Control'] });
+    await pageUndo.click('#btn-sel-clear');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].type), 'none');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].type), 'none');
+
+    // Undo bulk clear in ONE step
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].type), 'scene');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].type), 'scene');
+
+    // Redo bulk clear in ONE step
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].type), 'none');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].type), 'none');
+
+    // 5. Page operations: Add, Duplicate, Rename, Resize, Delete
+    // Add Page
+    await pageUndo.click('#btn-deck-add');
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page added');
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 1, 'Page add undone');
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page add redone');
+
+    // Duplicate Page
+    await pageUndo.click('#btn-deck-dup');
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 3, 'Page duplicated');
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page duplicate undone');
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 3, 'Page duplicate redone');
+
+    // Rename and Resize Page via Dialog
+    await pageUndo.click('#btn-deck-cfg');
+    await pageUndo.waitForSelector('#deck-dlg[open]');
+    await pageUndo.fill('#d-name', 'RenamedPage');
+    await pageUndo.fill('#d-cols', '6');
+    await pageUndo.fill('#d-rows', '4');
+    await pageUndo.click('#deck-form button[type="submit"]');
+    await pageUndo.waitForFunction(() => !document.getElementById('deck-dlg').open);
+    const renamed = await pageUndo.evaluate(() => {
+      const p = Deck.getActivePage();
+      return { name: p.name, cols: p.cols, rows: p.rows };
+    });
+    assert.deepEqual(renamed, { name: 'RenamedPage', cols: 6, rows: 4 });
+
+    // Undo rename & resize in ONE step
+    await undoBtn.click();
+    const reverted = await pageUndo.evaluate(() => {
+      const p = Deck.getActivePage();
+      return { name: p.name, cols: p.cols, rows: p.rows };
+    });
+    assert.equal(reverted.name !== 'RenamedPage', true, 'Page rename undone');
+    assert.deepEqual({ cols: reverted.cols, rows: reverted.rows }, { cols: 8, rows: 8 }, 'Page resize undone in same step');
+
+    // Redo rename & resize
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().name), 'RenamedPage');
+
+    // Delete Page
+    await pageUndo.click('#btn-deck-cfg');
+    await pageUndo.waitForSelector('#deck-dlg[open]');
+    await pageUndo.click('#btn-deck-del');
+    await pageUndo.waitForFunction(() => !document.getElementById('deck-dlg').open);
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page deleted');
+
+    // Undo delete Page
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 3, 'Page delete undone');
+
+    // Redo delete Page
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page delete redone');
+
+    // 6. Move pad to Page via drag onto page tab
+    await pageUndo.evaluate(() => {
+      const p = Deck.getActivePage();
+      p.pads[0] = { type: 'scene', sceneName: 'MoveMe', label: 'MoveMe' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'MoveMe');
+    const targetTab = pageUndo.locator('#deck-tabs .page-tab').nth(0);
+    await pageUndo.evaluate(() => {
+      const p0 = document.querySelectorAll('#grid .pad')[0];
+      const tab0 = document.querySelectorAll('#deck-tabs .page-tab')[0];
+      const dt = new DataTransfer();
+      p0.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      tab0.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      tab0.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      p0.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    });
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), '', 'Pad moved away from active page');
+
+    // Undo move to Page
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'MoveMe', 'Pad restored on active page after undo');
+
+    // Redo move to Page
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), '', 'Pad moved again after redo');
+
+    // 7. PANIC steps save
+    await pageUndo.click('#btn-panic-cfg');
+    await pageUndo.waitForSelector('#panic-dlg[open]');
+    await pageUndo.click('#btn-panic-add');
+    await pageUndo.click('#btn-panic-save');
+    await pageUndo.waitForFunction(() => !document.getElementById('panic-dlg').open);
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.panicSteps.length), 1, 'Panic step saved');
+
+    // Undo PANIC steps save
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.panicSteps.length), 0, 'Panic step save undone');
+
+    // Redo PANIC steps save
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.panicSteps.length), 1, 'Panic step save redone');
+
+    // 8. History depth capped at 50
+    await pageUndo.evaluate(() => {
+      const page = Deck.getActivePage();
+      for (let i = 0; i < 55; i++) {
+        Deck.pushHistory(() => {
+          page.pads[0] = { type: 'scene', label: `Depth${i}` };
+          Deck.saveCfg();
+        });
+      }
+    });
+    // Can undo up to 50 times
+    let undoCount = 0;
+    while (await undoBtn.isEnabled()) {
+      await undoBtn.click();
+      undoCount++;
+      if (undoCount > 60) break;
+    }
+    assert.equal(undoCount, 50, 'History depth capped at exactly 50 states');
+
+    // 9. History clears on reload
+    await pageUndo.reload();
+    await pageUndo.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageUndo.click('#btn-edit');
+    assert.equal(await pageUndo.locator('#btn-undo').isDisabled(), true, 'Undo disabled after reload');
+    assert.equal(await pageUndo.locator('#btn-redo').isDisabled(), true, 'Redo disabled after reload');
+
+    // 10. Glossary contains Undo History
+    const glossaryText = fs.readFileSync(join(__dirname, 'GLOSSARY.md'), 'utf8');
+    assert.ok(glossaryText.includes('**Undo History**:'), 'GLOSSARY.md contains Undo History');
+
+    await ctxUndo.close();
+    console.log('  ✓ undo and redo in Edit Mode (#15)');
+  } finally {
+    undoObs.wss.close();
+  }
+
   console.log('\nPASS: all deck edge E2E checks succeeded.');
 } finally {
   if (browser) await browser.close();
