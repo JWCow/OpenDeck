@@ -559,6 +559,8 @@
       hasProbedOnBoot: false,
       pending: new Map(),
       reconnectTimer: null,
+      reconnectCountdown: null,
+      retryCount: 0,
       statsTimer: null,
       readoutTimer: null,
       streamStatus: null,
@@ -2254,10 +2256,34 @@
     return idx >= 0 ? list[idx] : null;
   };
 
+  const CLOSE_CODES = {
+    1000: { name: 'Normal Closure' },
+    1001: { name: 'Going Away' },
+    1002: { name: 'Protocol Error', unrecoverable: true },
+    1003: { name: 'Unsupported Data', unrecoverable: true },
+    1005: { name: 'No Status' },
+    1006: { name: 'Abnormal Closure' },
+    1008: { name: 'Policy Violation', unrecoverable: true },
+    4000: { name: 'Unknown Reason' },
+    4002: { name: 'Message Decode Error', unrecoverable: true },
+    4003: { name: 'Missing Data Field', unrecoverable: true },
+    4004: { name: 'Invalid Data Field Type', unrecoverable: true },
+    4005: { name: 'Invalid Data Field Value', unrecoverable: true },
+    4006: { name: 'Unknown OpCode', unrecoverable: true },
+    4009: { name: 'Auth Failed', unrecoverable: true },
+    4010: { name: 'Unsupported RPC Version', unrecoverable: true },
+    4011: { name: 'Session Invalidated', unrecoverable: true },
+  };
+
   Deck.disconnectObs = (manual = true) => {
     const { obs } = Deck;
     obs.manualClose = manual;
     clearTimeout(obs.reconnectTimer);
+    obs.reconnectTimer = null;
+    if (obs.reconnectCountdown) {
+      clearInterval(obs.reconnectCountdown);
+      obs.reconnectCountdown = null;
+    }
     if (obs.statsTimer) {
       clearInterval(obs.statsTimer);
       obs.statsTimer = null;
@@ -2275,8 +2301,56 @@
     for (const p of obs.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Disconnected')); }
     obs.pending.clear();
     if (obs.ws) { const w = obs.ws; obs.ws = null; try { w.close(); } catch {} }
-    if (manual) Deck.setConn('bad', 'Disconnected');
+    if (manual) {
+      obs.retryCount = 0;
+      Deck.setConn('bad', 'Disconnected');
+      Deck.setMsg('Disconnected');
+    }
   };
+
+  function scheduleReconnect(ev) {
+    const { obs } = Deck;
+    clearTimeout(obs.reconnectTimer);
+    obs.reconnectTimer = null;
+    if (obs.reconnectCountdown) {
+      clearInterval(obs.reconnectCountdown);
+      obs.reconnectCountdown = null;
+    }
+    const attempt = obs.retryCount || 0;
+    const delaySec = Math.min(3 * Math.pow(2, attempt), 30);
+    obs.retryCount = attempt + 1;
+
+    const code = ev?.code;
+    const codeStr = code ? ` (${code})` : '';
+    const entry = code ? CLOSE_CODES[code] : null;
+    const reasonText = ev?.reason || entry?.name || (code ? `Code ${code}` : 'Connection dropped');
+    let remaining = delaySec;
+
+    const updateStatus = () => {
+      Deck.setConn('bad', `Retry in ${remaining}s`);
+      Deck.setMsg(`Disconnected: ${reasonText}${codeStr} · Retrying in ${remaining}s…`);
+    };
+
+    updateStatus();
+    obs.reconnectCountdown = setInterval(() => {
+      remaining -= 1;
+      if (remaining > 0) {
+        updateStatus();
+      } else {
+        clearInterval(obs.reconnectCountdown);
+        obs.reconnectCountdown = null;
+      }
+    }, 1000);
+
+    obs.reconnectTimer = setTimeout(() => {
+      if (obs.reconnectCountdown) {
+        clearInterval(obs.reconnectCountdown);
+        obs.reconnectCountdown = null;
+      }
+      obs.reconnectTimer = null;
+      Deck.connectObs({ isBoot: false });
+    }, delaySec * 1000);
+  }
 
   function buildWsTarget(rawHostInput, rawPortInput) {
     let raw = (rawHostInput || '127.0.0.1').trim();
@@ -2352,6 +2426,8 @@
       if (typeof Deck.clearReadoutPads === 'function') Deck.clearReadoutPads();
       for (const p of obs.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Closed')); }
       obs.pending.clear();
+      if (obs.manualClose) return;
+
       if (ev.code === 4009) {
         Deck.setConn('bad', 'Auth Failed');
         Deck.setMsg('OBS WebSocket password rejected');
@@ -2359,7 +2435,16 @@
         return;
       }
 
-      if (!obs.manualClose && !opened && isBoot && !obs.hasProbedOnBoot
+      const closeEntry = CLOSE_CODES[ev.code];
+      if (closeEntry?.unrecoverable) {
+        const name = closeEntry.name;
+        const detail = ev.reason ? `${ev.reason} (${ev.code})` : `${name} (${ev.code})`;
+        Deck.setConn('bad', name);
+        Deck.setMsg(`${detail} — retries stopped`);
+        return;
+      }
+
+      if (!opened && isBoot && !obs.hasProbedOnBoot
         && host === '127.0.0.1' && port === 4455 && !cfg.ws.manualPort && !urlPort) {
         obs.hasProbedOnBoot = true;
         Deck.setConn('wait', 'Scanning OBS ports…');
@@ -2375,14 +2460,11 @@
           Deck.connectObs({ isBoot: false });
           return;
         }
-        Deck.setConn('bad', 'Disconnected');
-        Deck.setMsg('No OBS WebSocket found on ports 4455–4458, 4444');
-        obs.reconnectTimer = setTimeout(() => Deck.connectObs({ isBoot: false }), 3000);
+        scheduleReconnect({ code: 1006, reason: 'No OBS WebSocket found on ports 4455–4458, 4444' });
         return;
       }
 
-      Deck.setConn('bad', 'Disconnected');
-      if (!obs.manualClose) obs.reconnectTimer = setTimeout(() => Deck.connectObs({ isBoot: false }), 3000);
+      scheduleReconnect(ev);
     };
 
     ws.onmessage = async (ev) => {
@@ -2397,6 +2479,7 @@
         }
         ws.send(JSON.stringify({ op: 1, d }));
       } else if (msg.op === 2) {
+        obs.retryCount = 0;
         Deck.setConn('ok', 'Connected');
         Deck.setMsg(`Connected to ${url}`);
         await Deck.syncObsState();
