@@ -1693,6 +1693,240 @@ try {
     undoObs.wss.close();
   }
 
+  // 18. Ticket #18: Live Readout
+  const readoutObs = createFakeObs(false);
+  readoutObs.state.inputs.push('Host Mic');
+  readoutObs.state.volumes['Host Mic'] = -18;
+  readoutObs.state.streamTimecode = '00:01:05';
+  readoutObs.state.recordTimecode = '00:01:23';
+  readoutObs.state.mediaDurations['Intro Video'] = 120000;
+  readoutObs.state.mediaCursors['Intro Video'] = 45000;
+  await new Promise((r) => readoutObs.wss.once('listening', r));
+  const readoutPort = readoutObs.wss.address().port;
+  try {
+    const ctxReadout = await browser.newContext();
+    const pageReadout = await ctxReadout.newPage();
+    pageReadout.on('pageerror', (e) => pageErrors.push(e.message));
+    pageReadout.on('dialog', (dlg) => dlg.accept());
+    await pageReadout.goto(`${DECK_URL}?port=${readoutPort}`);
+    await pageReadout.waitForFunction(() => document.getElementById('conn-text')?.textContent === 'Connected');
+    if (await pageReadout.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageReadout.click('#btn-wiz-cancel');
+    }
+
+    // Set up Pages: Page 1 with Readout Pads, Page 2 with Scenes only
+    await pageReadout.evaluate(() => {
+      const p1 = Deck.getActivePage();
+      p1.cols = 4;
+      p1.rows = 2;
+      p1.pads = [
+        { type: 'output', target: 'stream', label: 'Stream' },
+        { type: 'output', target: 'record', label: 'Record' },
+        { type: 'volume', inputName: 'Host Mic', label: 'Host Vol' },
+        { type: 'media', inputName: 'Intro Video', label: 'Intro Video' },
+        { type: 'stats', mode: 'cpu', label: 'CPU' },
+        { type: 'output', target: 'stream', label: 'Stream Hide', hideLabel: true },
+        { type: 'output', target: 'record', label: 'Record Full', image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', imageFit: 'fill' },
+        { type: 'volume', inputName: 'Host Mic', label: 'Vol Icon', image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', imageFit: 'contain' },
+      ];
+      const p2 = Deck.addPage({ name: 'Scenes Only', cols: 4, rows: 2, switchTo: false });
+      p2.pads = [
+        { type: 'scene', sceneName: 'Main Cam', label: 'Main Cam' },
+        { type: 'scene', sceneName: 'Slides', label: 'Slides' },
+        { type: 'none' }, { type: 'none' },
+        { type: 'none' }, { type: 'none' }, { type: 'none' }, { type: 'none' },
+      ];
+      Deck.setActivePage(p1.id);
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+
+    // AC1: Volume Pad shows initial volume in dB (event-driven / initial sync)
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="2"] .sub');
+      return sub && sub.textContent.includes('-18 dB');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="2"] .sub').textContent(), '-18 dB', 'Volume pad shows level in dB');
+
+    // Volume update via InputVolumeChanged updates in place
+    readoutObs.broadcast('InputVolumeChanged', { inputName: 'Host Mic', inputVolumeDb: -12, inputVolumeMul: 0.25 });
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="2"] .sub');
+      return sub && sub.textContent.includes('-12 dB');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="2"] .sub').textContent(), '-12 dB', 'Volume pad updated in place on volume change');
+
+    // Stream Pad: start streaming -> shows elapsed time
+    readoutObs.state.outputs.stream = true;
+    readoutObs.broadcast('StreamStateChanged', { outputActive: true, outputState: 'OBS_WEBSOCKET_OUTPUT_STARTED' });
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="0"] .sub');
+      return sub && sub.textContent.includes('00:01:05');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="0"] .sub').textContent(), '00:01:05', 'Stream pad shows elapsed time');
+
+    // Record Pad: start recording -> shows elapsed time
+    readoutObs.state.outputs.record = true;
+    readoutObs.broadcast('RecordStateChanged', { outputActive: true, outputState: 'OBS_WEBSOCKET_OUTPUT_STARTED' });
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="1"] .sub');
+      return sub && sub.textContent.includes('00:01:23');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="1"] .sub').textContent(), '00:01:23', 'Record pad shows elapsed time');
+
+    // Media Pad: play media -> shows time left (120s - 45s = 75s -> 01:15)
+    readoutObs.state.mediaStates['Intro Video'] = 'OBS_MEDIA_STATE_PLAYING';
+    readoutObs.broadcast('MediaInputActionTriggered', { inputName: 'Intro Video', mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' });
+    readoutObs.broadcast('MediaInputPlaybackStarted', { inputName: 'Intro Video' });
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="3"] .sub');
+      return sub && sub.textContent.includes('01:15');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="3"] .sub').textContent(), '01:15', 'Media pad shows time left');
+
+    // AC2: Paused recording is shown
+    readoutObs.state.outputs.recordPaused = true;
+    readoutObs.broadcast('RecordStateChanged', { outputActive: true, outputState: 'OBS_WEBSOCKET_OUTPUT_PAUSED' });
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="1"] .sub');
+      return sub && sub.textContent.includes('PAUSED');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="1"] .sub').textContent(), 'PAUSED', 'Record pad shows PAUSED when paused');
+
+    // Resume recording -> elapsed time restores
+    readoutObs.state.outputs.recordPaused = false;
+    readoutObs.broadcast('RecordStateChanged', { outputActive: true, outputState: 'OBS_WEBSOCKET_OUTPUT_RESUMED' });
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="1"] .sub');
+      return sub && sub.textContent.includes('00:01:23');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="1"] .sub').textContent(), '00:01:23', 'Record pad restores elapsed time when resumed');
+
+    // AC6: Hidden-label pad (Pad 5) and Full Face pad (Pad 6) still show readouts as bottom strip
+    await pageReadout.waitForFunction(() => {
+      const sub5 = document.querySelector('#grid .pad[data-idx="5"] .sub');
+      const sub6 = document.querySelector('#grid .pad[data-idx="6"] .sub');
+      return sub5 && sub5.textContent.includes('00:01:05') && sub6 && sub6.textContent.includes('00:01:23');
+    });
+    const pad5Sub = pageReadout.locator('#grid .pad[data-idx="5"] .sub');
+    const pad6Sub = pageReadout.locator('#grid .pad[data-idx="6"] .sub');
+    assert.equal(await pad5Sub.textContent(), '00:01:05', 'Hide-label pad shows readout');
+    assert.equal(await pad6Sub.textContent(), '00:01:23', 'Full-face pad shows readout');
+    const pad5Pos = await pad5Sub.evaluate((el) => {
+      const st = window.getComputedStyle(el);
+      return { position: st.position, bottom: st.bottom, width: st.width };
+    });
+    assert.equal(pad5Pos.position, 'absolute', 'Hide-label readout is absolutely positioned bottom strip');
+
+    // AC5: Readout updates replace no Pad Graphic elements (mutation check on Pad 7)
+    await pageReadout.evaluate(() => {
+      const img = document.querySelector('#grid .pad[data-idx="7"] img.pad-icon-img');
+      window.__initialReadoutImg = img;
+      window.__removedReadoutGraphics = 0;
+      const observer = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          for (const node of m.removedNodes) {
+            if (node.tagName === 'IMG' && node.classList.contains('pad-icon-img')) {
+              window.__removedReadoutGraphics++;
+            }
+          }
+        }
+      });
+      observer.observe(document.getElementById('grid'), { childList: true, subtree: true });
+    });
+
+    // Fire 20 volume events while connected
+    for (let i = 0; i < 20; i++) {
+      readoutObs.broadcast('InputVolumeChanged', { inputName: 'Host Mic', inputVolumeDb: -20 + i, inputVolumeMul: 0.1 });
+    }
+    await pageReadout.waitForTimeout(200);
+    const removedGraphics = await pageReadout.evaluate(() => window.__removedReadoutGraphics);
+    const sameImg = await pageReadout.evaluate(() => {
+      const current = document.querySelector('#grid .pad[data-idx="7"] img.pad-icon-img');
+      return current === window.__initialReadoutImg;
+    });
+    assert.equal(removedGraphics, 0, 'No Pad Graphic elements replaced during readout updates');
+    assert.equal(sameImg, true, 'Pad Graphic element remained identically in DOM');
+
+    // AC3: Readouts clear on stop
+    // Stop stream -> Pad 0 and Pad 5 readouts clear
+    readoutObs.state.outputs.stream = false;
+    readoutObs.broadcast('StreamStateChanged', { outputActive: false, outputState: 'OBS_WEBSOCKET_OUTPUT_STOPPED' });
+    await pageReadout.waitForFunction(() => !document.querySelector('#grid .pad[data-idx="0"] .sub'));
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="0"] .sub').count(), 0, 'Stream pad readout cleared on stop');
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="5"] .sub').count(), 0, 'Stream hide-label pad readout cleared on stop');
+
+    // Stop record -> Pad 1 and Pad 6 readouts clear
+    readoutObs.state.outputs.record = false;
+    readoutObs.broadcast('RecordStateChanged', { outputActive: false, outputState: 'OBS_WEBSOCKET_OUTPUT_STOPPED' });
+    await pageReadout.waitForFunction(() => !document.querySelector('#grid .pad[data-idx="1"] .sub'));
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="1"] .sub').count(), 0, 'Record pad readout cleared on stop');
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="6"] .sub').count(), 0, 'Record full-face pad readout cleared on stop');
+
+    // Media ended -> Pad 3 readout clears
+    readoutObs.state.mediaStates['Intro Video'] = 'OBS_MEDIA_STATE_ENDED';
+    readoutObs.broadcast('MediaInputPlaybackEnded', { inputName: 'Intro Video' });
+    await pageReadout.waitForFunction(() => !document.querySelector('#grid .pad[data-idx="3"] .sub'));
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="3"] .sub').count(), 0, 'Media pad readout cleared on media ended');
+
+    // AC4: No status polling while no readout Pad is on the active Page
+    // Switch to 'Scenes Only' page
+    const scenesPageId = await pageReadout.evaluate(() => Deck.cfg.pages.find((p) => p.name === 'Scenes Only').id);
+    await pageReadout.evaluate((id) => Deck.setActivePage(id), scenesPageId);
+    await pageReadout.waitForTimeout(100);
+
+    // Clear fake OBS calls and wait 1.5s
+    readoutObs.state.calls = [];
+    await pageReadout.waitForTimeout(1500);
+    const polledCallsOnScenesPage = readoutObs.state.calls.filter((c) =>
+      ['GetStreamStatus', 'GetRecordStatus', 'GetMediaInputStatus'].includes(c.requestType)
+    );
+    assert.equal(polledCallsOnScenesPage.length, 0, `No status polling while no readout pad on active page (got ${polledCallsOnScenesPage.length})`);
+
+    // Switch back to Page 1
+    const p1Id = await pageReadout.evaluate(() => Deck.cfg.pages[0].id);
+    await pageReadout.evaluate((id) => Deck.setActivePage(id), p1Id);
+    await pageReadout.waitForTimeout(100);
+
+    // Clear calls and wait for polling -> status calls must occur now!
+    readoutObs.state.calls = [];
+    const pollStart = Date.now();
+    while (Date.now() - pollStart < 3000) {
+      if (readoutObs.state.calls.some((c) => ['GetStreamStatus', 'GetRecordStatus', 'GetMediaInputStatus'].includes(c.requestType))) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const polledCallsOnReadoutPage = readoutObs.state.calls.filter((c) =>
+      ['GetStreamStatus', 'GetRecordStatus', 'GetMediaInputStatus'].includes(c.requestType)
+    );
+    assert.ok(polledCallsOnReadoutPage.length > 0, 'Status polling resumes when page with readout pads is active');
+
+    // AC3 (part 2): Readouts clear on disconnect
+    // Re-activate stream and record and media
+    readoutObs.state.outputs.stream = true;
+    readoutObs.state.outputs.record = true;
+    readoutObs.state.mediaStates['Intro Video'] = 'OBS_MEDIA_STATE_PLAYING';
+    readoutObs.broadcast('StreamStateChanged', { outputActive: true, outputState: 'OBS_WEBSOCKET_OUTPUT_STARTED' });
+    readoutObs.broadcast('RecordStateChanged', { outputActive: true, outputState: 'OBS_WEBSOCKET_OUTPUT_STARTED' });
+    readoutObs.broadcast('MediaInputPlaybackStarted', { inputName: 'Intro Video' });
+    await pageReadout.waitForFunction(() => document.querySelector('#grid .pad[data-idx="0"] .sub')?.textContent.includes('00:01:05'));
+
+    // Close fake OBS connection
+    readoutObs.closeAll(1000, 'Normal Closure');
+    await pageReadout.waitForFunction(() => document.getElementById('conn-text')?.textContent === 'Disconnected');
+
+    // Assert readouts cleared on disconnect
+    await pageReadout.waitForFunction(() => {
+      const subs = document.querySelectorAll('#grid .pad:not(.stats-pad) .sub');
+      return subs.length === 0;
+    });
+    assert.equal(await pageReadout.locator('#grid .pad:not(.stats-pad) .sub').count(), 0, 'All live readouts cleared on disconnect');
+
+    await ctxReadout.close();
+    console.log('  ✓ ticket #18: live readout polling, in-place updates, format, paused, clear on stop/disconnect & bottom strip');
+  } finally {
+    readoutObs.wss.close();
+  }
+
   console.log('\nPASS: all deck edge E2E checks succeeded.');
 } finally {
   if (browser) await browser.close();
