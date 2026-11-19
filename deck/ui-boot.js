@@ -83,6 +83,7 @@
       const pal = $('palette');
       if (pal) pal.classList.remove('open');
     }
+    Deck.updateUndoRedoUi?.();
     Deck.setMsg(Deck.editMode ? 'Edit mode: drag commands from palette, click pad to configure' : 'Run mode');
     Deck.renderGrid();
   });
@@ -156,7 +157,28 @@
   $('ws-host').value = Deck.cfg.ws.host;
   $('ws-port').value = Deck.cfg.ws.port;
   $('ws-pass').value = Deck.cfg.ws.password;
+  Deck.updateUndoRedoUi?.();
   Deck.renderPalette();
   Deck.renderGrid();
   Deck.connectObs({ isBoot: true });
+
+  document.addEventListener('keydown', (e) => {
+    if (!Deck.editMode) return;
+    if (document.querySelector('dialog[open]')) return;
+    const tag = e.target?.tagName?.toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (!(e.ctrlKey || e.metaKey)) return;
+
+    if (e.key === 'z' || e.key === 'Z') {
+      e.preventDefault();
+      if (e.shiftKey) {
+        Deck.redo();
+      } else {
+        Deck.undo();
+      }
+    } else if ((e.key === 'y' || e.key === 'Y') && !e.shiftKey) {
+      e.preventDefault();
+      Deck.redo();
+    }
+  });
 })();

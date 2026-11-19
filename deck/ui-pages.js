@@ -51,12 +51,107 @@
         dragIdx = null;
         dragSourcePageId = '';
         justDroppedAt = Date.now();
-        Deck.movePadToPage(from, d.id, srcPageId);
+        Deck.pushHistory(() => {
+          Deck.movePadToPage(from, d.id, srcPageId);
+        });
       });
       tabs.appendChild(b);
     }
     const cfgBtn = $('btn-deck-cfg');
     if (cfgBtn) cfgBtn.textContent = `${active.cols}×${active.rows} ⚙`;
+  }
+
+  const MAX_HISTORY = 50;
+  const undoStack = [];
+  let redoStack = [];
+
+  function cloneLayoutState() {
+    return {
+      activePageId: Deck.cfg.activePageId,
+      pages: JSON.parse(JSON.stringify(Deck.cfg.pages)),
+      panicSteps: JSON.parse(JSON.stringify(Deck.cfg.panicSteps || [])),
+    };
+  }
+
+  function updateUndoRedoUi() {
+    const undoBtn = $('btn-undo');
+    if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+    const redoBtn = $('btn-redo');
+    if (redoBtn) redoBtn.disabled = redoStack.length === 0;
+  }
+
+  function applyLayoutState(targetState) {
+    const oldPages = Deck.cfg.pages || [];
+    const newPages = targetState.pages || [];
+    const oldPagesMap = new Map(oldPages.map((p) => [p.id, JSON.stringify(p)]));
+    const newPagesMap = new Map(newPages.map((p) => [p.id, JSON.stringify(p)]));
+    const affected = new Set();
+    for (const [id, json] of oldPagesMap) {
+      if (newPagesMap.get(id) !== json) affected.add(id);
+    }
+    for (const id of newPagesMap.keys()) {
+      if (!oldPagesMap.has(id)) affected.add(id);
+    }
+    for (const pid of affected) {
+      if (typeof Deck.abortPageTimers === 'function') {
+        Deck.abortPageTimers(pid);
+      }
+    }
+
+    Deck.cfg.pages = JSON.parse(JSON.stringify(newPages));
+    Deck.cfg.panicSteps = JSON.parse(JSON.stringify(targetState.panicSteps || []));
+    if (newPages.some((p) => p.id === targetState.activePageId)) {
+      Deck.cfg.activePageId = targetState.activePageId;
+    } else if (newPages.length > 0) {
+      Deck.cfg.activePageId = newPages[0].id;
+    }
+    Deck.saveCfg();
+    Deck.renderPageBar();
+    Deck.renderGrid();
+    Deck.clearSelection();
+    updateUndoRedoUi();
+  }
+
+  function pushHistory(actionFn) {
+    if (typeof actionFn === 'function') {
+      const before = cloneLayoutState();
+      const res = actionFn();
+      const after = cloneLayoutState();
+      if (JSON.stringify(before) !== JSON.stringify(after)) {
+        undoStack.push(before);
+        if (undoStack.length > MAX_HISTORY) undoStack.shift();
+        redoStack = [];
+        updateUndoRedoUi();
+      }
+      return res;
+    }
+    const before = cloneLayoutState();
+    undoStack.push(before);
+    if (undoStack.length > MAX_HISTORY) undoStack.shift();
+    redoStack = [];
+    updateUndoRedoUi();
+  }
+
+  function undo() {
+    if (!Deck.editMode || undoStack.length === 0) return false;
+    const current = cloneLayoutState();
+    const prev = undoStack.pop();
+    redoStack.push(current);
+    if (redoStack.length > MAX_HISTORY) redoStack.shift();
+    applyLayoutState(prev);
+    Deck.setMsg('Undone');
+    return true;
+  }
+
+  function redo() {
+    if (!Deck.editMode || redoStack.length === 0) return false;
+    const current = cloneLayoutState();
+    const next = redoStack.pop();
+    undoStack.push(current);
+    if (undoStack.length > MAX_HISTORY) undoStack.shift();
+    applyLayoutState(next);
+    Deck.setMsg('Redone');
+    return true;
   }
 
   Deck.clearDragHighlights = clearDragHighlights;
@@ -68,4 +163,8 @@
     if ('paletteDragItem' in patch) paletteDragItem = patch.paletteDragItem;
     if ('justDroppedAt' in patch) justDroppedAt = patch.justDroppedAt;
   };
+  Deck.pushHistory = pushHistory;
+  Deck.undo = undo;
+  Deck.redo = redo;
+  Deck.updateUndoRedoUi = updateUndoRedoUi;
 })();
