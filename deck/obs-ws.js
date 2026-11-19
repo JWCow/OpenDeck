@@ -560,6 +560,10 @@
       pending: new Map(),
       reconnectTimer: null,
       statsTimer: null,
+      readoutTimer: null,
+      streamStatus: null,
+      recordStatus: null,
+      mediaStatus: {},
       manualClose: false,
       activeSync: null,
       queuedSync: null,
@@ -649,6 +653,7 @@
     } catch {}
     Deck.setSaveWarning(!ok);
     Deck.syncStatsPolling();
+    Deck.syncReadoutPolling();
     return ok;
   };
 
@@ -1689,6 +1694,170 @@
     }
   };
 
+  function formatTimecode(timecode, durationMs) {
+    if (typeof timecode === 'string' && timecode.trim()) {
+      return timecode.trim().replace(/\.\d+$/, '');
+    }
+    if (typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs >= 0) {
+      const totalSec = Math.floor(durationMs / 1000);
+      const sec = totalSec % 60;
+      const min = Math.floor(totalSec / 60) % 60;
+      const hr = Math.floor(totalSec / 3600);
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${pad(hr)}:${pad(min)}:${pad(sec)}`;
+    }
+    return '';
+  }
+
+  function formatMediaTimeLeft(durationMs, cursorMs, timecode) {
+    if (typeof timecode === 'string' && timecode.trim()) {
+      return timecode.trim().replace(/\.\d+$/, '');
+    }
+    if (typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs >= 0) {
+      const cur = typeof cursorMs === 'number' && Number.isFinite(cursorMs) ? cursorMs : 0;
+      const remainingMs = Math.max(0, durationMs - cur);
+      const totalSec = Math.floor(remainingMs / 1000);
+      const sec = totalSec % 60;
+      const min = Math.floor(totalSec / 60) % 60;
+      const hr = Math.floor(totalSec / 3600);
+      const pad = (n) => String(n).padStart(2, '0');
+      if (hr > 0) return `${pad(hr)}:${pad(min)}:${pad(sec)}`;
+      return `${pad(min)}:${pad(sec)}`;
+    }
+    return '';
+  }
+
+  function isReadoutPad(p) {
+    if (!p) return false;
+    if (p.type === 'volume') return true;
+    if (p.type === 'media') return true;
+    if (p.type === 'output' && (p.target === 'stream' || p.target === 'record' || p.target === 'recordPause')) return true;
+    return false;
+  }
+
+  function needsReadoutPolling(p) {
+    if (!p) return false;
+    if (p.type === 'media') return true;
+    if (p.type === 'output' && (p.target === 'stream' || p.target === 'record' || p.target === 'recordPause')) return true;
+    return false;
+  }
+
+  Deck.isReadoutPad = isReadoutPad;
+
+  Deck.getPadReadoutText = (p) => {
+    if (!p) return '';
+    const { obs } = Deck;
+    const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+    if (!connected) return '';
+
+    if (p.type === 'volume' && p.inputName) {
+      const cur = obs.volumes?.[p.inputName];
+      if (typeof cur === 'number' && Number.isFinite(cur)) {
+        const dbVal = Math.round(cur * 10) / 10;
+        return `${dbVal} dB`;
+      }
+      return '';
+    }
+
+    if (p.type === 'output' && p.target === 'stream') {
+      if (!obs.outputs.stream) return '';
+      const st = obs.streamStatus;
+      if (!st) return '00:00:00';
+      return formatTimecode(st.outputTimecode, st.outputDuration) || '00:00:00';
+    }
+
+    if (p.type === 'output' && (p.target === 'record' || p.target === 'recordPause')) {
+      if (!obs.outputs.record) return '';
+      if (obs.outputs.recordPaused || obs.recordStatus?.outputPaused) return 'PAUSED';
+      const st = obs.recordStatus;
+      if (!st) return '00:00:00';
+      return formatTimecode(st.outputTimecode, st.outputDuration) || '00:00:00';
+    }
+
+    if (p.type === 'media' && p.inputName) {
+      const st = obs.mediaStatus?.[p.inputName];
+      const state = st?.mediaState || obs.mediaStates?.[p.inputName];
+      if (!state || state === 'OBS_MEDIA_STATE_STOPPED' || state === 'OBS_MEDIA_STATE_ENDED') return '';
+      if (st) {
+        return formatMediaTimeLeft(st.mediaDuration, st.mediaCursor, st.mediaTimecode);
+      }
+      return '';
+    }
+
+    return '';
+  };
+
+  Deck.fetchReadouts = async () => {
+    const { obs } = Deck;
+    const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+    if (!connected) return;
+    const activePads = Deck.getActivePads();
+    const hasStream = activePads.some((p) => p && p.type === 'output' && p.target === 'stream');
+    const hasRecord = activePads.some((p) => p && p.type === 'output' && (p.target === 'record' || p.target === 'recordPause'));
+    const mediaInputs = [...new Set(activePads.filter((p) => p && p.type === 'media' && p.inputName).map((p) => p.inputName))];
+
+    const calls = [];
+    if (hasStream) {
+      calls.push(Deck.obsCall('GetStreamStatus').then((r) => {
+        obs.streamStatus = r;
+        if (typeof r.outputActive === 'boolean') obs.outputs.stream = r.outputActive;
+      }).catch(() => {}));
+    }
+    if (hasRecord) {
+      calls.push(Deck.obsCall('GetRecordStatus').then((r) => {
+        obs.recordStatus = r;
+        if (typeof r.outputActive === 'boolean') obs.outputs.record = r.outputActive;
+        if (typeof r.outputPaused === 'boolean') obs.outputs.recordPaused = r.outputPaused;
+      }).catch(() => {}));
+    }
+    for (const name of mediaInputs) {
+      calls.push(Deck.obsCall('GetMediaInputStatus', { inputName: name }).then((r) => {
+        obs.mediaStatus = obs.mediaStatus || {};
+        obs.mediaStatus[name] = r;
+        if (r.mediaState) obs.mediaStates[name] = r.mediaState;
+      }).catch(() => {}));
+    }
+
+    if (calls.length > 0) {
+      await Promise.all(calls);
+    }
+    if (typeof Deck.updateReadoutPads === 'function') {
+      Deck.updateReadoutPads();
+    }
+  };
+
+  Deck.syncReadoutPolling = () => {
+    const { obs } = Deck;
+    const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+    const needsPolling = connected && Deck.getActivePads().some(needsReadoutPolling);
+    if (connected) {
+      const missingVolumes = Deck.getActivePads()
+        .filter((p) => p && p.type === 'volume' && p.inputName && typeof obs.volumes[p.inputName] !== 'number')
+        .map((p) => p.inputName);
+      if (missingVolumes.length > 0) {
+        Promise.all([...new Set(missingVolumes)].map(Deck.fetchVolume)).then(() => {
+          if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+        });
+      }
+    }
+    if (needsPolling) {
+      if (!obs.readoutTimer) {
+        Deck.fetchReadouts();
+        obs.readoutTimer = setInterval(() => {
+          const stillConnected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+          if (stillConnected && Deck.getActivePads().some(needsReadoutPolling)) {
+            Deck.fetchReadouts();
+          } else {
+            Deck.syncReadoutPolling();
+          }
+        }, 1000);
+      }
+    } else if (obs.readoutTimer) {
+      clearInterval(obs.readoutTimer);
+      obs.readoutTimer = null;
+    }
+  };
+
   function applyInputList(rawInputs) {
     const { obs } = Deck;
     const list = Array.isArray(rawInputs) ? rawInputs : [];
@@ -1844,6 +2013,8 @@
       Deck.updateSceneHeader();
       Deck.scheduleRenderGrid();
       Deck.syncStatsPolling();
+      Deck.syncReadoutPolling();
+      if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
     } catch (e) {
       Deck.setMsg(`Sync error: ${e.message}`);
     }
@@ -1964,17 +2135,24 @@
       Deck.scheduleRenderGrid();
     } else if (type === 'InputVolumeChanged') {
       if (d.inputName && typeof d.inputVolumeDb === 'number') obs.volumes[d.inputName] = d.inputVolumeDb;
+      if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
       Deck.scheduleRenderGrid();
     } else if (type === 'InputAudioMonitorTypeChanged') {
       if (d.inputName && d.monitorType) obs.monitors[d.inputName] = d.monitorType;
       Deck.scheduleRenderGrid();
     } else if (type === 'StreamStateChanged') {
       obs.outputs.stream = !!d.outputActive;
+      if (!d.outputActive) obs.streamStatus = null;
+      else if (typeof Deck.fetchReadouts === 'function') Deck.fetchReadouts();
+      if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
       Deck.scheduleRenderGrid();
     } else if (type === 'RecordStateChanged') {
       obs.outputs.record = !!d.outputActive;
       if (d.outputState === 'OBS_WEBSOCKET_OUTPUT_PAUSED') obs.outputs.recordPaused = true;
       else if (d.outputState === 'OBS_WEBSOCKET_OUTPUT_RESUMED' || !d.outputActive) obs.outputs.recordPaused = false;
+      if (!d.outputActive) obs.recordStatus = null;
+      else if (typeof Deck.fetchReadouts === 'function') Deck.fetchReadouts();
+      if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
       Deck.scheduleRenderGrid();
     } else if (type === 'VirtualcamStateChanged') {
       obs.outputs.vcam = !!d.outputActive;
@@ -1986,9 +2164,15 @@
       if (d.savedReplayPath) Deck.setMsg(`Replay saved: ${d.savedReplayPath}`);
     } else if (type === 'MediaInputPlaybackStarted') {
       if (d.inputName) obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_PLAYING';
+      if (typeof Deck.fetchReadouts === 'function') Deck.fetchReadouts();
+      if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
       Deck.scheduleRenderGrid();
     } else if (type === 'MediaInputPlaybackEnded') {
-      if (d.inputName) obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_ENDED';
+      if (d.inputName) {
+        obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_ENDED';
+        if (obs.mediaStatus) delete obs.mediaStatus[d.inputName];
+      }
+      if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
       Deck.scheduleRenderGrid();
     } else if (type === 'MediaInputActionTriggered') {
       if (d.inputName) {
@@ -2078,6 +2262,14 @@
       clearInterval(obs.statsTimer);
       obs.statsTimer = null;
     }
+    if (obs.readoutTimer) {
+      clearInterval(obs.readoutTimer);
+      obs.readoutTimer = null;
+    }
+    obs.streamStatus = null;
+    obs.recordStatus = null;
+    obs.mediaStatus = {};
+    if (typeof Deck.clearReadoutPads === 'function') Deck.clearReadoutPads();
     obs.activeSync = null;
     obs.queuedSync = null;
     for (const p of obs.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Disconnected')); }
@@ -2150,6 +2342,14 @@
         clearInterval(obs.statsTimer);
         obs.statsTimer = null;
       }
+      if (obs.readoutTimer) {
+        clearInterval(obs.readoutTimer);
+        obs.readoutTimer = null;
+      }
+      obs.streamStatus = null;
+      obs.recordStatus = null;
+      obs.mediaStatus = {};
+      if (typeof Deck.clearReadoutPads === 'function') Deck.clearReadoutPads();
       for (const p of obs.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Closed')); }
       obs.pending.clear();
       if (ev.code === 4009) {

@@ -431,6 +431,23 @@ body.edit-mode .select-bar {
   white-space: normal;
   word-break: break-word;
 }
+.pad.full-face .sub,
+.pad.hide-label .sub {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  background: rgba(0, 0, 0, .75);
+  padding: 2px 4px;
+  font-size: clamp(9px, 8.5cqi, 11px);
+  text-align: center;
+  box-sizing: border-box;
+  z-index: 2;
+}
+.pad .sub.paused {
+  color: var(--bad);
+}
 
 /* Custom Pad Graphics */
 .pad-icon-img {
