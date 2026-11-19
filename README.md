@@ -104,20 +104,20 @@ Open the URL printed by the installer or LAN helper (`node scripts/lan-helper.mj
 | 🔑 **Auth Failed** | Copy password from OBS **Show Connect Info** into **WS → Pass** |
 | ⬜ **Blank Dock** | URL must start with `file:///` and point to `deck.html` (macOS: allow Files & Folders access) |
 | 🔄 **Missing Items** | Connect to OBS, then click **↻ Sync** |
-| 📂 **Layout Reset** | `localStorage` follows the file path — **Export** before moving the folder |
+| 📂 **Layout Reset** | Layouts live in the browser's storage, not in the folder — **Export** to back up, and use **Snapshots** to roll back |
 
 <br>
 
 ## 🖥️ Multiple OBS Computers
 
-> 💡 **Tip:** To control more than one OBS machine (e.g. a gaming PC and a streaming PC), copy the Deck folder once per OBS and open each copy in its own dock (or Phone Deck) pointed at its OBS with `?port=` and `?host=`, because saved layouts are tied to the folder they are opened from.
+> 💡 **Tip:** Open one dock per OBS machine (e.g. a gaming PC and a streaming PC) and point each at its own OBS with `?host=` and `?port=` in the dock URL.
 
-| Computer | Deck Folder | Dock or Phone URL |
-|---|---|---|
-| 🎮 **Gaming PC** (local) | `Documents/obs-virtual-deck-gaming/` | `file:///.../obs-virtual-deck-gaming/deck.html?port=4455` |
-| 📡 **Streaming PC** (remote) | `Documents/obs-virtual-deck-streaming/` | `file:///.../obs-virtual-deck-streaming/deck.html?host=192.168.1.50&port=4455` |
+| Computer | Dock or Phone URL |
+|---|---|
+| 🎮 **Gaming PC** (local) | `file:///.../obs-virtual-deck/deck.html?port=4455` |
+| 📡 **Streaming PC** (remote) | `file:///.../obs-virtual-deck/deck.html?host=192.168.1.50&port=4455` |
 
-Each copy maintains its own independent Pages, Pads, and settings. On Phone Deck, append the same `?host=` and `?port=` query parameters to the LAN URL (e.g. `http://192.168.1.50:8080/deck.html?host=192.168.1.50&port=4455`).
+Each dock connects to the OBS in its own URL, but **both share one layout**: the browser keeps a single storage area for every `file://` page, so copying the folder does not separate them. Keep the controls for both machines on separate Pages. Leave the WS host and port fields alone in these docks; typing a host or port there is saved and then overrides the URL in every dock. On Phone Deck, add the same `?host=` and `?port=` to the LAN URL (e.g. `http://192.168.1.50:8080/deck.html?host=192.168.1.50&port=4455`).
 
 <br>
 
