@@ -67,3 +67,7 @@ _Avoid_: Auto-page, scene profile
 **Live Readout**:
 A live value shown on a Pad alongside its on/off state, such as elapsed stream or recording time, or an input's volume level.
 _Avoid_: Pad stats, overlay text
+
+**Snapshot**:
+An automatic layout backup stored in browser IndexedDB before destructive operations or debounced after edits, capable of restoring earlier Pages and Pad Graphics without persisting the OBS WebSocket password.
+_Avoid_: Backup file, revision, autosave slot

@@ -13,6 +13,7 @@
 <script defer src="deck/ui-palette.js"></script>
 <script defer src="deck/ui-select.js"></script>
 <script defer src="deck/ui-dialogs.js"></script>
+<script defer src="deck/snapshots.js"></script>
 <script defer src="deck/ui-boot.js"></script>
 </head>
 <body>
@@ -35,6 +36,7 @@
   <button id="btn-theme" class="btn sm" type="button" title="Toggle Dark/Light Theme">☀️</button>
   <button id="btn-panic-cfg" class="btn sm" title="Configure PANIC reset steps">⚙ Panic</button>
   <button id="btn-panic" class="btn sm panic" title="Abort running Timed Macros &amp; Auto-Off timers and run PANIC reset">⚡ PANIC</button>
+  <button id="btn-snapshots" class="btn sm" title="View and restore layout snapshots">Snapshots</button>
   <button id="btn-export" class="btn sm" title="Export Deck configuration as JSON (passwords omitted)">Export</button>
   <button id="btn-import" class="btn sm" title="Import Deck configuration JSON">Import</button>
   <input id="file-import" type="file" accept=".json,application/json" hidden>
@@ -225,6 +227,19 @@
       <button type="button" id="btn-panic-pull" class="btn sm">Add Deck Filters (Off)</button>
       <div class="spacer"></div>
       <button type="button" id="btn-panic-save" class="btn sm on">Save</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="snapshots-dlg">
+  <div class="dlg-h"><span>Layout Snapshots</span><button id="snapshots-close" type="button" class="btn sm">✕</button></div>
+  <div class="frm">
+    <div style="font-size:11px;color:var(--muted)">Automatic layout backups stored in browser IndexedDB. Restoring a snapshot saves your current layout first.</div>
+    <div id="snapshots-list" class="snapshots-list"></div>
+    <div class="dlg-f">
+      <button type="button" id="btn-snapshot-take" class="btn sm">Take Snapshot</button>
+      <div class="spacer"></div>
+      <button type="button" id="btn-snapshots-cancel" class="btn sm">Close</button>
     </div>
   </div>
 </dialog>
