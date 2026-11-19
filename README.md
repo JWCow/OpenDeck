@@ -1,13 +1,13 @@
 # 🎛️ OpenDeck
 
 [![Latest Release](https://img.shields.io/github/v/release/JWCow/obs-virtual-deck?label=Release&color=2563eb)](https://github.com/JWCow/obs-virtual-deck/releases/latest)
-[![Download ZIP](https://img.shields.io/badge/Download-opendeck--v2.2.1.zip-16a34a?logo=github)](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck-v2.2.1.zip)
+[![Download ZIP](https://img.shields.io/badge/Download-opendeck.zip-16a34a?logo=github)](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck.zip)
 [![Platforms](https://img.shields.io/badge/macOS%20%26%20Windows-OBS%2028%2B-334155)](#quick-start)
 
 **Zero-backend virtual Stream Deck for OBS Studio.**  
 Drop `deck.html` into an OBS Custom Browser Dock — no plugins, no server, no build step.
 
-**[⬇️ Download opendeck-v2.2.1.zip](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck-v2.2.1.zip)** · [All Releases](https://github.com/JWCow/obs-virtual-deck/releases)
+**[⬇️ Download the latest opendeck.zip](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck.zip)** · [All Releases](https://github.com/JWCow/obs-virtual-deck/releases)
 
 <br>
 
@@ -70,9 +70,9 @@ Drop `deck.html` into an OBS Custom Browser Dock — no plugins, no server, no b
 
 ## 🚀 Quick Start
 
-**1. 📦 Install** — Download & extract the ZIP, then run the setup helper inside:
+**1. 📦 Install** — Download & extract the ZIP (it unpacks to an `obs-virtual-deck` folder), then run the setup helper inside. It copies OpenDeck to `Documents/obs-virtual-deck` and **copies the dock URL to your clipboard**:
 - 🪟 **Windows:** `Install-Windows.bat` *(SmartScreen: More info → Run anyway)*
-- 🍎 **macOS:** `Install-Mac.command` *(Right-click → Open, or `bash ~/Downloads/obs-virtual-deck/Install-Mac.command`)*
+- 🍎 **macOS:** `Install-Mac.command` *(Right-click → Open, or run `bash ~/Downloads/obs-virtual-deck/Install-Mac.command` if you extracted it in Downloads)*
 
 <br>
 
@@ -80,7 +80,7 @@ Drop `deck.html` into an OBS Custom Browser Dock — no plugins, no server, no b
 
 <br>
 
-**3. 🖥️ Add OBS Dock** — **Docks → Custom Browser Docks...** → name it `OpenDeck` → paste the copied `file:///.../deck.html` URL → **Apply**.
+**3. 🖥️ Add OBS Dock** — **Docks → Custom Browser Docks...** → name it `OpenDeck` → paste the `file:///.../deck.html` URL the installer copied (it also prints it in the installer window) → **Apply**.
 
 <br>
 
