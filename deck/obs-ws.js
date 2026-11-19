@@ -466,6 +466,8 @@
       reconnectTimer: null,
       statsTimer: null,
       manualClose: false,
+      activeSync: null,
+      queuedSync: null,
       scenes: [],
       groups: new Set(),
       inputs: [],
@@ -1134,18 +1136,19 @@
     const r = await Deck.obsCall(req, { sceneName: name });
     const items = r.sceneItems || [];
     obs.itemsByScene[name] = items;
-    for (const it of items) {
-      if (it.isGroup) {
+    const groupItems = items.filter((it) => it.isGroup);
+    if (groupItems.length) {
+      await Promise.all(groupItems.map(async (it) => {
         obs.groups.add(it.sourceName);
         try {
           const gr = await Deck.obsCall('GetGroupSceneItemList', { sceneName: it.sourceName });
           obs.itemsByScene[it.sourceName] = gr.sceneItems || [];
         } catch {}
-      }
+      }));
     }
   }
 
-  Deck.syncObsState = async () => {
+  async function performSync() {
     const { obs, cfg } = Deck;
     try {
       const safe = (req, data) => Deck.obsCall(req, data).catch(() => null);
@@ -1221,9 +1224,7 @@
 
       obs.groups = new Set();
       obs.itemsByScene = {};
-      for (const s of obs.scenes) {
-        try { await refreshSceneOrGroupItems(s); } catch {}
-      }
+      await Promise.all(obs.scenes.map((s) => refreshSceneOrGroupItems(s).catch(() => {})));
 
       const filterSources = new Set([...obs.scenes, ...obs.groups, ...obs.inputs]);
       for (const list of Object.values(obs.itemsByScene)) {
@@ -1263,6 +1264,26 @@
     } catch (e) {
       Deck.setMsg(`Sync error: ${e.message}`);
     }
+  }
+
+  Deck.syncObsState = () => {
+    const { obs } = Deck;
+    if (obs.activeSync) {
+      if (!obs.queuedSync) {
+        obs.queuedSync = obs.activeSync
+          .catch(() => {})
+          .then(() => {
+            obs.queuedSync = null;
+            if (!obs.ws || obs.ws.readyState !== 1) return;
+            return Deck.syncObsState();
+          });
+      }
+      return obs.queuedSync;
+    }
+    obs.activeSync = performSync().finally(() => {
+      obs.activeSync = null;
+    });
+    return obs.activeSync;
   };
 
   async function handleObsEvent(type, d) {
@@ -1414,6 +1435,8 @@
       clearInterval(obs.statsTimer);
       obs.statsTimer = null;
     }
+    obs.activeSync = null;
+    obs.queuedSync = null;
     for (const p of obs.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Disconnected')); }
     obs.pending.clear();
     if (obs.ws) { const w = obs.ws; obs.ws = null; try { w.close(); } catch {} }
@@ -1478,6 +1501,8 @@
     ws.onclose = async (ev) => {
       if (obs.ws !== ws) return;
       obs.ws = null;
+      obs.activeSync = null;
+      obs.queuedSync = null;
       if (obs.statsTimer) {
         clearInterval(obs.statsTimer);
         obs.statsTimer = null;

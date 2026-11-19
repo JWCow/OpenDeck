@@ -97,6 +97,9 @@ export function createFakeObs(requireAuth = true) {
     lastSavedReplay: '',
     calls: [],
     connections: 0,
+    sceneItemListDelayMs: 0,
+    inFlightSceneItemRequests: 0,
+    maxConcurrentSceneItemRequests: 0,
   };
 
   const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
@@ -226,6 +229,25 @@ export function createFakeObs(requireAuth = true) {
         };
       } else if (requestType === 'GetSceneItemList') {
         responseData = { sceneItems: state.sceneItems[requestData.sceneName] || [] };
+        if (state.sceneItemListDelayMs > 0) {
+          state.inFlightSceneItemRequests = (state.inFlightSceneItemRequests || 0) + 1;
+          state.maxConcurrentSceneItemRequests = Math.max(
+            state.maxConcurrentSceneItemRequests || 0,
+            state.inFlightSceneItemRequests
+          );
+          setTimeout(() => {
+            state.inFlightSceneItemRequests--;
+            if (ws.readyState === 1) {
+              try {
+                ws.send(JSON.stringify({
+                  op: 7,
+                  d: { requestType, requestId, requestStatus: { result: ok, code: ok ? 100 : 600, comment }, responseData },
+                }));
+              } catch {}
+            }
+          }, state.sceneItemListDelayMs);
+          return;
+        }
       } else if (requestType === 'GetGroupSceneItemList') {
         responseData = { sceneItems: state.groupItems[requestData.sceneName] || [] };
       } else if (requestType === 'GetSourceFilterList') {
