@@ -720,22 +720,26 @@
   $('btn-pad-cancel').addEventListener('click', () => $('pad-dlg').close());
 
   $('btn-pad-clear').addEventListener('click', () => {
-    const page = Deck.cfg.pages.find((d) => d.id === editingPageId) || Deck.getActivePage();
-    if (page.pads[editingIdx]) page.pads[editingIdx] = { type: 'none', label: '', icon: '', color: COLORS[0] };
-    Deck.saveCfg();
+    Deck.pushHistory(() => {
+      const page = Deck.cfg.pages.find((d) => d.id === editingPageId) || Deck.getActivePage();
+      if (page.pads[editingIdx]) page.pads[editingIdx] = { type: 'none', label: '', icon: '', color: COLORS[0] };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
     $('pad-dlg').close();
-    Deck.renderGrid();
   });
 
   $('btn-pad-dup').addEventListener('click', () => {
-    const dstIdx = Deck.duplicatePad(editingIdx, editingPageId, editingPageId);
-    if (dstIdx >= 0) {
-      $('pad-dlg').close();
-      Deck.setMsg(`Duplicated pad to slot ${dstIdx + 1}`);
-      Deck.renderGrid();
-    } else {
-      Deck.setMsg('Page is full — cannot duplicate');
-    }
+    Deck.pushHistory(() => {
+      const dstIdx = Deck.duplicatePad(editingIdx, editingPageId, editingPageId);
+      if (dstIdx >= 0) {
+        $('pad-dlg').close();
+        Deck.setMsg(`Duplicated pad to slot ${dstIdx + 1}`);
+        Deck.renderGrid();
+      } else {
+        Deck.setMsg('Page is full — cannot duplicate');
+      }
+    });
   });
 
   $('pad-form').addEventListener('submit', () => {
@@ -756,9 +760,11 @@
       ));
     }
     const page = Deck.cfg.pages.find((d) => d.id === editingPageId) || Deck.getActivePage();
-    page.pads[editingIdx] = saved;
-    Deck.saveCfg();
-    Deck.renderGrid();
+    Deck.pushHistory(() => {
+      page.pads[editingIdx] = saved;
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
     if (Deck.obs.status === 'ok') {
       const syncStep = (st) => {
         if (st.type === 'mute' && st.inputName) Deck.fetchMute(st.inputName).then(Deck.renderGrid);
