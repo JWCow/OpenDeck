@@ -82,14 +82,18 @@
   // Page & Grid Settings Dialog
   $('btn-deck-add').addEventListener('click', () => {
     Deck.clearSelection();
-    const created = Deck.addPage({ switchTo: true });
-    Deck.setMsg(`Added Page "${created.name}" (${created.cols}×${created.rows})`);
+    Deck.pushHistory(() => {
+      const created = Deck.addPage({ switchTo: true });
+      Deck.setMsg(`Added Page "${created.name}" (${created.cols}×${created.rows})`);
+    });
   });
   $('btn-deck-dup').addEventListener('click', () => {
     Deck.clearSelection();
     const cur = Deck.getActivePage();
-    const copy = Deck.duplicatePage(cur.id);
-    if (copy) Deck.setMsg(`Duplicated "${cur.name}" -> "${copy.name}"`);
+    Deck.pushHistory(() => {
+      const copy = Deck.duplicatePage(cur.id);
+      if (copy) Deck.setMsg(`Duplicated "${cur.name}" -> "${copy.name}"`);
+    });
   });
   $('btn-deck-cfg').addEventListener('click', openPageDialog);
   $('deck-dlg-close').addEventListener('click', () => $('deck-dlg').close());
@@ -106,26 +110,32 @@
   $('btn-deck-dup-dlg').addEventListener('click', () => {
     const cur = Deck.getActivePage();
     $('deck-dlg').close();
-    const copy = Deck.duplicatePage(cur.id);
-    if (copy) Deck.setMsg(`Duplicated "${cur.name}" -> "${copy.name}"`);
+    Deck.pushHistory(() => {
+      const copy = Deck.duplicatePage(cur.id);
+      if (copy) Deck.setMsg(`Duplicated "${cur.name}" -> "${copy.name}"`);
+    });
   });
   $('btn-deck-del').addEventListener('click', () => {
     if (Deck.cfg.pages.length <= 1) return;
     const cur = Deck.getActivePage();
     if (!confirm(`Delete Page "${cur.name}" and its pads?`)) return;
     $('deck-dlg').close();
-    Deck.deletePage(cur.id);
-    Deck.setMsg(`Deleted Page "${cur.name}"`);
+    Deck.pushHistory(() => {
+      Deck.deletePage(cur.id);
+      Deck.setMsg(`Deleted Page "${cur.name}"`);
+    });
   });
   $('deck-form').addEventListener('submit', () => {
     const cur = Deck.getActivePage();
     const name = $('d-name').value.trim() || cur.name;
     const cols = Number($('d-cols').value) || cur.cols;
     const rows = Number($('d-rows').value) || cur.rows;
-    Deck.renamePage(cur.id, name);
-    Deck.resizePage(cur.id, cols, rows);
-    const updated = Deck.getActivePage();
-    Deck.setMsg(`Page "${updated.name}" (${updated.cols}×${updated.rows})`);
+    Deck.pushHistory(() => {
+      Deck.renamePage(cur.id, name);
+      Deck.resizePage(cur.id, cols, rows);
+      const updated = Deck.getActivePage();
+      Deck.setMsg(`Page "${updated.name}" (${updated.cols}×${updated.rows})`);
+    });
   });
 
   // Auto-Import Wizard Dialog
@@ -172,8 +182,10 @@
     Deck.renderStepList($('panic-steps'), draftPanic, false);
   });
   $('btn-panic-save').addEventListener('click', () => {
-    Deck.cfg.panicSteps = draftPanic.map(Deck.normalizePad).filter((s) => s.type !== 'none');
-    Deck.saveCfg();
+    Deck.pushHistory(() => {
+      Deck.cfg.panicSteps = draftPanic.map(Deck.normalizePad).filter((s) => s.type !== 'none');
+      Deck.saveCfg();
+    });
     $('panic-dlg').close();
     Deck.setMsg(`Saved ${Deck.cfg.panicSteps.length} PANIC step(s)`);
   });
