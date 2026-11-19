@@ -27,6 +27,7 @@ Before changing terminology, onboarding, or connection behavior, read:
 - `deck/snapshots.js` — Automatic IndexedDB layout backups (`Deck.createSnapshot`, `Deck.listSnapshots`, `Deck.restoreSnapshot`, debounced edit auto-saving, pruning to newest 20) and Snapshots dialog.
 - `deck/ui-boot.js` — Font Scaler (`initFontScaler`), Dark/Light Theme toggle (`initTheme`), toolbar & WebSocket connection controls, v1/v2/v2.1/v2.2 JSON export/import, layout reset, and initial boot sequence.
 - `installers/Install-Windows.bat` & `installers/Install-Mac.command` — Zero-dependency 1-click setup helpers packaged at the root of release ZIPs. They copy `obs-virtual-deck` to `Documents/obs-virtual-deck`, inspect local OBS `obs-websocket/config.json` read-only for `server_enabled` / `server_port` (appending `?port=<server_port>` when detected and reporting WebSocket status without ever reading or embedding `server_password`), and copy the `file:///.../deck.html` URL to clipboard.
+- `scripts/lan-helper.mjs` — Zero-dependency HTTP static file server helper for Phone Deck control on the LAN.
 - `scripts/build-release.mjs` — Zero-dependency Node.js release packager (`npm run build:release`) outputting `dist/obs-virtual-deck/`, `dist/obs-virtual-deck-v<version>.zip`, `dist/obs-virtual-deck-latest.zip`, and `dist/obs-virtual-deck.zip`.
 - `.github/workflows/release.yml` — GitHub Actions workflow triggered on `v*` tags and `workflow_dispatch`; verifies tag/version parity, runs `npm test`, runs `npm run build:release`, and attaches ZIPs to GitHub Releases.
 - `test-deck.mjs`, `test-deck-edge.mjs`, `test-deck-fake-obs.mjs` — Hermetic Playwright E2E test suites and fake `obs-websocket` v5 server (`ws`).
@@ -72,7 +73,7 @@ Keep action definitions consistent across all three runtime files:
 ## Versioning & Release Packaging
 
 - Keep `Deck.VERSION` in `deck/obs-ws.js`, `#version-badge` fallback in `deck.html`, and `version` in `package.json` synchronized.
-- `npm run build:release` generates clean user ZIPs (`dist/obs-virtual-deck-v<version>.zip`, `dist/obs-virtual-deck-latest.zip`, `dist/obs-virtual-deck.zip`) containing only `deck.html`, `deck/*`, `README.md`, `Install-Windows.bat`, and `Install-Mac.command` (with UNIX `0755` executable mode in the ZIP) — never `node_modules`, `test-*`, or `.git`.
+- `npm run build:release` generates clean user ZIPs (`dist/obs-virtual-deck-v<version>.zip`, `dist/obs-virtual-deck-latest.zip`, `dist/obs-virtual-deck.zip`) containing only `deck.html`, `deck/*`, `scripts/lan-helper.mjs`, `README.md`, `Install-Windows.bat`, and `Install-Mac.command` (with UNIX `0755` executable mode in the ZIP) — never `node_modules`, `test-*`, or `.git`.
 - `.github/workflows/release.yml` enforces tag/version matching on `v*` tags, runs `npm test`, runs `npm run build:release`, and publishes the ZIP assets to GitHub Releases.
 
 ## Verification

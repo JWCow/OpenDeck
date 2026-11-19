@@ -23,6 +23,10 @@ if [ "$SRC_REAL" != "$DEST_REAL" ]; then
   if [ -f "$SCRIPT_DIR/README.md" ]; then
     cp -f "$SCRIPT_DIR/README.md" "$DEST_DIR/README.md"
   fi
+  if [ -d "$SCRIPT_DIR/scripts" ]; then
+    mkdir -p "$DEST_DIR/scripts"
+    cp -Rf "$SCRIPT_DIR/scripts/." "$DEST_DIR/scripts/"
+  fi
 fi
 
 # Clear quarantine flag on the installed web assets if present
@@ -165,6 +169,13 @@ if [ "$WS_FOUND" = "true" ] && [ "$WS_ENABLED" = "true" ]; then
   echo "  2. OBS WebSocket is already enabled on port $DISPLAY_PORT - open the dock and click Connect!"
 else
   echo "  2. Tools -> WebSocket Server Settings -> Enable WebSocket server (Port $DISPLAY_PORT)."
+fi
+echo ""
+echo "Phone Deck (LAN Control):"
+echo "  To control OBS from a phone or tablet on the same Wi-Fi:"
+echo "  node \"$DEST_DIR/scripts/lan-helper.mjs\" --obs-port=\"$DISPLAY_PORT\""
+if [ "${OBS_DECK_START_LAN:-0}" = "1" ]; then
+  node "$DEST_DIR/scripts/lan-helper.mjs" --obs-port="$DISPLAY_PORT" &
 fi
 echo ""
 if [ -t 0 ]; then

@@ -80,4 +80,9 @@ _Avoid_: Change log, edit history, revision stack
 A pre-configured Deck Page template (such as Solo Streamer, Talk + Slides, or Podcast/Interview) with fixed broadcast pads and dynamic slots populated from read-only OBS state when connected, or marked empty pads when disconnected.
 _Avoid_: Preset profile, sample deck, default template
 
+**Phone Deck**:
+The OpenDeck control surface served over local HTTP and accessed from a phone or tablet browser on the same local network, connecting directly to OBS WebSocket on the host machine without embedding passwords in URLs.
+_Avoid_: Remote deck, mobile app, web companion
+
+
 

@@ -1007,3 +1007,16 @@ dialog::backdrop { background: rgba(0, 0, 0, .65); }
   .pad .tag { display: none; }
   .pad .led { top: 3px; right: 3px; width: 5px; height: 5px; }
 }
+
+/* Phone Deck portrait breakpoint (Pads >= 44px, no overflow, keeping 360x420 dock unchanged) */
+@media (max-width: 600px) and (min-height: 441px) and (orientation: portrait) {
+  .grid {
+    grid-template-columns: repeat(var(--cols), minmax(44px, 1fr));
+    grid-template-rows: repeat(var(--rows), minmax(44px, 1fr));
+  }
+  .pad {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+

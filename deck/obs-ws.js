@@ -97,6 +97,14 @@
     return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
   }
 
+  function parseValidHost(raw) {
+    if (raw == null) return null;
+    const str = String(raw).trim();
+    if (!str) return null;
+    const clean = str.replace(/\/.*$/, '').trim();
+    return clean || null;
+  }
+
   function getUrlPort() {
     try {
       if (typeof location === 'undefined' || !location.search) return null;
@@ -104,6 +112,21 @@
     } catch {
       return null;
     }
+  }
+
+  function getUrlHost() {
+    try {
+      if (typeof location === 'undefined' || !location.search) return null;
+      return parseValidHost(new URLSearchParams(location.search).get('host'));
+    } catch {
+      return null;
+    }
+  }
+
+  function isLocalHost(h) {
+    if (!h) return true;
+    const clean = String(h).trim().toLowerCase().replace(/^\[|\]$/g, '');
+    return clean === '127.0.0.1' || clean === 'localhost' || clean === '::1' || clean === '0.0.0.0' || clean.startsWith('127.');
   }
 
   function getPadContextSubtitle(pad) {
@@ -388,6 +411,7 @@
       ws.port = port >= 1 && port <= 65535 ? port : 4455;
       ws.password = typeof raw.ws.password === 'string' ? raw.ws.password : fallbackPassword;
       if (raw.ws.manualPort) ws.manualPort = true;
+      if (raw.ws.manualHost) ws.manualHost = true;
     }
 
     let pages;
@@ -465,6 +489,10 @@
       }
     } catch {}
 
+    const urlHost = getUrlHost();
+    if (urlHost && !state.ws.manualHost) {
+      state.ws.host = urlHost;
+    }
     const urlPort = getUrlPort();
     if (urlPort && !state.ws.manualPort) {
       state.ws.port = urlPort;
@@ -541,6 +569,7 @@
     $,
     esc,
     getUrlPort,
+    getUrlHost,
     getPadContextSubtitle,
     normalizePad,
     normalizeStep,
@@ -2309,7 +2338,7 @@
   };
 
   function scheduleReconnect(ev) {
-    const { obs } = Deck;
+    const { obs, cfg } = Deck;
     clearTimeout(obs.reconnectTimer);
     obs.reconnectTimer = null;
     if (obs.reconnectCountdown) {
@@ -2326,9 +2355,13 @@
     const reasonText = ev?.reason || entry?.name || (code ? `Code ${code}` : 'Connection dropped');
     let remaining = delaySec;
 
+    const host = obs.currentHost || cfg?.ws?.host || '';
+    const isNonLocal = host && !isLocalHost(host);
+    const lanNote = isNonLocal ? ' · OBS WebSocket must be reachable on the LAN' : '';
+
     const updateStatus = () => {
       Deck.setConn('bad', `Retry in ${remaining}s`);
-      Deck.setMsg(`Disconnected: ${reasonText}${codeStr} · Retrying in ${remaining}s…`);
+      Deck.setMsg(`Disconnected: ${reasonText}${codeStr}${lanNote} · Retrying in ${remaining}s…`);
     };
 
     updateStatus();
@@ -2392,12 +2425,16 @@
     if ($('ws-host')) $('ws-host').value = host;
     if ($('ws-port')) $('ws-port').value = port;
 
+    obs.currentHost = host;
+
+    const urlHost = getUrlHost();
     const urlPort = getUrlPort();
     const isManual = !isBoot && (opts?.manual === true || (typeof Event !== 'undefined' && opts instanceof Event));
-    const keepManual = Boolean(cfg.ws.manualPort) || (isManual && port !== (urlPort || 4455));
-    cfg.ws = keepManual
-      ? { host, port, password, manualPort: true }
-      : { host, port, password };
+    const keepManualPort = Boolean(cfg.ws.manualPort) || (isManual && port !== (urlPort || 4455));
+    const keepManualHost = Boolean(cfg.ws.manualHost) || (isManual && host !== (urlHost || '127.0.0.1'));
+    cfg.ws = { host, port, password };
+    if (keepManualPort) cfg.ws.manualPort = true;
+    if (keepManualHost) cfg.ws.manualHost = true;
     Deck.saveCfg();
     Deck.setConn('wait', 'Connecting…');
 
@@ -2438,14 +2475,16 @@
       const closeEntry = CLOSE_CODES[ev.code];
       if (closeEntry?.unrecoverable) {
         const name = closeEntry.name;
+        const isNonLocal = host && !isLocalHost(host);
+        const lanNote = isNonLocal ? ' · OBS WebSocket must be reachable on the LAN' : '';
         const detail = ev.reason ? `${ev.reason} (${ev.code})` : `${name} (${ev.code})`;
         Deck.setConn('bad', name);
-        Deck.setMsg(`${detail} — retries stopped`);
+        Deck.setMsg(`${detail}${lanNote} — retries stopped`);
         return;
       }
 
       if (!opened && isBoot && !obs.hasProbedOnBoot
-        && host === '127.0.0.1' && port === 4455 && !cfg.ws.manualPort && !urlPort) {
+        && isLocalHost(host) && port === 4455 && !cfg.ws.manualPort && !cfg.ws.manualHost && !urlPort && !urlHost) {
         obs.hasProbedOnBoot = true;
         Deck.setConn('wait', 'Scanning OBS ports…');
         Deck.setMsg('Probing local OBS WebSocket ports…');
