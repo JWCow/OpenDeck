@@ -145,9 +145,34 @@
     return wrap;
   }
 
-  function makeAutoOffField(obj) {
+  function makeHoldField(obj, onChange) {
     const wrap = document.createElement('div');
     wrap.className = 'row';
+    wrap.id = 'f-hold-row';
+    const lbl = document.createElement('label');
+    lbl.className = 'chk-label';
+    const inp = document.createElement('input');
+    inp.id = 'f-hold';
+    inp.type = 'checkbox';
+    inp.checked = Boolean(obj.hold);
+    inp.addEventListener('change', () => {
+      if (inp.checked) {
+        obj.hold = true;
+        delete obj.autoOffMs;
+      } else {
+        delete obj.hold;
+      }
+      if (onChange) onChange();
+    });
+    lbl.append(inp, document.createTextNode(' Hold (momentary / push to talk)'));
+    wrap.appendChild(lbl);
+    return wrap;
+  }
+
+  function makeAutoOffField(obj, onChange) {
+    const wrap = document.createElement('div');
+    wrap.className = 'row';
+    wrap.id = 'f-auto-off-row';
     const lbl = document.createElement('label');
     lbl.textContent = 'Auto-off after (sec) — 0 = stay toggled';
     const box = document.createElement('div');
@@ -163,15 +188,25 @@
     const setSec = (sec) => {
       const n = Number(sec);
       const ms = Number.isFinite(n) && n > 0 ? Math.round(n * 1000) : 0;
-      if (ms > 0) obj.autoOffMs = ms;
-      else delete obj.autoOffMs;
+      if (ms > 0) {
+        obj.autoOffMs = ms;
+        delete obj.hold;
+      } else {
+        delete obj.autoOffMs;
+      }
       inp.value = ms > 0 ? String(ms / 1000) : '0';
+      if (onChange) onChange();
     };
 
     inp.addEventListener('input', () => {
       const n = Number(inp.value);
-      if (Number.isFinite(n) && n > 0) obj.autoOffMs = Math.round(n * 1000);
-      else delete obj.autoOffMs;
+      if (Number.isFinite(n) && n > 0) {
+        obj.autoOffMs = Math.round(n * 1000);
+        delete obj.hold;
+      } else {
+        delete obj.autoOffMs;
+      }
+      if (onChange) onChange();
     });
 
     const chips = document.createElement('div');
@@ -188,6 +223,32 @@
     box.append(inp, chips);
     wrap.append(lbl, box);
     return wrap;
+  }
+
+  function attachHoldAndAutoOff(container, obj) {
+    let holdRow, autoOffRow;
+    const sync = () => {
+      if (obj.hold) {
+        holdRow.hidden = false;
+        autoOffRow.hidden = true;
+        const inp = autoOffRow.querySelector('#f-auto-off');
+        if (inp) inp.value = '0';
+      } else if (obj.autoOffMs > 0) {
+        holdRow.hidden = true;
+        autoOffRow.hidden = false;
+        const chk = holdRow.querySelector('#f-hold');
+        if (chk) chk.checked = false;
+      } else {
+        holdRow.hidden = false;
+        autoOffRow.hidden = false;
+        const chk = holdRow.querySelector('#f-hold');
+        if (chk) chk.checked = false;
+      }
+    };
+    holdRow = makeHoldField(obj, sync);
+    autoOffRow = makeAutoOffField(obj, sync);
+    container.append(holdRow, autoOffRow);
+    sync();
   }
 
   function renderActionFields(container, obj, allowWait) {
@@ -228,7 +289,7 @@
           ['toggle', 'Toggle'], ['show', 'Show'], ['hide', 'Hide'], ['solo', 'Solo (Hide Others)'],
         ], (v) => { obj.mode = v; })
       );
-      if (!allowWait) container.appendChild(makeAutoOffField(obj));
+      if (!allowWait) attachHoldAndAutoOff(container, obj);
     } else if (t === 'transform') {
       if (!obj.preset) obj.preset = 'toggle_pip';
       let srcPick;
@@ -282,7 +343,7 @@
           ['toggle', 'Toggle'], ['enable', 'Enable'], ['disable', 'Disable'],
         ], (v) => { obj.mode = v; })
       );
-      if (!allowWait) container.appendChild(makeAutoOffField(obj));
+      if (!allowWait) attachHoldAndAutoOff(container, obj);
     } else if (t === 'mute') {
       container.append(
         makeObsSelect('Input Name', obj.inputName, obs.inputs, (v) => { obj.inputName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select audio input…').el,
@@ -290,7 +351,7 @@
           ['toggle', 'Toggle'], ['mute', 'Mute'], ['unmute', 'Unmute'],
         ], (v) => { obj.mode = v; })
       );
-      if (!allowWait) container.appendChild(makeAutoOffField(obj));
+      if (!allowWait) attachHoldAndAutoOff(container, obj);
     } else if (t === 'monitor') {
       if (!obj.monitorType) obj.monitorType = 'cycle';
       container.append(
@@ -545,6 +606,8 @@
     const f = $('f-fields');
     f.innerHTML = '';
     draftPad.type = $('f-type').value;
+    if (!Deck.HOLD_TYPES.has(draftPad.type)) delete draftPad.hold;
+    if (!Deck.AUTO_OFF_TYPES.has(draftPad.type)) delete draftPad.autoOffMs;
     if (draftPad.type === 'macro') {
       const list = document.createElement('div');
       list.className = 'steps';

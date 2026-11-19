@@ -20,6 +20,7 @@
     'stats', 'hotkey', 'chapter', 'monitor', 'transform', 'image',
   ];
   const AUTO_OFF_TYPES = new Set(['source', 'filter', 'mute', 'studio', 'output', 'media']);
+  const HOLD_TYPES = new Set(['mute', 'source', 'filter']);
   const MONITOR_TYPES = [
     'OBS_MONITORING_TYPE_NONE',
     'OBS_MONITORING_TYPE_MONITOR_ONLY',
@@ -238,6 +239,9 @@
     if (!isStep && AUTO_OFF_TYPES.has(type)) {
       const ms = sanitizeAutoOff(raw.autoOffMs);
       if (ms > 0) out.autoOffMs = ms;
+    }
+    if (!isStep && HOLD_TYPES.has(type) && Boolean(raw.hold) && !(out.autoOffMs > 0)) {
+      out.hold = true;
     }
     return out;
   }
@@ -519,6 +523,7 @@
     COLORS,
     PAD_TYPES,
     AUTO_OFF_TYPES,
+    HOLD_TYPES,
     MONITOR_TYPES,
     TRANSFORM_PRESETS,
     $,
@@ -679,6 +684,9 @@
   Deck.setActivePage = (pageId) => {
     const page = Deck.cfg.pages.find((d) => d.id === pageId);
     if (!page) return null;
+    if (page.id !== Deck.cfg.activePageId) {
+      if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(Deck.cfg.activePageId);
+    }
     Deck.cfg.activePageId = page.id;
     Deck.saveCfg();
     Deck.renderGrid();
@@ -1383,6 +1391,13 @@
         try { await Deck.syncTransforms(); } catch {}
       }
 
+      if (Deck.pendingHoldRestores && Deck.pendingHoldRestores.length > 0) {
+        const pending = Deck.pendingHoldRestores.splice(0, Deck.pendingHoldRestores.length);
+        for (const act of pending) {
+          try { await Deck.execAction(act); } catch {}
+        }
+      }
+
       Deck.updateSceneHeader();
       Deck.scheduleRenderGrid();
       Deck.syncStatsPolling();
@@ -1585,6 +1600,9 @@
 
   Deck.disconnectObs = (manual = true) => {
     const { obs } = Deck;
+    if (typeof Deck.releaseAllHeld === 'function') {
+      try { Deck.releaseAllHeld(); } catch {}
+    }
     obs.manualClose = manual;
     clearTimeout(obs.reconnectTimer);
     if (obs.statsTimer) {
@@ -1656,6 +1674,9 @@
 
     ws.onclose = async (ev) => {
       if (obs.ws !== ws) return;
+      if (typeof Deck.releaseAllHeld === 'function') {
+        try { Deck.releaseAllHeld(); } catch {}
+      }
       obs.ws = null;
       obs.activeSync = null;
       obs.queuedSync = null;

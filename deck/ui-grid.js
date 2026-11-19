@@ -192,7 +192,15 @@
         holdTriggered = false;
         const page = Deck.getActivePage();
         const p = page?.pads[i];
-        if (!p || !Deck.isOutputStopAction || !Deck.isOutputStopAction(p)) return;
+        if (!p) return;
+
+        if (p.hold && Deck.HOLD_TYPES && Deck.HOLD_TYPES.has(p.type)) {
+          holdTriggered = true;
+          Deck.holdPress(i, page.id);
+          return;
+        }
+
+        if (!Deck.isOutputStopAction || !Deck.isOutputStopAction(p)) return;
 
         holdTimer = setTimeout(async () => {
           holdTimer = null;
@@ -205,6 +213,11 @@
         if (holdTimer) {
           clearTimeout(holdTimer);
           holdTimer = null;
+        }
+        const page = Deck.getActivePage();
+        const p = page?.pads[i];
+        if (p?.hold && Deck.HOLD_TYPES && Deck.HOLD_TYPES.has(p.type)) {
+          Deck.holdRelease(i, page.id);
         }
       };
 
@@ -226,7 +239,15 @@
         }
         Deck.onPadClick(i);
       });
-      el.addEventListener('contextmenu', (e) => { e.preventDefault(); Deck.openPadEditor(i); });
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const page = Deck.getActivePage();
+        const p = page?.pads[i];
+        if (!Deck.editMode && p?.hold && Deck.HOLD_TYPES && Deck.HOLD_TYPES.has(p.type)) {
+          return;
+        }
+        Deck.openPadEditor(i);
+      });
       el.addEventListener('dragstart', (e) => {
         if (!Deck.editMode) { e.preventDefault(); return; }
         Deck.setDragState({ dragIdx: i, dragSourcePageId: Deck.getActivePage().id });
@@ -312,12 +333,27 @@
     }
   }
 
-  function renderPad(p, i, el, page) {
-    if (!el) return;
+  function renderPad(pOrIdx, i, el, page) {
+    let p, idx;
+    if (typeof pOrIdx === 'number') {
+      idx = pOrIdx;
+      page = page || Deck.getActivePage();
+      p = page?.pads?.[idx] || { type: 'none' };
+      const btns = $('grid')?.children;
+      el = el || (btns ? btns[idx] : null);
+    } else {
+      p = pOrIdx;
+      idx = i;
+      page = page || Deck.getActivePage();
+    }
+    if (!el || !page) return;
+    i = idx;
     const rt = Deck.getPadRuntime(i, page.id);
     const active = Deck.isPadActive(p);
     const isRunning = Boolean(rt.running);
     const isArmed = Boolean(Deck.isPadArmed && Deck.isPadArmed(i, page.id));
+    const isHeld = Boolean(Deck.isPadHeld && Deck.isPadHeld(i, page.id));
+    const isHoldPad = Boolean(p.hold && Deck.HOLD_TYPES && Deck.HOLD_TYPES.has(p.type));
     const isFullFace = Boolean(p.image && p.imageFit === 'fill');
     const isDragOver = el.classList.contains('drag-over');
     const isDraggingEl = el.classList.contains('dragging');
@@ -336,6 +372,8 @@
       active ? 1 : 0,
       isRunning ? 1 : 0,
       isArmed ? 1 : 0,
+      isHeld ? 1 : 0,
+      isHoldPad ? 1 : 0,
       isFullFace ? 1 : 0,
       isDragOver ? 1 : 0,
       isDraggingEl ? 1 : 0,
@@ -362,6 +400,8 @@
       + (active ? ' active' : '')
       + (isRunning ? ' running' : '')
       + (isArmed ? ' armed' : '')
+      + (isHeld ? ' held' : '')
+      + (isHoldPad ? ' hold-pad' : '')
       + (isFullFace ? ' full-face' : '')
       + (p.hideLabel ? ' hide-label' : '')
       + (isDragOver ? ' drag-over' : '')
