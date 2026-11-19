@@ -629,6 +629,20 @@ body.edit-mode .palette {
 }
 .status span { overflow: hidden; text-overflow: ellipsis; }
 .status #msg-info { flex: 1; text-align: center; }
+.save-warning {
+  color: #fff;
+  background: var(--bad);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.status.save-failed {
+  border-top: 1px solid var(--bad);
+}
 .ver {
   color: var(--muted);
   text-decoration: none;

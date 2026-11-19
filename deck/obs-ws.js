@@ -2,8 +2,9 @@
   'use strict';
 
   const VERSION = '2.2.1';
-  const STORAGE_KEY = 'obs_virtual_deck_v2';
-  const LEGACY_STORAGE_KEY = 'obs_virtual_deck_v1';
+  const STORAGE_KEY = 'opendeck_config';
+  const LEGACY_STORAGE_KEYS = ['obs_deck_config_v2', 'obs_virtual_deck_v2', 'obs_virtual_deck_v1'];
+  let initialSaveFailed = false;
   const PROBE_PORTS = [4455, 4456, 4457, 4458, 4444];
   const MIN_COLS = 2;
   const MAX_COLS = 12;
@@ -353,33 +354,36 @@
     };
     let state = base;
     try {
-      const rawOpenDeck = localStorage.getItem('opendeck_config');
+      const rawCanonical = localStorage.getItem(STORAGE_KEY);
       const rawDeckV2 = localStorage.getItem('obs_deck_config_v2');
-      const rawVirtV2 = localStorage.getItem(STORAGE_KEY);
-      const rawVirtV1 = localStorage.getItem(LEGACY_STORAGE_KEY);
+      const rawVirtV2 = localStorage.getItem('obs_virtual_deck_v2');
+      const rawVirtV1 = localStorage.getItem('obs_virtual_deck_v1');
 
       let rawToMigrate = null;
-      if (rawVirtV2) {
-        if (rawVirtV2.includes('"decks"')) {
-          rawToMigrate = rawVirtV2;
-        } else {
-          rawToMigrate = rawOpenDeck || rawVirtV2;
-        }
+      if (rawVirtV2 && rawVirtV2.includes('"decks"')) {
+        rawToMigrate = rawVirtV2;
       } else if (rawVirtV1) {
         rawToMigrate = rawVirtV1;
       } else if (rawDeckV2) {
         rawToMigrate = rawDeckV2;
+      } else if (rawVirtV2 && !rawCanonical) {
+        rawToMigrate = rawVirtV2;
+      } else if (rawCanonical) {
+        rawToMigrate = rawCanonical;
       }
 
       if (rawToMigrate) {
         state = migrateConfig(JSON.parse(rawToMigrate));
         try {
           const json = JSON.stringify(state);
-          localStorage.setItem('opendeck_config', json);
           localStorage.setItem(STORAGE_KEY, json);
-        } catch {}
-      } else {
-        try { localStorage.removeItem('opendeck_config'); } catch {}
+        } catch {
+          initialSaveFailed = true;
+        }
+      }
+
+      for (const k of LEGACY_STORAGE_KEYS) {
+        try { localStorage.removeItem(k); } catch {}
       }
     } catch {}
 
@@ -509,19 +513,62 @@
       transitionDuration: 300,
       lastScreenshot: '',
     },
+    STORAGE_KEY,
+    hasSaveWarning: initialSaveFailed,
+    setSaveWarning: (show) => {
+      Deck.hasSaveWarning = Boolean(show);
+      let warnEl = $('save-warning');
+      const statusEl = document.querySelector('.status');
+      const msgEl = $('msg-info');
+      if (show) {
+        if (!warnEl && statusEl) {
+          warnEl = document.createElement('span');
+          warnEl.id = 'save-warning';
+          warnEl.className = 'save-warning';
+          warnEl.title = 'Save failed: Export layout and use fewer or smaller Pad Graphics';
+          statusEl.insertBefore(warnEl, $('version-badge') || null);
+        }
+        if (warnEl) {
+          warnEl.hidden = false;
+          warnEl.textContent = '⚠️ Save failed: Export layout and use fewer or smaller Pad Graphics';
+        }
+        if (statusEl) statusEl.classList.add('save-failed');
+        if (msgEl) msgEl.textContent = 'Save failed: Export layout and use fewer or smaller Pad Graphics';
+      } else {
+        if (warnEl) {
+          warnEl.hidden = true;
+          warnEl.textContent = '';
+        }
+        if (statusEl) statusEl.classList.remove('save-failed');
+        if (msgEl && msgEl.textContent.includes('Save failed')) {
+          msgEl.textContent = 'Ready';
+        }
+      }
+    },
     renderGrid: () => {},
     updateMacroTicks: () => {},
     updateStatsPads: () => Deck.renderGrid(),
   };
 
   Deck.saveCfg = () => {
+    let ok = false;
     try {
       const json = JSON.stringify(Deck.cfg);
-      localStorage.setItem('opendeck_config', json);
       localStorage.setItem(STORAGE_KEY, json);
+      ok = true;
     } catch {}
+    Deck.setSaveWarning(!ok);
     Deck.syncStatsPolling();
+    return ok;
   };
+
+  if (initialSaveFailed) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => Deck.setSaveWarning(true), { once: true });
+    } else {
+      setTimeout(() => Deck.setSaveWarning(true), 0);
+    }
+  }
 
   Deck.exportConfig = () => {
     const { cfg } = Deck;
