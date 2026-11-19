@@ -113,7 +113,6 @@
       host: cfg.ws?.host || '127.0.0.1',
       port: cfg.ws?.port || 4455,
     };
-    delete ws.password;
 
     const snapshot = {
       timestamp: nextTimestamp(),
@@ -131,6 +130,7 @@
       return saved;
     } catch (err) {
       console.warn('Failed to save snapshot:', err);
+      Deck.setMsg?.('No snapshot was saved');
       return null;
     }
   }
@@ -178,19 +178,10 @@
 
     // Abort active timers and clear selection
     if (typeof Deck.clearSelection === 'function') Deck.clearSelection();
-    const pageIds = new Set((Deck.cfg?.pages || []).map((p) => p.id));
-    if (Deck.activeMacros) {
-      for (const k of Deck.activeMacros.keys()) pageIds.add(k.split(':')[0]);
-    }
-    if (Deck.activeAutoOffs) {
-      for (const k of Deck.activeAutoOffs.keys()) pageIds.add(k.split(':')[0]);
-    }
-    for (const pid of pageIds) {
-      if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(pid);
-    }
+    if (typeof Deck.abortAllTimers === 'function') Deck.abortAllTimers();
 
     // Preserve current OBS password
-    const currentPassword = (Deck.cfg?.ws?.password) || ($('ws-pass') ? $('ws-pass').value : '') || '';
+    const currentPassword = typeof Deck.getCurrentPassword === 'function' ? Deck.getCurrentPassword() : '';
 
     const incomingPages = Array.isArray(item.pages) ? item.pages : [];
     const normalizedPages = incomingPages.map((p, idx) => {
@@ -217,9 +208,7 @@
     }
     Deck.cfg.ws.password = currentPassword;
 
-    if ($('ws-host')) $('ws-host').value = Deck.cfg.ws.host;
-    if ($('ws-port')) $('ws-port').value = Deck.cfg.ws.port;
-    if ($('ws-pass')) $('ws-pass').value = Deck.cfg.ws.password;
+    if (typeof Deck.syncWsInputs === 'function') Deck.syncWsInputs();
 
     Deck.saveCfg();
     Deck.renderGrid();
@@ -253,7 +242,7 @@
     if (!listEl) return;
     const items = await listSnapshots();
     if (!items.length) {
-      listEl.innerHTML = '<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px">No snapshots recorded yet.</div>';
+      listEl.innerHTML = '<div class="snapshots-empty">No snapshots recorded yet.</div>';
       return;
     }
     listEl.innerHTML = items.map((s) => {

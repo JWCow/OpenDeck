@@ -172,9 +172,6 @@ function parseCliArgs() {
     } else if (arg.startsWith('--obs-port=')) {
       const p = Number(arg.slice(11));
       if (!Number.isNaN(p)) obsPort = p;
-    } else if (arg.startsWith('--ws-port=')) {
-      const p = Number(arg.slice(10));
-      if (!Number.isNaN(p)) obsPort = p;
     } else if (arg.startsWith('--dir=')) {
       rootDir = arg.slice(6);
     }

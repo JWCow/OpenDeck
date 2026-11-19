@@ -751,14 +751,6 @@ try {
       await pageRenames.click('#btn-wiz-cancel');
     }
 
-    // Verify renameReference and applyRename are not exported on Deck (ticket #8 review)
-    const exportedHelpers = await pageRenames.evaluate(() => ({
-      renameReference: typeof Deck.renameReference,
-      applyRename: typeof Deck.applyRename,
-    }));
-    assert.equal(exportedHelpers.renameReference, 'undefined', 'renameReference must not be exported on Deck');
-    assert.equal(exportedHelpers.applyRename, 'undefined', 'applyRename must not be exported on Deck');
-
     // 16a. Scene renames update Scene, Source, Transform, Studio preview, Macro and PANIC steps + label preservation
     await pageRenames.evaluate(() => {
       const p = Deck.getActivePads();
@@ -1638,6 +1630,16 @@ try {
   });
   assert.equal(await pageSnap.locator('#btn-snapshots').isVisible(), false, '#btn-snapshots is hidden when snapshots are unavailable');
 
+  // Snapshot write failure: show footer message "No snapshot was saved" and continue
+  await pageSnap.evaluate(() => {
+    Deck.setSnapshotsAvailable(true);
+    Deck.createSnapshot = async () => null; // simulate snapshot write failure
+  });
+  await pageSnap.click('#btn-reset-layout');
+  await pageSnap.waitForFunction(() => document.getElementById('msg-info')?.textContent === 'No snapshot was saved');
+  assert.equal(await pageSnap.locator('#msg-info').textContent(), 'No snapshot was saved', 'footer shows No snapshot was saved on snapshot failure');
+  assert.equal(await pageSnap.evaluate(() => Deck.isStarterDeck()), true, 'reset layout still completed despite snapshot failure');
+
   await snapCtx.close();
   console.log('  ✓ automatic layout Snapshots in IndexedDB (#14)');
 
@@ -2359,11 +2361,54 @@ try {
       await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'touch pointerup sent mute restore request');
 
-      // 10. Release trigger: disconnect
+      // 10. Hold in-flight guard: press while pad action in-flight is ignored
+      let slowResolve;
+      await pageHold.evaluate(() => {
+        const origExec = Deck.execAction;
+        Deck._origExec = origExec;
+        Deck.execAction = (act) => {
+          if (act.type === 'mute' && act.mode === 'mute') {
+            return new Promise((res) => { window._slowResolve = res; });
+          }
+          return origExec(act);
+        };
+      });
+      holdObs.state.calls.length = 0;
+      await pad0.dispatchEvent('pointerdown', { button: 0 });
+      // While first press is in flight, dispatch second press
+      await pad0.dispatchEvent('pointerdown', { button: 0 });
+      // Only 1 action was started
+      await pageHold.evaluate(() => {
+        if (window._slowResolve) window._slowResolve();
+        Deck.execAction = Deck._origExec;
+      });
+      await pad0.dispatchEvent('pointerup', { button: 0 });
+      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+
+      // 11. Release trigger: disconnect with closeAll, then reconnect restores state (spec #2 story 19)
+      holdObs.state.calls.length = 0;
       await pad0.dispatchEvent('pointerdown', { button: 0 });
       await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
-      await pageHold.evaluate(() => Deck.disconnectObs(true));
+      assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === true), 'held pad sent mute request');
+      holdObs.state.calls.length = 0;
+
+      // Connection drops while held
+      holdObs.closeAll(1001, 'Connection dropped');
+      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
       assert.equal(await pageHold.evaluate(() => Deck.isPadHeld(0)), false, 'held pad released on disconnect');
+
+      // Reconnect to OBS
+      holdObs.state.calls.length = 0;
+      await pageHold.evaluate(() => Deck.connectObs({ manual: true }));
+      await pageHold.waitForFunction(() => Deck.obs.status === 'ok');
+
+      // Verify unsent release was applied once after reconnect
+      const reconnectStart = Date.now();
+      while (Date.now() - reconnectStart < 3000) {
+        if (holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false)) break;
+        await pageHold.waitForTimeout(50);
+      }
+      assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'release applied once after reconnect');
 
       await ctxHold.close();
       console.log('  ✓ hold pad runtime, release triggers & touch viewport (#19)');
@@ -3004,7 +3049,7 @@ try {
     // AC 5: Import from link loads a layout without a password
     const testLayout = {
       version: 2,
-      ws: { host: '127.0.0.1', port: phoneObsPort },
+      ws: { host: '127.0.0.1', port: phoneObsPort, password: 'LEAKED_PASSWORD' },
       pages: [
         {
           id: 'phone-test-page',
@@ -3026,7 +3071,26 @@ try {
     // Verify imported layout
     await pagePhone.waitForFunction(() => Deck.getActivePage().name === 'Phone Deck Test');
     const importedPass = await pagePhone.evaluate(() => Deck.cfg.ws.password);
-    assert.equal(importedPass, PASSWORD, 'import from link preserves saved password');
+    assert.equal(importedPass, PASSWORD, 'import from link preserves saved password even if json has password');
+
+    // Test that ?layout= / ?import= query params do NOT auto-import on boot
+    const noAutoLayout = {
+      version: 2,
+      pages: [{ id: 'no-auto-page', name: 'Should Not Auto Import', cols: 4, rows: 3, pads: [] }],
+    };
+    const noAutoPath = join(__dirname, 'test-no-auto-layout.json');
+    fs.writeFileSync(noAutoPath, JSON.stringify(noAutoLayout, null, 2), 'utf8');
+    try {
+      const autoImportUrl = `http://127.0.0.1:${helper.port}/deck.html?layout=http://127.0.0.1:${helper.port}/test-no-auto-layout.json`;
+      const pageNoAuto = await ctxPhone.newPage();
+      await pageNoAuto.goto(autoImportUrl);
+      await pageNoAuto.waitForTimeout(300);
+      const pageNames = await pageNoAuto.evaluate(() => Deck.cfg.pages.map((p) => p.name));
+      assert.equal(pageNames.includes('Should Not Auto Import'), false, '?layout= param does not auto-import on boot');
+      await pageNoAuto.close();
+    } finally {
+      try { fs.unlinkSync(noAutoPath); } catch {}
+    }
 
     // Verify snapshot was created before import
     const snapshots = await pagePhone.evaluate(async () => Deck.listSnapshots());

@@ -122,6 +122,18 @@
     if (typeof actionFn === 'function') {
       const before = cloneLayoutState();
       const res = actionFn();
+      if (res && typeof res.then === 'function') {
+        return res.then((val) => {
+          const after = cloneLayoutState();
+          if (JSON.stringify(before) !== JSON.stringify(after)) {
+            undoStack.push(before);
+            if (undoStack.length > MAX_HISTORY) undoStack.shift();
+            redoStack = [];
+            updateUndoRedoUi();
+          }
+          return val;
+        });
+      }
       const after = cloneLayoutState();
       if (JSON.stringify(before) !== JSON.stringify(after)) {
         undoStack.push(before);
