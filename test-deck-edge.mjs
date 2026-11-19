@@ -592,18 +592,15 @@ try {
   // 13. Release build check: npm run build:release produces clean valid ZIPs for OpenDeck v2.2.2
   assert.equal(PKG.version, '2.2.2', 'package.json version is 2.2.2');
   execFileSync(process.execPath, [join(__dirname, 'scripts', 'build-release.mjs')], { cwd: __dirname, stdio: 'pipe' });
-  const zipPath = join(__dirname, 'dist', 'obs-virtual-deck.zip');
-  const latestZipPath = join(__dirname, 'dist', 'obs-virtual-deck-latest.zip');
-  const verZipPath = join(__dirname, 'dist', `obs-virtual-deck-v${PKG.version}.zip`);
-  const opendeckZipPath = join(__dirname, 'dist', 'opendeck.zip');
-  const opendeckLatestZipPath = join(__dirname, 'dist', 'opendeck-latest.zip');
-  const opendeckVerZipPath = join(__dirname, 'dist', `opendeck-v${PKG.version}.zip`);
-  assert.ok(fs.existsSync(zipPath), 'dist/obs-virtual-deck.zip exists');
-  assert.ok(fs.existsSync(latestZipPath), 'dist/obs-virtual-deck-latest.zip exists');
-  assert.ok(fs.existsSync(verZipPath), `dist/obs-virtual-deck-v${PKG.version}.zip exists`);
-  assert.ok(fs.existsSync(opendeckZipPath), 'dist/opendeck.zip exists');
-  assert.ok(fs.existsSync(opendeckLatestZipPath), 'dist/opendeck-latest.zip exists');
-  assert.ok(fs.existsSync(opendeckVerZipPath), `dist/opendeck-v${PKG.version}.zip exists`);
+  const zipPath = join(__dirname, 'dist', 'opendeck.zip');
+  const latestZipPath = join(__dirname, 'dist', 'opendeck-latest.zip');
+  const verZipPath = join(__dirname, 'dist', `opendeck-v${PKG.version}.zip`);
+  assert.ok(fs.existsSync(zipPath), 'dist/opendeck.zip exists');
+  assert.ok(fs.existsSync(latestZipPath), 'dist/opendeck-latest.zip exists');
+  assert.ok(fs.existsSync(verZipPath), `dist/opendeck-v${PKG.version}.zip exists`);
+  for (const legacy of ['obs-virtual-deck.zip', 'obs-virtual-deck-latest.zip', `obs-virtual-deck-v${PKG.version}.zip`]) {
+    assert.ok(!fs.existsSync(join(__dirname, 'dist', legacy)), `retired legacy ZIP ${legacy} is not built`);
+  }
 
   const entries = parseZipEntries(fs.readFileSync(zipPath));
   const names = entries.map((e) => e.name);
