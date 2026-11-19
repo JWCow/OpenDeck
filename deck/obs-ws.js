@@ -249,6 +249,70 @@
     return normalizePadInternal(raw, true);
   }
 
+  function renameReference(item, kind, oldName, newName) {
+    if (!item || typeof item !== 'object' || !oldName || !newName || oldName === newName) return false;
+    let changed = false;
+    if (kind === 'scene') {
+      if (['scene', 'source', 'transform', 'studio'].includes(item.type)) {
+        if (item.sceneName === oldName) {
+          item.sceneName = newName;
+          changed = true;
+        }
+      }
+      if (['source', 'filter', 'screenshot', 'transform'].includes(item.type)) {
+        if (item.sourceName === oldName) {
+          item.sourceName = newName;
+          changed = true;
+        }
+      }
+    } else if (kind === 'input') {
+      if (['source', 'filter', 'screenshot', 'transform'].includes(item.type)) {
+        if (item.sourceName === oldName) {
+          item.sourceName = newName;
+          changed = true;
+        }
+      } else if (['mute', 'volume', 'monitor', 'media', 'image', 'browser'].includes(item.type)) {
+        if (item.inputName === oldName) {
+          item.inputName = newName;
+          changed = true;
+        }
+      }
+    }
+    if (Array.isArray(item.steps)) {
+      for (const step of item.steps) {
+        if (renameReference(step, kind, oldName, newName)) {
+          changed = true;
+        }
+      }
+    }
+    if (changed && item.label === oldName) {
+      item.label = newName;
+    }
+    return changed;
+  }
+
+  function applyRename(kind, oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return false;
+    let changed = false;
+    const { cfg } = Deck;
+    for (const page of (cfg.pages || [])) {
+      for (const pad of (page.pads || [])) {
+        if (renameReference(pad, kind, oldName, newName)) {
+          changed = true;
+        }
+      }
+    }
+    for (const step of (cfg.panicSteps || [])) {
+      if (renameReference(step, kind, oldName, newName)) {
+        changed = true;
+      }
+    }
+    if (changed) {
+      Deck.saveCfg();
+    }
+    return changed;
+  }
+
   function defaultPads(cols = DEFAULT_COLS, rows = DEFAULT_ROWS, seedPanic = false) {
     const c = clampInt(cols, MIN_COLS, MAX_COLS, DEFAULT_COLS);
     const r = clampInt(rows, MIN_ROWS, MAX_ROWS, DEFAULT_ROWS);
@@ -1314,7 +1378,23 @@
       obs.studioModeEnabled = !!d.studioModeEnabled;
       Deck.updateSceneHeader();
       Deck.renderGrid();
-    } else if (type === 'SceneListChanged' || type === 'SceneNameChanged' || type === 'InputNameChanged' || type === 'CurrentSceneCollectionChanged') {
+    } else if (type === 'SceneNameChanged') {
+      const oldName = d.oldSceneName;
+      const newName = d.sceneName;
+      if (oldName && newName && oldName !== newName) {
+        if (obs.programScene === oldName) obs.programScene = newName;
+        if (obs.previewScene === oldName) obs.previewScene = newName;
+        applyRename('scene', oldName, newName);
+      }
+      await Deck.syncObsState();
+    } else if (type === 'InputNameChanged') {
+      const oldName = d.oldInputName;
+      const newName = d.inputName;
+      if (oldName && newName && oldName !== newName) {
+        applyRename('input', oldName, newName);
+      }
+      await Deck.syncObsState();
+    } else if (type === 'SceneListChanged' || type === 'CurrentSceneCollectionChanged') {
       if (type === 'CurrentSceneCollectionChanged' && d.sceneCollectionName) {
         obs.currentCollection = d.sceneCollectionName;
       }
