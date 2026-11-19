@@ -9,7 +9,7 @@ const EXPECTED_AUTH = b64sha(b64sha(PASSWORD + SALT) + CHALLENGE);
 
 const TINY_PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
-export function createFakeObs(requireAuth = true) {
+export function createFakeObs(requireAuth = true, host = '127.0.0.1') {
   const state = {
     programScene: 'Main Cam',
     previewScene: 'Slides',
@@ -111,7 +111,7 @@ export function createFakeObs(requireAuth = true) {
     maxConcurrentSceneItemRequests: 0,
   };
 
-  const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  const wss = host ? new WebSocketServer({ host, port: 0 }) : new WebSocketServer({ port: 0 });
   const sockets = new Set();
   const broadcast = (eventType, eventData = {}) => {
     if (eventType === 'SceneNameChanged') {

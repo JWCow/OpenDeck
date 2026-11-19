@@ -138,6 +138,7 @@ function main() {
   const requiredFiles = [
     'deck.html',
     'deck/snapshots.js',
+    'scripts/lan-helper.mjs',
     'README.md',
     'installers/Install-Windows.bat',
     'installers/Install-Mac.command',
@@ -186,6 +187,12 @@ function main() {
     zipPath: 'obs-virtual-deck/Install-Mac.command',
     data: Buffer.from(macCmd, 'utf8'),
     executable: true,
+  });
+
+  entries.push({
+    zipPath: 'obs-virtual-deck/scripts/lan-helper.mjs',
+    data: fs.readFileSync(path.join(ROOT, 'scripts/lan-helper.mjs')),
+    executable: false,
   });
 
   // Write staged folder

@@ -99,37 +99,62 @@
     URL.revokeObjectURL(a.href);
     Deck.setMsg('Exported obs-virtual-deck.json');
   });
+  Deck.importLayout = async (d, sourceName = 'layout') => {
+    const currentPassword = (Deck.cfg?.ws?.password) || ($('ws-pass') ? $('ws-pass').value : '') || '';
+    if (d && d.ws && !d.ws.password) {
+      delete d.ws.password;
+    }
+    if (typeof Deck.createSnapshot === 'function') await Deck.createSnapshot('Before Import');
+    Deck.clearSelection();
+    const pageIds = new Set((Deck.cfg?.pages || []).map((p) => p.id));
+    if (Deck.activeMacros) {
+      for (const k of Deck.activeMacros.keys()) pageIds.add(k.split(':')[0]);
+    }
+    if (Deck.activeAutoOffs) {
+      for (const k of Deck.activeAutoOffs.keys()) pageIds.add(k.split(':')[0]);
+    }
+    for (const pid of pageIds) {
+      if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(pid);
+    }
+    Deck.cfg = Deck.migrateConfig(d, currentPassword);
+    if ($('ws-host')) $('ws-host').value = Deck.cfg.ws.host;
+    if ($('ws-port')) $('ws-port').value = Deck.cfg.ws.port;
+    if ($('ws-pass')) $('ws-pass').value = Deck.cfg.ws.password;
+    Deck.saveCfg();
+    Deck.renderGrid();
+    if (Deck.obs.status === 'ok') await Deck.syncObsState();
+    Deck.setMsg(`Imported ${sourceName}`);
+  };
+
+  Deck.importFromLink = async (url) => {
+    if (!url) return;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const d = await res.json();
+      await Deck.importLayout(d, url);
+      return d;
+    } catch (err) {
+      Deck.setMsg(`Import error: ${err.message}`);
+      throw err;
+    }
+  };
+
   $('btn-import').addEventListener('click', () => $('file-import').click());
+  $('btn-import-link')?.addEventListener('click', async () => {
+    const url = prompt('Enter layout JSON URL (e.g. http://192.168.1.5:8080/layout.json):');
+    if (!url) return;
+    try {
+      await Deck.importFromLink(url);
+    } catch {}
+  });
   $('file-import').addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
     try {
       const d = JSON.parse(await file.text());
-      const currentPassword = (Deck.cfg?.ws?.password) || ($('ws-pass') ? $('ws-pass').value : '') || '';
-      if (d && d.ws && !d.ws.password) {
-        delete d.ws.password;
-      }
-      if (typeof Deck.createSnapshot === 'function') Deck.createSnapshot('Before Import');
-      Deck.clearSelection();
-      const pageIds = new Set((Deck.cfg?.pages || []).map((p) => p.id));
-      if (Deck.activeMacros) {
-        for (const k of Deck.activeMacros.keys()) pageIds.add(k.split(':')[0]);
-      }
-      if (Deck.activeAutoOffs) {
-        for (const k of Deck.activeAutoOffs.keys()) pageIds.add(k.split(':')[0]);
-      }
-      for (const pid of pageIds) {
-        if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(pid);
-      }
-      Deck.cfg = Deck.migrateConfig(d, currentPassword);
-      if ($('ws-host')) $('ws-host').value = Deck.cfg.ws.host;
-      if ($('ws-port')) $('ws-port').value = Deck.cfg.ws.port;
-      if ($('ws-pass')) $('ws-pass').value = Deck.cfg.ws.password;
-      Deck.saveCfg();
-      Deck.renderGrid();
-      if (Deck.obs.status === 'ok') await Deck.syncObsState();
-      Deck.setMsg(`Imported ${file.name}`);
+      await Deck.importLayout(d, file.name);
     } catch (err) {
       Deck.setMsg(`Import error: ${err.message}`);
     }
@@ -161,6 +186,13 @@
   Deck.renderPalette();
   Deck.renderGrid();
   Deck.connectObs({ isBoot: true });
+
+  const layoutParam = typeof location !== 'undefined' && location.search
+    ? (new URLSearchParams(location.search).get('layout') || new URLSearchParams(location.search).get('import'))
+    : null;
+  if (layoutParam) {
+    Deck.importFromLink(layoutParam).catch(() => {});
+  }
 
   document.addEventListener('keydown', (e) => {
     if (!Deck.editMode) return;

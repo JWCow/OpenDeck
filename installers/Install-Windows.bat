@@ -35,6 +35,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "  Copy-Item -LiteralPath (Join-Path $src 'deck.html') -Destination $dest -Force; " ^
   "  Get-ChildItem -LiteralPath (Join-Path $src 'deck') | Copy-Item -Destination (Join-Path $dest 'deck') -Recurse -Force; " ^
   "  if (Test-Path -LiteralPath (Join-Path $src 'README.md')) { Copy-Item -LiteralPath (Join-Path $src 'README.md') -Destination $dest -Force }; " ^
+  "  if (Test-Path -LiteralPath (Join-Path $src 'scripts')) { " ^
+  "    New-Item -ItemType Directory -Force -Path (Join-Path $dest 'scripts') | Out-Null; " ^
+  "    Get-ChildItem -LiteralPath (Join-Path $src 'scripts') | Copy-Item -Destination (Join-Path $dest 'scripts') -Recurse -Force; " ^
+  "  }; " ^
   "}; " ^
   "$wsFound = $false; $wsEnabled = $false; $wsPort = $null; $wsAuth = $false; $wsListening = $false; " ^
   "$cfgPath = if ($env:APPDATA) { Join-Path $env:APPDATA 'obs-studio\plugin_config\obs-websocket\config.json' } else { '' }; " ^
@@ -107,6 +111,16 @@ if /i "%WS_FOUND%"=="True" (
   )
 ) else (
   echo   2. Tools -^> WebSocket Server Settings -^> Enable WebSocket server ^(Port 4455^).
+)
+echo.
+echo Phone Deck (LAN Control):
+echo   To control OBS from your phone or tablet on Wi-Fi:
+echo   node "%DEST%\scripts\lan-helper.mjs" --obs-port=%WS_PORT%
+where node >nul 2>&1
+if not errorlevel 1 (
+  if /i "%OBS_DECK_START_LAN%"=="1" (
+    start "OpenDeck Phone Helper" node "%DEST%\scripts\lan-helper.mjs" --obs-port=%WS_PORT%
+  )
 )
 echo.
 if /i not "%OBS_DECK_NO_PAUSE%"=="1" pause
