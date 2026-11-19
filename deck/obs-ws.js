@@ -494,6 +494,19 @@
     return { id, name, cols, rows, pads };
   }
 
+  function packAutoImportPages(baseId, baseName, items) {
+    if (!Array.isArray(items) || !items.length) return [];
+    const pages = [];
+    const CHUNK_SIZE = 63;
+    for (let offset = 0, pageNum = 1; offset < items.length; offset += CHUNK_SIZE, pageNum++) {
+      const chunk = items.slice(offset, offset + CHUNK_SIZE);
+      const id = pageNum === 1 ? baseId : `${baseId}-${pageNum}`;
+      const name = pageNum === 1 ? baseName : `${baseName} ${pageNum}`;
+      pages.push(packAutoImportPage(id, name, chunk));
+    }
+    return pages;
+  }
+
   const Deck = {
     VERSION,
     PROBE_PORTS,
@@ -530,6 +543,8 @@
       reconnectTimer: null,
       statsTimer: null,
       manualClose: false,
+      activeSync: null,
+      queuedSync: null,
       scenes: [],
       groups: new Set(),
       inputs: [],
@@ -918,7 +933,7 @@
           { type: 'scene', mode: 'next', label: 'Next Scene', icon: '⏭️', color: '#115e59' }
         );
       }
-      if (items.length) pages.push(packAutoImportPage('page-scenes', 'Scenes', items));
+      if (items.length) pages.push(...packAutoImportPages('page-scenes', 'Scenes', items));
     }
 
     if (cfgOpts.sources) {
@@ -942,7 +957,7 @@
           });
         }
       }
-      if (items.length) pages.push(packAutoImportPage('page-sources', 'Sources', items));
+      if (items.length) pages.push(...packAutoImportPages('page-sources', 'Sources', items));
     }
 
     if (cfgOpts.filters) {
@@ -965,7 +980,7 @@
           });
         }
       }
-      if (items.length) pages.push(packAutoImportPage('page-filters', 'Filters', items));
+      if (items.length) pages.push(...packAutoImportPages('page-filters', 'Filters', items));
     }
 
     if (cfgOpts.broadcast) {
@@ -998,7 +1013,7 @@
         { type: 'screenshot', imageFormat: 'png', label: 'Snapshot', icon: '📸', color: '#115e59' },
         { type: 'stats', mode: 'all', label: 'OBS Stats', icon: '📊', color: '#222733' }
       );
-      pages.push(packAutoImportPage('page-broadcast', 'Broadcast', items));
+      pages.push(...packAutoImportPages('page-broadcast', 'Broadcast', items));
     }
 
     return pages;
@@ -1037,7 +1052,8 @@
         ]).then(() => Deck.renderGrid());
       }
     }
-    Deck.setMsg(`Auto-Imported ${normalized.length} page(s)`);
+    const padCount = normalized.reduce((sum, p) => sum + (p.pads || []).filter((pad) => pad && pad.type !== 'none').length, 0);
+    Deck.setMsg(`Auto-Imported ${padCount} pad(s) across ${normalized.length} page(s)`);
     return normalized;
   };
 
@@ -1198,18 +1214,19 @@
     const r = await Deck.obsCall(req, { sceneName: name });
     const items = r.sceneItems || [];
     obs.itemsByScene[name] = items;
-    for (const it of items) {
-      if (it.isGroup) {
+    const groupItems = items.filter((it) => it.isGroup);
+    if (groupItems.length) {
+      await Promise.all(groupItems.map(async (it) => {
         obs.groups.add(it.sourceName);
         try {
           const gr = await Deck.obsCall('GetGroupSceneItemList', { sceneName: it.sourceName });
           obs.itemsByScene[it.sourceName] = gr.sceneItems || [];
         } catch {}
-      }
+      }));
     }
   }
 
-  Deck.syncObsState = async () => {
+  async function performSync() {
     const { obs, cfg } = Deck;
     try {
       const safe = (req, data) => Deck.obsCall(req, data).catch(() => null);
@@ -1285,9 +1302,7 @@
 
       obs.groups = new Set();
       obs.itemsByScene = {};
-      for (const s of obs.scenes) {
-        try { await refreshSceneOrGroupItems(s); } catch {}
-      }
+      await Promise.all(obs.scenes.map((s) => refreshSceneOrGroupItems(s).catch(() => {})));
 
       const filterSources = new Set([...obs.scenes, ...obs.groups, ...obs.inputs]);
       for (const list of Object.values(obs.itemsByScene)) {
@@ -1327,6 +1342,26 @@
     } catch (e) {
       Deck.setMsg(`Sync error: ${e.message}`);
     }
+  }
+
+  Deck.syncObsState = () => {
+    const { obs } = Deck;
+    if (obs.activeSync) {
+      if (!obs.queuedSync) {
+        obs.queuedSync = obs.activeSync
+          .catch(() => {})
+          .then(() => {
+            obs.queuedSync = null;
+            if (!obs.ws || obs.ws.readyState !== 1) return;
+            return Deck.syncObsState();
+          });
+      }
+      return obs.queuedSync;
+    }
+    obs.activeSync = performSync().finally(() => {
+      obs.activeSync = null;
+    });
+    return obs.activeSync;
   };
 
   async function handleObsEvent(type, d) {
@@ -1494,6 +1529,8 @@
       clearInterval(obs.statsTimer);
       obs.statsTimer = null;
     }
+    obs.activeSync = null;
+    obs.queuedSync = null;
     for (const p of obs.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Disconnected')); }
     obs.pending.clear();
     if (obs.ws) { const w = obs.ws; obs.ws = null; try { w.close(); } catch {} }
@@ -1558,6 +1595,8 @@
     ws.onclose = async (ev) => {
       if (obs.ws !== ws) return;
       obs.ws = null;
+      obs.activeSync = null;
+      obs.queuedSync = null;
       if (obs.statsTimer) {
         clearInterval(obs.statsTimer);
         obs.statsTimer = null;

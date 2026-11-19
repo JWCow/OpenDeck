@@ -105,10 +105,25 @@
     if (!file) return;
     try {
       const d = JSON.parse(await file.text());
+      const currentPassword = (Deck.cfg?.ws?.password) || ($('ws-pass') ? $('ws-pass').value : '') || '';
+      if (d && d.ws && !d.ws.password) {
+        delete d.ws.password;
+      }
       Deck.clearSelection();
-      Deck.cfg = Deck.migrateConfig(d);
-      $('ws-host').value = Deck.cfg.ws.host;
-      $('ws-port').value = Deck.cfg.ws.port;
+      const pageIds = new Set((Deck.cfg?.pages || []).map((p) => p.id));
+      if (Deck.activeMacros) {
+        for (const k of Deck.activeMacros.keys()) pageIds.add(k.split(':')[0]);
+      }
+      if (Deck.activeAutoOffs) {
+        for (const k of Deck.activeAutoOffs.keys()) pageIds.add(k.split(':')[0]);
+      }
+      for (const pid of pageIds) {
+        if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(pid);
+      }
+      Deck.cfg = Deck.migrateConfig(d, currentPassword);
+      if ($('ws-host')) $('ws-host').value = Deck.cfg.ws.host;
+      if ($('ws-port')) $('ws-port').value = Deck.cfg.ws.port;
+      if ($('ws-pass')) $('ws-pass').value = Deck.cfg.ws.password;
       Deck.saveCfg();
       Deck.renderGrid();
       if (Deck.obs.status === 'ok') await Deck.syncObsState();
