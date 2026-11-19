@@ -92,7 +92,19 @@ Drop `deck.html` into an OBS Custom Browser Dock — no plugins, no server, no b
 
 ## 📱 Phone Deck
 
-Double-click **Phone Helper.bat** (Windows) or run `node scripts/lan-helper.mjs`. It finds the port your running OBS uses, prints the phone URLs and a QR code; scan it or open the URL on a phone or tablet on the same Wi-Fi. If an exported layout is in your Downloads folder, the link carries it and the phone asks before loading it. An exported layout JSON placed in the Deck folder can be loaded with **Import from link** at its served URL (e.g. `http://<ip>:8080/layout.json`).
+Control OBS from a phone or tablet on the same Wi-Fi. Needs [Node.js](https://nodejs.org) on the OBS computer.
+
+1. **Start OBS first** (WebSocket server enabled), then double-click **Phone Helper.bat** (Windows) or run `node scripts/lan-helper.mjs`.
+2. The helper finds the port your running OBS uses, then prints the phone URLs and a **QR code** for your home-network address. Scan it, or type the URL on the phone.
+3. **Your layout:** design the deck on the PC and click **Export**. If `obs-virtual-deck*.json` is in your Downloads folder, Phone Helper serves the newest one and the QR link carries it; the phone asks before loading it (a Snapshot is saved first). Otherwise the phone starts with its own layout. Export again and restart the helper to update it.
+
+| Good to know | |
+|---|---|
+| Port | Uses `8765`; if taken, any free port (the URL changes, so use the one printed). Change it in the `.bat`. |
+| Several devices | Any number of phones can open the same link. Each keeps its own layout. |
+| OBS detection | Windows only. Elsewhere it uses `4455` or `--obs-port=`. |
+| Load a layout by hand | **Import Link** with `http://<ip>:<port>/layout.json`. |
+| Password | Never in the link. Type it once on the phone (**WS → Pass**). |
 
 <br>
 
@@ -117,7 +129,7 @@ Double-click **Phone Helper.bat** (Windows) or run `node scripts/lan-helper.mjs`
 | 🎮 **Gaming PC** (local) | `file:///.../obs-virtual-deck/deck.html?port=4455` |
 | 📡 **Streaming PC** (remote) | `file:///.../obs-virtual-deck/deck.html?host=192.168.1.50&port=4455` |
 
-Each dock connects to the OBS in its own URL, but **both share one layout**: the browser keeps a single storage area for every `file://` page, so copying the folder does not separate them. Keep the controls for both machines on separate Pages. Leave the WS host and port fields alone in these docks; typing a host or port there is saved and then overrides the URL in every dock. On Phone Deck, add the same `?host=` and `?port=` to the LAN URL (e.g. `http://192.168.1.50:8080/deck.html?host=192.168.1.50&port=4455`).
+Each dock connects to the OBS in its own URL, but **both share one layout**: the browser keeps a single storage area for every `file://` page, so copying the folder does not separate them. Keep the controls for both machines on separate Pages. Leave the WS host and port fields alone in these docks; typing a host or port there is saved and then overrides the URL in every dock. On Phone Deck, add the same `?host=` and `?port=` to the LAN URL (e.g. `http://192.168.1.50:8765/deck.html?host=192.168.1.50&port=4455`).
 
 <br>
 
