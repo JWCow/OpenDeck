@@ -430,6 +430,19 @@
     return { id, name, cols, rows, pads };
   }
 
+  function packAutoImportPages(baseId, baseName, items) {
+    if (!Array.isArray(items) || !items.length) return [];
+    const pages = [];
+    const CHUNK_SIZE = 63;
+    for (let offset = 0, pageNum = 1; offset < items.length; offset += CHUNK_SIZE, pageNum++) {
+      const chunk = items.slice(offset, offset + CHUNK_SIZE);
+      const id = pageNum === 1 ? baseId : `${baseId}-${pageNum}`;
+      const name = pageNum === 1 ? baseName : `${baseName} ${pageNum}`;
+      pages.push(packAutoImportPage(id, name, chunk));
+    }
+    return pages;
+  }
+
   const Deck = {
     VERSION,
     PROBE_PORTS,
@@ -856,7 +869,7 @@
           { type: 'scene', mode: 'next', label: 'Next Scene', icon: '⏭️', color: '#115e59' }
         );
       }
-      if (items.length) pages.push(packAutoImportPage('page-scenes', 'Scenes', items));
+      if (items.length) pages.push(...packAutoImportPages('page-scenes', 'Scenes', items));
     }
 
     if (cfgOpts.sources) {
@@ -880,7 +893,7 @@
           });
         }
       }
-      if (items.length) pages.push(packAutoImportPage('page-sources', 'Sources', items));
+      if (items.length) pages.push(...packAutoImportPages('page-sources', 'Sources', items));
     }
 
     if (cfgOpts.filters) {
@@ -903,7 +916,7 @@
           });
         }
       }
-      if (items.length) pages.push(packAutoImportPage('page-filters', 'Filters', items));
+      if (items.length) pages.push(...packAutoImportPages('page-filters', 'Filters', items));
     }
 
     if (cfgOpts.broadcast) {
@@ -936,7 +949,7 @@
         { type: 'screenshot', imageFormat: 'png', label: 'Snapshot', icon: '📸', color: '#115e59' },
         { type: 'stats', mode: 'all', label: 'OBS Stats', icon: '📊', color: '#222733' }
       );
-      pages.push(packAutoImportPage('page-broadcast', 'Broadcast', items));
+      pages.push(...packAutoImportPages('page-broadcast', 'Broadcast', items));
     }
 
     return pages;
@@ -975,7 +988,8 @@
         ]).then(() => Deck.renderGrid());
       }
     }
-    Deck.setMsg(`Auto-Imported ${normalized.length} page(s)`);
+    const padCount = normalized.reduce((sum, p) => sum + (p.pads || []).filter((pad) => pad && pad.type !== 'none').length, 0);
+    Deck.setMsg(`Auto-Imported ${padCount} pad(s) across ${normalized.length} page(s)`);
     return normalized;
   };
 
