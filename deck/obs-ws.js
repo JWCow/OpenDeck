@@ -735,6 +735,7 @@
     if (pages.length <= 1) return false;
     const idx = pages.findIndex((d) => d.id === pageId);
     if (idx < 0) return false;
+    if (typeof Deck.createSnapshot === 'function') Deck.createSnapshot('Before Delete Page');
     if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(pageId);
     pages.splice(idx, 1);
     if (Deck.cfg.activePageId === pageId) {
@@ -1067,6 +1068,7 @@
     const usedIds = replace ? new Set() : new Set(Deck.cfg.pages.map((d) => d.id));
     const normalized = incoming.map((p, idx) => normalizePage(p, idx, usedIds, false));
     if (replace) {
+      if (typeof Deck.createSnapshot === 'function') Deck.createSnapshot('Before Auto-Import');
       if (typeof Deck.abortPageTimers === 'function') {
         for (const old of Deck.cfg.pages) Deck.abortPageTimers(old.id);
       }

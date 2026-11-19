@@ -616,6 +616,7 @@ try {
     'obs-virtual-deck/deck/ui-palette.js',
     'obs-virtual-deck/deck/ui-select.js',
     'obs-virtual-deck/deck/ui-dialogs.js',
+    'obs-virtual-deck/deck/snapshots.js',
     'obs-virtual-deck/deck/ui-boot.js',
     'obs-virtual-deck/README.md',
     'obs-virtual-deck/Install-Windows.bat',
@@ -1277,6 +1278,162 @@ try {
   } finally {
     outObs.wss.close();
   }
+
+  // 19. Snapshots in IndexedDB (#14)
+  const snapCtx = await browser.newContext();
+  const pageSnap = await snapCtx.newPage();
+  pageSnap.on('pageerror', (e) => pageErrors.push(e.message));
+  pageSnap.on('dialog', (d) => d.accept());
+  await pageSnap.goto(DECK_URL);
+  await pageSnap.waitForSelector('#grid .pad');
+
+  // Verify feature is available and #btn-snapshots exists
+  assert.equal(await pageSnap.locator('#btn-snapshots').isVisible(), true, '#btn-snapshots is visible when IndexedDB is supported');
+
+  // Ensure password is set in Deck.cfg
+  await pageSnap.evaluate(() => {
+    Deck.cfg.ws.password = 'my-secret-obs-password';
+    Deck.saveCfg();
+  });
+
+  // AC: No Snapshot contains the password
+  await pageSnap.evaluate(async () => {
+    await Deck.createSnapshot('Initial Layout');
+  });
+  let snaps = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.ok(snaps.length >= 1, 'at least 1 snapshot recorded');
+  for (const s of snaps) {
+    assert.equal(s.password, undefined, 'no password field on snapshot root');
+    assert.equal(s.ws?.password, undefined, 'no password in snapshot ws object');
+    assert.equal(JSON.stringify(s).includes('my-secret-obs-password'), false, 'password never appears anywhere in snapshot');
+  }
+
+  // Set up Page 1 with a custom pad and Pad Graphic
+  const testGraphic = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  await pageSnap.evaluate(([img]) => {
+    Deck.cfg.pages[0].pads[0] = Deck.normalizePad({
+      type: 'scene',
+      sceneName: 'Main Cam',
+      label: 'Main Cam Graphic',
+      image: img,
+      imageFit: 'fill',
+    });
+    Deck.saveCfg();
+    Deck.renderGrid();
+  }, [testGraphic]);
+
+  // Add Page 2
+  await pageSnap.click('#btn-deck-add');
+  await pageSnap.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 2);
+
+  // Hook 1: Delete Page creates a Snapshot first
+  const countBeforeDel = (await pageSnap.evaluate(async () => Deck.listSnapshots())).length;
+  await pageSnap.click('#btn-deck-cfg');
+  await pageSnap.waitForSelector('#deck-dlg[open]');
+  await pageSnap.click('#btn-deck-del');
+  await pageSnap.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 1);
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeDel + 1);
+  const snapsAfterDel = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterDel.length, countBeforeDel + 1, 'delete Page created a snapshot first');
+  assert.equal(snapsAfterDel[0].pageCount, 2, 'snapshot before delete Page captured both pages');
+
+  // Hook 2: Reset Deck creates a Snapshot first
+  const countBeforeReset = snapsAfterDel.length;
+  await pageSnap.click('#btn-conn-toggle');
+  await pageSnap.waitForSelector('#conn-bar');
+  await pageSnap.click('#btn-reset-layout');
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeReset + 1);
+  const snapsAfterReset = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterReset.length, countBeforeReset + 1, 'reset Deck created a snapshot first');
+
+  // Hook 3: Import creates a Snapshot first
+  const countBeforeImport = snapsAfterReset.length;
+  await pageSnap.evaluate(async () => {
+    const fakeJson = JSON.stringify({
+      version: 2,
+      pages: [{ id: 'page-imported', name: 'Imported', cols: 4, rows: 3, pads: [] }],
+    });
+    const dt = new DataTransfer();
+    const file = new File([fakeJson], 'imported-layout.json', { type: 'application/json' });
+    dt.items.add(file);
+    const input = document.getElementById('file-import');
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await pageSnap.waitForFunction(() => Deck.cfg.pages[0].name === 'Imported');
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeImport + 1);
+  const snapsAfterImport = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterImport.length, countBeforeImport + 1, 'import created a snapshot first');
+
+  // Hook 4: Auto-Import replace creates a Snapshot first
+  await pageSnap.evaluate(() => {
+    Deck.cfg.pages = Deck.defaultPages();
+    Deck.cfg.activePageId = Deck.cfg.pages[0].id;
+    Deck.saveCfg();
+    Deck.renderGrid();
+  });
+  assert.equal(await pageSnap.evaluate(() => Deck.isStarterDeck()), true, 'deck is starter deck');
+  const countBeforeAutoImport = (await pageSnap.evaluate(async () => Deck.listSnapshots())).length;
+  await pageSnap.evaluate(() => {
+    const dummyPages = [{
+      id: 'page-auto',
+      name: 'Auto Scenes',
+      cols: 4,
+      rows: 3,
+      pads: [{ type: 'scene', sceneName: 'Main Cam', label: 'Cam' }],
+    }];
+    Deck.applyAutoImport(dummyPages, { replaceEmptyStarter: true });
+  });
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeAutoImport + 1);
+  const snapsAfterAutoImport = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterAutoImport.length, countBeforeAutoImport + 1, 'Auto-Import replace created a snapshot first');
+
+  // AC: Restoring brings back earlier Pages and Pad Graphics, while keeping password
+  const snapWithGraphic = snapsAfterAutoImport.find((s) => s.pageCount === 2 && s.pages?.some((p) => p.pads?.some((pad) => pad?.image === testGraphic)));
+  assert.ok(snapWithGraphic, 'found snapshot containing the Pad Graphic and 2 pages');
+  const currentPassword = await pageSnap.evaluate(() => Deck.cfg.ws.password);
+  assert.equal(currentPassword, 'my-secret-obs-password');
+
+  // Restore the snapshot
+  await pageSnap.evaluate(async (snapId) => {
+    await Deck.restoreSnapshot(snapId);
+  }, snapWithGraphic.timestamp);
+
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.pages.length), 2, 'restored 2 pages');
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.pages[0].pads[0].label), 'Main Cam Graphic', 'restored pad label');
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.pages[0].pads[0].image), testGraphic, 'restored Pad Graphic image');
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.ws.password), 'my-secret-obs-password', 'password preserved across restore');
+
+  // Verify that restoring a snapshot took a snapshot of the current layout first
+  const snapsAfterRestore = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterRestore[0].description, 'Before Restore', 'restoring took a snapshot of current layout first');
+
+  // AC: Only the newest 20 are kept (pruning)
+  await pageSnap.evaluate(async () => {
+    for (let i = 0; i < 25; i++) {
+      await Deck.createSnapshot(`Batch Snap ${i}`);
+    }
+  });
+  const snapsPruned = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsPruned.length, 20, 'only the newest 20 snapshots are kept');
+
+  // Snapshots dialog UI: opens, lists snapshots with time and Page count, restores via UI
+  await pageSnap.click('#btn-snapshots');
+  await pageSnap.waitForSelector('#snapshots-dlg[open]');
+  assert.equal(await pageSnap.locator('#snapshots-list .snapshot-item').count(), 20, 'dialog lists 20 snapshot items');
+  const firstItemText = await pageSnap.locator('#snapshots-list .snapshot-item').first().textContent();
+  assert.ok(/Page|Pages/.test(firstItemText), 'snapshot row displays Page count');
+  await pageSnap.click('#snapshots-close');
+  await pageSnap.waitForFunction(() => !document.getElementById('snapshots-dlg').open);
+
+  // If IndexedDB is unavailable, feature hides itself
+  await pageSnap.evaluate(() => {
+    Deck.setSnapshotsAvailable(false);
+  });
+  assert.equal(await pageSnap.locator('#btn-snapshots').isVisible(), false, '#btn-snapshots is hidden when snapshots are unavailable');
+
+  await snapCtx.close();
+  console.log('  ✓ automatic layout Snapshots in IndexedDB (#14)');
 
   // 17. Ticket #9: Redraw only the Pads that changed
   const burstObs = createFakeObs(false);

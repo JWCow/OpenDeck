@@ -724,6 +724,11 @@ dialog::backdrop { background: rgba(0, 0, 0, .65); }
 }
 
 .steps { display: grid; gap: 6px; background: #12151c; border: 1px solid var(--border); border-radius: 6px; padding: 7px; max-height: 210px; overflow: auto; }
+.snapshots-list { display: grid; gap: 6px; background: #12151c; border: 1px solid var(--border); border-radius: 6px; padding: 7px; max-height: 240px; overflow-y: auto; }
+.snapshot-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; background: #1a1e29; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+.snapshot-meta { display: flex; flex-direction: column; gap: 2px; }
+.snapshot-time { font-weight: 600; color: var(--text); }
+.snapshot-details { font-size: 11px; color: var(--muted); }
 .step { display: grid; gap: 4px; padding: 6px; background: #1a1e29; border: 1px solid var(--border); border-radius: 6px; }
 .step-top { display: flex; gap: 4px; align-items: center; }
 .swatches { display: flex; gap: 5px; flex-wrap: wrap; }
@@ -905,6 +910,14 @@ dialog::backdrop { background: rgba(0, 0, 0, .65); }
 }
 [data-theme="light"] .steps {
   background: #f8fafc;
+  border-color: var(--border);
+}
+[data-theme="light"] .snapshots-list {
+  background: #f8fafc;
+  border-color: var(--border);
+}
+[data-theme="light"] .snapshot-item {
+  background: #ffffff;
   border-color: var(--border);
 }
 [data-theme="light"] .step {
