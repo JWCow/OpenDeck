@@ -20,6 +20,7 @@
     'stats', 'hotkey', 'chapter', 'monitor', 'transform', 'image',
   ];
   const AUTO_OFF_TYPES = new Set(['source', 'filter', 'mute', 'studio', 'output', 'media']);
+  const HOLD_TYPES = new Set(['mute', 'source', 'filter']);
   const MONITOR_TYPES = [
     'OBS_MONITORING_TYPE_NONE',
     'OBS_MONITORING_TYPE_MONITOR_ONLY',
@@ -261,6 +262,9 @@
     if (!isStep && AUTO_OFF_TYPES.has(type)) {
       const ms = sanitizeAutoOff(raw.autoOffMs);
       if (ms > 0) out.autoOffMs = ms;
+    }
+    if (!isStep && HOLD_TYPES.has(type) && Boolean(raw.hold) && !(out.autoOffMs > 0)) {
+      out.hold = true;
     }
     return out;
   }
@@ -564,6 +568,7 @@
     COLORS,
     PAD_TYPES,
     AUTO_OFF_TYPES,
+    HOLD_TYPES,
     MONITOR_TYPES,
     TRANSFORM_PRESETS,
     $,
@@ -736,6 +741,10 @@
   Deck.setActivePage = (pageId) => {
     const page = Deck.cfg.pages.find((d) => d.id === pageId);
     if (!page) return null;
+    const oldPageId = Deck.cfg.activePageId;
+    if (page.id !== oldPageId) {
+      if (typeof Deck.releaseHold === 'function') Deck.releaseHold(oldPageId);
+    }
     Deck.cfg.activePageId = page.id;
     Deck.saveCfg();
     Deck.renderGrid();
@@ -2306,6 +2315,9 @@
 
   Deck.disconnectObs = (manual = true) => {
     const { obs } = Deck;
+    if (typeof Deck.releaseHold === 'function') {
+      try { Deck.releaseHold(); } catch {}
+    }
     obs.manualClose = manual;
     clearTimeout(obs.reconnectTimer);
     obs.reconnectTimer = null;
@@ -2446,6 +2458,9 @@
 
     ws.onclose = async (ev) => {
       if (obs.ws !== ws) return;
+      if (typeof Deck.releaseHold === 'function') {
+        try { Deck.releaseHold(); } catch {}
+      }
       obs.ws = null;
       obs.activeSync = null;
       obs.queuedSync = null;
