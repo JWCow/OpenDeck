@@ -2,8 +2,9 @@
   'use strict';
 
   const VERSION = '2.2.1';
-  const STORAGE_KEY = 'obs_virtual_deck_v2';
-  const LEGACY_STORAGE_KEY = 'obs_virtual_deck_v1';
+  const STORAGE_KEY = 'opendeck_config';
+  const LEGACY_STORAGE_KEYS = ['obs_virtual_deck_v2', 'obs_deck_config_v2', 'obs_virtual_deck_v1'];
+  let initialSaveFailed = false;
   const PROBE_PORTS = [4455, 4456, 4457, 4458, 4444];
   const MIN_COLS = 2;
   const MAX_COLS = 12;
@@ -19,6 +20,7 @@
     'stats', 'hotkey', 'chapter', 'monitor', 'transform', 'image',
   ];
   const AUTO_OFF_TYPES = new Set(['source', 'filter', 'mute', 'studio', 'output', 'media']);
+  const HOLD_TYPES = new Set(['mute', 'source', 'filter']);
   const MONITOR_TYPES = [
     'OBS_MONITORING_TYPE_NONE',
     'OBS_MONITORING_TYPE_MONITOR_ONLY',
@@ -96,6 +98,14 @@
     return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
   }
 
+  function parseValidHost(raw) {
+    if (raw == null) return null;
+    const str = String(raw).trim();
+    if (!str) return null;
+    const clean = str.replace(/\/.*$/, '').trim();
+    return clean || null;
+  }
+
   function getUrlPort() {
     try {
       if (typeof location === 'undefined' || !location.search) return null;
@@ -103,6 +113,21 @@
     } catch {
       return null;
     }
+  }
+
+  function getUrlHost() {
+    try {
+      if (typeof location === 'undefined' || !location.search) return null;
+      return parseValidHost(new URLSearchParams(location.search).get('host'));
+    } catch {
+      return null;
+    }
+  }
+
+  function isLocalHost(h) {
+    if (!h) return true;
+    const clean = String(h).trim().toLowerCase().replace(/^\[|\]$/g, '');
+    return clean === '127.0.0.1' || clean === 'localhost' || clean === '::1' || clean === '0.0.0.0' || clean.startsWith('127.');
   }
 
   function getPadContextSubtitle(pad) {
@@ -238,6 +263,9 @@
       const ms = sanitizeAutoOff(raw.autoOffMs);
       if (ms > 0) out.autoOffMs = ms;
     }
+    if (!isStep && HOLD_TYPES.has(type) && Boolean(raw.hold) && !(out.autoOffMs > 0)) {
+      out.hold = true;
+    }
     return out;
   }
 
@@ -247,6 +275,77 @@
 
   function normalizeStep(raw) {
     return normalizePadInternal(raw, true);
+  }
+
+  function renameReference(item, kind, oldName, newName) {
+    if (!item || typeof item !== 'object' || !oldName || !newName || oldName === newName) return false;
+    let changed = false;
+    if (kind === 'scene') {
+      if (['scene', 'source', 'transform', 'studio'].includes(item.type)) {
+        if (item.sceneName === oldName) {
+          item.sceneName = newName;
+          changed = true;
+        }
+      }
+      if (['source', 'filter', 'screenshot', 'transform'].includes(item.type)) {
+        if (item.sourceName === oldName) {
+          item.sourceName = newName;
+          changed = true;
+        }
+      }
+    } else if (kind === 'input') {
+      if (['source', 'filter', 'screenshot', 'transform'].includes(item.type)) {
+        if (item.sourceName === oldName) {
+          item.sourceName = newName;
+          changed = true;
+        }
+      } else if (['mute', 'volume', 'monitor', 'media', 'image', 'browser'].includes(item.type)) {
+        if (item.inputName === oldName) {
+          item.inputName = newName;
+          changed = true;
+        }
+      }
+    }
+    if (Array.isArray(item.steps)) {
+      for (const step of item.steps) {
+        if (renameReference(step, kind, oldName, newName)) {
+          changed = true;
+        }
+      }
+    }
+    if (changed && item.label === oldName) {
+      item.label = newName;
+    }
+    return changed;
+  }
+
+  function applyRename(kind, oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return false;
+    let changed = false;
+    const { cfg } = Deck;
+    for (const page of (cfg.pages || [])) {
+      if (kind === 'scene' && page.sceneName === oldName) {
+        page.sceneName = newName;
+        changed = true;
+      }
+      for (const pad of (page.pads || [])) {
+        if (renameReference(pad, kind, oldName, newName)) {
+          changed = true;
+        }
+      }
+    }
+    for (const step of (cfg.panicSteps || [])) {
+      if (renameReference(step, kind, oldName, newName)) {
+        changed = true;
+      }
+    }
+    if (changed) {
+      Deck.saveCfg();
+      if (kind === 'scene' && typeof Deck.renderPageBar === 'function') {
+        Deck.renderPageBar();
+      }
+    }
+    return changed;
   }
 
   function defaultPads(cols = DEFAULT_COLS, rows = DEFAULT_ROWS, seedPanic = false) {
@@ -278,7 +377,7 @@
     return `page-${n}`;
   }
 
-  function normalizePage(raw, idx, usedIds, seedPanicIfMissing = false) {
+  function normalizePage(raw, idx, usedIds, seedPanicIfMissing = false, usedScenes = null) {
     const cols = clampInt(raw?.cols, MIN_COLS, MAX_COLS, DEFAULT_COLS);
     const rows = clampInt(raw?.rows, MIN_ROWS, MAX_ROWS, DEFAULT_ROWS);
     const id = uniquePageId(usedIds, raw?.id || `page-${idx + 1}`);
@@ -294,7 +393,15 @@
         if (raw.pads[i]) pads[i] = normalizePad(raw.pads[i]);
       }
     }
-    return { id, name, cols, rows, pads };
+    const page = { id, name, cols, rows, pads };
+    if (typeof raw?.sceneName === 'string' && raw.sceneName.trim()) {
+      const sc = raw.sceneName.trim();
+      if (!usedScenes || !usedScenes.has(sc)) {
+        page.sceneName = sc;
+        if (usedScenes) usedScenes.add(sc);
+      }
+    }
+    return page;
   }
 
   function migrateConfig(raw, fallbackPassword = '') {
@@ -306,8 +413,9 @@
       const port = Number(raw.ws.port);
       ws.host = String(raw.ws.host || '127.0.0.1');
       ws.port = port >= 1 && port <= 65535 ? port : 4455;
-      ws.password = typeof raw.ws.password === 'string' ? raw.ws.password : fallbackPassword;
+      ws.password = (typeof raw.ws.password === 'string' && raw.ws.password) ? raw.ws.password : fallbackPassword;
       if (raw.ws.manualPort) ws.manualPort = true;
+      if (raw.ws.manualHost) ws.manualHost = true;
     }
 
     let pages;
@@ -318,15 +426,17 @@
 
     if (sourcePages) {
       const usedIds = new Set();
+      const usedScenes = new Set();
       pages = sourcePages
         .filter((d) => d && typeof d === 'object')
-        .map((d, idx) => normalizePage(d, idx, usedIds, false));
+        .map((d, idx) => normalizePage(d, idx, usedIds, false, usedScenes));
       if (!pages.length) throw new Error('Invalid layout JSON (empty pages[])');
       const rawActiveId = raw.activePageId || raw.activeDeckId;
       activePageId = pages.some((d) => d.id === rawActiveId) ? rawActiveId : pages[0].id;
     } else if (Array.isArray(raw.pads)) {
       const usedIds = new Set();
-      const single = normalizePage({ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads: raw.pads }, 0, usedIds, false);
+      const usedScenes = new Set();
+      const single = normalizePage({ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads: raw.pads }, 0, usedIds, false, usedScenes);
       pages = [single];
       activePageId = single.id;
     } else {
@@ -353,36 +463,40 @@
     };
     let state = base;
     try {
-      const rawOpenDeck = localStorage.getItem('opendeck_config');
-      const rawDeckV2 = localStorage.getItem('obs_deck_config_v2');
-      const rawVirtV2 = localStorage.getItem(STORAGE_KEY);
-      const rawVirtV1 = localStorage.getItem(LEGACY_STORAGE_KEY);
-
-      let rawToMigrate = null;
-      if (rawVirtV2) {
-        if (rawVirtV2.includes('"decks"')) {
-          rawToMigrate = rawVirtV2;
-        } else {
-          rawToMigrate = rawOpenDeck || rawVirtV2;
+      const rawCanonical = localStorage.getItem(STORAGE_KEY);
+      if (rawCanonical) {
+        state = migrateConfig(JSON.parse(rawCanonical));
+        for (const k of LEGACY_STORAGE_KEYS) {
+          try { localStorage.removeItem(k); } catch {}
         }
-      } else if (rawVirtV1) {
-        rawToMigrate = rawVirtV1;
-      } else if (rawDeckV2) {
-        rawToMigrate = rawDeckV2;
-      }
-
-      if (rawToMigrate) {
-        state = migrateConfig(JSON.parse(rawToMigrate));
-        try {
-          const json = JSON.stringify(state);
-          localStorage.setItem('opendeck_config', json);
-          localStorage.setItem(STORAGE_KEY, json);
-        } catch {}
       } else {
-        try { localStorage.removeItem('opendeck_config'); } catch {}
+        let rawLegacy = null;
+        for (const k of LEGACY_STORAGE_KEYS) {
+          const raw = localStorage.getItem(k);
+          if (raw) {
+            rawLegacy = raw;
+            break;
+          }
+        }
+        if (rawLegacy) {
+          state = migrateConfig(JSON.parse(rawLegacy));
+          try {
+            const json = JSON.stringify(state);
+            localStorage.setItem(STORAGE_KEY, json);
+            for (const k of LEGACY_STORAGE_KEYS) {
+              try { localStorage.removeItem(k); } catch {}
+            }
+          } catch {
+            initialSaveFailed = true;
+          }
+        }
       }
     } catch {}
 
+    const urlHost = getUrlHost();
+    if (urlHost && !state.ws.manualHost) {
+      state.ws.host = urlHost;
+    }
     const urlPort = getUrlPort();
     if (urlPort && !state.ws.manualPort) {
       state.ws.port = urlPort;
@@ -430,6 +544,19 @@
     return { id, name, cols, rows, pads };
   }
 
+  function packAutoImportPages(baseId, baseName, items) {
+    if (!Array.isArray(items) || !items.length) return [];
+    const pages = [];
+    const CHUNK_SIZE = 63;
+    for (let offset = 0, pageNum = 1; offset < items.length; offset += CHUNK_SIZE, pageNum++) {
+      const chunk = items.slice(offset, offset + CHUNK_SIZE);
+      const id = pageNum === 1 ? baseId : `${baseId}-${pageNum}`;
+      const name = pageNum === 1 ? baseName : `${baseName} ${pageNum}`;
+      pages.push(packAutoImportPage(id, name, chunk));
+    }
+    return pages;
+  }
+
   const Deck = {
     VERSION,
     PROBE_PORTS,
@@ -441,11 +568,13 @@
     COLORS,
     PAD_TYPES,
     AUTO_OFF_TYPES,
+    HOLD_TYPES,
     MONITOR_TYPES,
     TRANSFORM_PRESETS,
     $,
     esc,
     getUrlPort,
+    getUrlHost,
     getPadContextSubtitle,
     normalizePad,
     normalizeStep,
@@ -464,8 +593,16 @@
       hasProbedOnBoot: false,
       pending: new Map(),
       reconnectTimer: null,
+      reconnectCountdown: null,
+      retryCount: 0,
       statsTimer: null,
+      readoutTimer: null,
+      streamStatus: null,
+      recordStatus: null,
+      mediaStatus: {},
       manualClose: false,
+      activeSync: null,
+      queuedSync: null,
       scenes: [],
       groups: new Set(),
       inputs: [],
@@ -509,19 +646,60 @@
       transitionDuration: 300,
       lastScreenshot: '',
     },
+    STORAGE_KEY,
+    hasSaveWarning: initialSaveFailed,
+    setSaveWarning: (show) => {
+      Deck.hasSaveWarning = Boolean(show);
+      const warnEl = $('save-warning');
+      const statusEl = document.querySelector('.status');
+      const msgEl = $('msg-info');
+      if (show) {
+        if (warnEl) {
+          warnEl.hidden = false;
+          warnEl.textContent = '⚠️ Save failed: Export layout and use fewer or smaller Pad Graphics';
+        }
+        if (statusEl) statusEl.classList.add('save-failed');
+        if (msgEl) msgEl.textContent = 'Save failed: Export layout and use fewer or smaller Pad Graphics';
+      } else {
+        if (warnEl) {
+          warnEl.hidden = true;
+          warnEl.textContent = '';
+        }
+        if (statusEl) statusEl.classList.remove('save-failed');
+        if (msgEl && msgEl.textContent.includes('Save failed')) {
+          msgEl.textContent = 'Ready';
+        }
+      }
+    },
     renderGrid: () => {},
+    scheduleRenderGrid: () => Deck.renderGrid(),
     updateMacroTicks: () => {},
     updateStatsPads: () => Deck.renderGrid(),
   };
 
   Deck.saveCfg = () => {
+    let ok = false;
     try {
       const json = JSON.stringify(Deck.cfg);
-      localStorage.setItem('opendeck_config', json);
       localStorage.setItem(STORAGE_KEY, json);
+      ok = true;
+      for (const k of LEGACY_STORAGE_KEYS) {
+        try { localStorage.removeItem(k); } catch {}
+      }
     } catch {}
+    Deck.setSaveWarning(!ok);
     Deck.syncStatsPolling();
+    Deck.syncReadoutPolling();
+    return ok;
   };
+
+  if (initialSaveFailed) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => Deck.setSaveWarning(true), { once: true });
+    } else {
+      setTimeout(() => Deck.setSaveWarning(true), 0);
+    }
+  }
 
   Deck.exportConfig = () => {
     const { cfg } = Deck;
@@ -529,13 +707,17 @@
       version: 2,
       ws: { host: cfg.ws.host, port: cfg.ws.port },
       activePageId: cfg.activePageId,
-      pages: cfg.pages.map((d) => ({
-        id: d.id,
-        name: d.name,
-        cols: d.cols,
-        rows: d.rows,
-        pads: d.pads.map(normalizePad),
-      })),
+      pages: cfg.pages.map((d) => {
+        const out = {
+          id: d.id,
+          name: d.name,
+          cols: d.cols,
+          rows: d.rows,
+          pads: d.pads.map(normalizePad),
+        };
+        if (d.sceneName) out.sceneName = d.sceneName;
+        return out;
+      }),
       panicSteps: (cfg.panicSteps || []).map(normalizeStep).filter((s) => s.type !== 'none' && s.type !== 'wait'),
     };
   };
@@ -559,6 +741,10 @@
   Deck.setActivePage = (pageId) => {
     const page = Deck.cfg.pages.find((d) => d.id === pageId);
     if (!page) return null;
+    const oldPageId = Deck.cfg.activePageId;
+    if (page.id !== oldPageId) {
+      if (typeof Deck.releaseHold === 'function') Deck.releaseHold(oldPageId);
+    }
     Deck.cfg.activePageId = page.id;
     Deck.saveCfg();
     Deck.renderGrid();
@@ -610,11 +796,36 @@
     return true;
   };
 
-  Deck.deletePage = (pageId) => {
+  Deck.setPageScene = (pageId, sceneName) => {
+    const page = Deck.cfg.pages.find((d) => d.id === pageId);
+    if (!page) return false;
+    const trimmed = String(sceneName || '').trim();
+    if (trimmed) {
+      const other = Deck.cfg.pages.find((p) => p.id !== pageId && p.sceneName === trimmed);
+      if (other) return false;
+      page.sceneName = trimmed;
+    } else {
+      delete page.sceneName;
+    }
+    Deck.saveCfg();
+    Deck.renderGrid();
+    return true;
+  };
+
+  Deck.deletePage = async (pageId) => {
     const { pages } = Deck.cfg;
     if (pages.length <= 1) return false;
     const idx = pages.findIndex((d) => d.id === pageId);
     if (idx < 0) return false;
+    let snapFailed = false;
+    if (typeof Deck.createSnapshot === 'function') {
+      try {
+        const s = await Deck.createSnapshot('Before Delete Page');
+        if (s === null && Deck.snapshotsAvailable) snapFailed = true;
+      } catch {
+        snapFailed = true;
+      }
+    }
     if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(pageId);
     pages.splice(idx, 1);
     if (Deck.cfg.activePageId === pageId) {
@@ -622,6 +833,9 @@
     }
     Deck.saveCfg();
     Deck.renderGrid();
+    if (snapFailed) {
+      Deck.setMsg('No snapshot was saved');
+    }
     return true;
   };
 
@@ -854,7 +1068,7 @@
           { type: 'scene', mode: 'next', label: 'Next Scene', icon: '⏭️', color: '#115e59' }
         );
       }
-      if (items.length) pages.push(packAutoImportPage('page-scenes', 'Scenes', items));
+      if (items.length) pages.push(...packAutoImportPages('page-scenes', 'Scenes', items));
     }
 
     if (cfgOpts.sources) {
@@ -878,7 +1092,7 @@
           });
         }
       }
-      if (items.length) pages.push(packAutoImportPage('page-sources', 'Sources', items));
+      if (items.length) pages.push(...packAutoImportPages('page-sources', 'Sources', items));
     }
 
     if (cfgOpts.filters) {
@@ -901,7 +1115,7 @@
           });
         }
       }
-      if (items.length) pages.push(packAutoImportPage('page-filters', 'Filters', items));
+      if (items.length) pages.push(...packAutoImportPages('page-filters', 'Filters', items));
     }
 
     if (cfgOpts.broadcast) {
@@ -934,20 +1148,31 @@
         { type: 'screenshot', imageFormat: 'png', label: 'Snapshot', icon: '📸', color: '#115e59' },
         { type: 'stats', mode: 'all', label: 'OBS Stats', icon: '📊', color: '#222733' }
       );
-      pages.push(packAutoImportPage('page-broadcast', 'Broadcast', items));
+      pages.push(...packAutoImportPages('page-broadcast', 'Broadcast', items));
     }
 
     return pages;
   };
 
-  Deck.applyAutoImport = (pages, { replaceEmptyStarter = true } = {}) => {
+  Deck.applyAutoImport = async (pages, { replaceEmptyStarter = true, skipSnapshot = false } = {}) => {
     const incoming = Array.isArray(pages) ? pages.filter((p) => p && typeof p === 'object') : [];
     if (!incoming.length) return [];
     const replace = replaceEmptyStarter && Deck.isStarterDeck();
     const usedIds = replace ? new Set() : new Set(Deck.cfg.pages.map((d) => d.id));
     const normalized = incoming.map((p, idx) => normalizePage(p, idx, usedIds, false));
+    let snapFailed = false;
     if (replace) {
-      if (typeof Deck.abortPageTimers === 'function') {
+      if (!skipSnapshot && typeof Deck.createSnapshot === 'function') {
+        try {
+          const s = await Deck.createSnapshot('Before Auto-Import');
+          if (s === null && Deck.snapshotsAvailable) snapFailed = true;
+        } catch {
+          snapFailed = true;
+        }
+      }
+      if (typeof Deck.abortAllTimers === 'function') {
+        Deck.abortAllTimers();
+      } else if (typeof Deck.abortPageTimers === 'function') {
         for (const old of Deck.cfg.pages) Deck.abortPageTimers(old.id);
       }
       Deck.cfg.pages = normalized;
@@ -957,6 +1182,9 @@
     Deck.cfg.activePageId = normalized[0].id;
     Deck.saveCfg();
     Deck.renderGrid();
+    if (snapFailed) {
+      Deck.setMsg('No snapshot was saved');
+    }
     if (Deck.obs.status === 'ok') {
       const mutesToSync = new Set();
       const monitorsToSync = new Set();
@@ -973,8 +1201,449 @@
         ]).then(() => Deck.renderGrid());
       }
     }
-    Deck.setMsg(`Auto-Imported ${normalized.length} page(s)`);
+    const padCount = normalized.reduce((sum, p) => sum + (p.pads || []).filter((pad) => pad && pad.type !== 'none').length, 0);
+    Deck.setMsg(`Auto-Imported ${padCount} pad(s) across ${normalized.length} page(s)`);
     return normalized;
+  };
+
+  const STARTER_LAYOUTS = [
+    {
+      id: 'solo-streamer',
+      name: 'Solo Streamer',
+      cols: 4,
+      rows: 3,
+      pads: [
+        {
+          slot: 'scene',
+          match: /cam|main|talk|chat|face/i,
+          fallbackIndex: 0,
+          label: 'Main Scene',
+          icon: '🎥',
+        },
+        {
+          slot: 'scene',
+          match: /game|play|screen|desktop|slide/i,
+          fallbackIndex: 1,
+          label: 'Game / Screen',
+          icon: '🎮',
+        },
+        {
+          slot: 'scene',
+          match: /brb|break|away|pause/i,
+          fallbackIndex: 2,
+          label: 'BRB Scene',
+          icon: '☕',
+        },
+        {
+          type: 'output',
+          target: 'stream',
+          mode: 'toggle',
+          label: 'Stream',
+          icon: '📡',
+          color: '#991b1b',
+        },
+        {
+          slot: 'mute',
+          match: /mic|aux|input/i,
+          fallbackIndex: 0,
+          label: 'Mic Mute',
+          icon: '🎙️',
+        },
+        {
+          slot: 'mute',
+          match: /desktop|game|audio|music/i,
+          fallbackIndex: 1,
+          label: 'Desktop Audio',
+          icon: '🔊',
+        },
+        {
+          slot: 'source',
+          match: /webcam|cam|overlay|alert|face/i,
+          label: 'Webcam / Source',
+          icon: '📷',
+        },
+        {
+          type: 'output',
+          target: 'record',
+          mode: 'toggle',
+          label: 'Record',
+          icon: '🔴',
+          color: '#991b1b',
+        },
+        {
+          type: 'chapter',
+          label: 'Chapter',
+          icon: '🔖',
+          color: '#854d0e',
+        },
+        {
+          type: 'stats',
+          mode: 'all',
+          label: 'OBS Stats',
+          icon: '📊',
+          color: '#222733',
+        },
+        {
+          type: 'studio',
+          action: 'toggle',
+          label: 'Studio Mode',
+          icon: '🎬',
+          color: '#581c87',
+        },
+        {
+          type: 'panic',
+          label: 'PANIC',
+          icon: '🚨',
+          color: '#991b1b',
+        },
+      ],
+    },
+    {
+      id: 'talk-slides',
+      name: 'Talk + Slides',
+      cols: 4,
+      rows: 3,
+      pads: [
+        {
+          slot: 'scene',
+          match: /speaker|talk|cam|face|main/i,
+          fallbackIndex: 0,
+          label: 'Speaker Scene',
+          icon: '🎥',
+        },
+        {
+          slot: 'scene',
+          match: /slide|deck|present/i,
+          fallbackIndex: 1,
+          label: 'Slides Scene',
+          icon: '🖥️',
+        },
+        {
+          slot: 'scene',
+          match: /brb|break|intro|start/i,
+          fallbackIndex: 2,
+          label: 'BRB / Intro',
+          icon: '☕',
+        },
+        {
+          type: 'output',
+          target: 'stream',
+          mode: 'toggle',
+          label: 'Stream',
+          icon: '📡',
+          color: '#991b1b',
+        },
+        {
+          slot: 'mute',
+          match: /mic|aux|input/i,
+          fallbackIndex: 0,
+          label: 'Mic Mute',
+          icon: '🎙️',
+        },
+        {
+          slot: 'source',
+          match: /slide|present|deck|image|pdf/i,
+          label: 'Slide Source',
+          icon: '🖼️',
+        },
+        {
+          type: 'studio',
+          action: 'toggle',
+          label: 'Studio Mode',
+          icon: '🎬',
+          color: '#581c87',
+        },
+        {
+          type: 'output',
+          target: 'record',
+          mode: 'toggle',
+          label: 'Record',
+          icon: '🔴',
+          color: '#991b1b',
+        },
+        {
+          type: 'chapter',
+          label: 'Chapter',
+          icon: '🔖',
+          color: '#854d0e',
+        },
+        {
+          type: 'stats',
+          mode: 'all',
+          label: 'OBS Stats',
+          icon: '📊',
+          color: '#222733',
+        },
+        {
+          type: 'scene',
+          mode: 'next',
+          label: 'Next Scene',
+          icon: '⏭️',
+          color: '#115e59',
+        },
+        {
+          type: 'panic',
+          label: 'PANIC',
+          icon: '🚨',
+          color: '#991b1b',
+        },
+      ],
+    },
+    {
+      id: 'podcast-interview',
+      name: 'Podcast/Interview',
+      cols: 4,
+      rows: 3,
+      pads: [
+        {
+          slot: 'scene',
+          match: /host|main|cam|talk/i,
+          fallbackIndex: 0,
+          label: 'Host Scene',
+          icon: '🎥',
+        },
+        {
+          slot: 'scene',
+          match: /guest|split|side|interview|slides/i,
+          fallbackIndex: 1,
+          label: 'Guest Scene',
+          icon: '👥',
+        },
+        {
+          slot: 'scene',
+          match: /both|wide|all|group|brb/i,
+          fallbackIndex: 2,
+          label: 'Wide / Both',
+          icon: '🎬',
+        },
+        {
+          type: 'output',
+          target: 'stream',
+          mode: 'toggle',
+          label: 'Stream',
+          icon: '📡',
+          color: '#991b1b',
+        },
+        {
+          slot: 'mute',
+          match: /host|mic|aux|input/i,
+          fallbackIndex: 0,
+          label: 'Host Mic',
+          icon: '🎙️',
+        },
+        {
+          slot: 'mute',
+          match: /guest|aux|discord|desktop|audio/i,
+          fallbackIndex: 1,
+          label: 'Guest Audio',
+          icon: '🎧',
+        },
+        {
+          slot: 'media',
+          match: /media|video|intro|sound|music/i,
+          label: 'Soundboard / Media',
+          icon: '🎞️',
+        },
+        {
+          type: 'output',
+          target: 'record',
+          mode: 'toggle',
+          label: 'Record',
+          icon: '🔴',
+          color: '#991b1b',
+        },
+        {
+          type: 'chapter',
+          label: 'Chapter',
+          icon: '🔖',
+          color: '#854d0e',
+        },
+        {
+          type: 'stats',
+          mode: 'all',
+          label: 'OBS Stats',
+          icon: '📊',
+          color: '#222733',
+        },
+        {
+          type: 'output',
+          target: 'vcam',
+          mode: 'toggle',
+          label: 'Virtual Cam',
+          icon: '📹',
+          color: '#166534',
+        },
+        {
+          type: 'panic',
+          label: 'PANIC',
+          icon: '🚨',
+          color: '#991b1b',
+        },
+      ],
+    },
+  ];
+
+  function pickCleanItem(list, match, fallbackIndex) {
+    if (!Array.isArray(list) || !list.length) return null;
+    const clean = list.filter((s) => typeof s === 'string' && !s.startsWith('<'));
+    if (match) {
+      const foundClean = clean.find((s) => match.test(s));
+      if (foundClean) return foundClean;
+      const foundAny = list.find((s) => typeof s === 'string' && match.test(s));
+      if (foundAny) return foundAny;
+    }
+    if (fallbackIndex != null) {
+      if (clean[fallbackIndex]) return clean[fallbackIndex];
+      if (list[fallbackIndex]) return list[fallbackIndex];
+    }
+    return null;
+  }
+
+  function resolveStarterPad(def, obs) {
+    if (!def.slot) {
+      return normalizePad(JSON.parse(JSON.stringify(def)));
+    }
+    const connected = obs && obs.status === 'ok';
+    const emptySlotPad = () => ({
+      type: 'none',
+      label: def.label || '',
+      icon: def.icon || '',
+      color: COLORS[0],
+    });
+
+    if (!connected) {
+      return emptySlotPad();
+    }
+
+    if (def.slot === 'scene') {
+      const found = pickCleanItem(obs.scenes || [], def.match, def.fallbackIndex);
+      if (found) {
+        return normalizePad({
+          type: 'scene',
+          mode: 'named',
+          sceneName: found,
+          label: found,
+          icon: smartSceneIcon(found),
+          color: '#991b1b',
+        });
+      }
+      return emptySlotPad();
+    }
+
+    if (def.slot === 'mute') {
+      const nonAudioKindRe = /^(image_source|slideshow(_v2)?|browser_source|color_source|text_|window_capture|monitor_capture|display_capture)/i;
+      const allInputs = obs.inputs || [];
+      const audioCandidates = allInputs.filter((inp) => (
+        typeof obs.mutes[inp] === 'boolean' && !nonAudioKindRe.test(obs.inputKinds[inp] || '')
+      ));
+      const candidates = audioCandidates.length ? audioCandidates : allInputs;
+      const found = pickCleanItem(candidates, def.match, def.fallbackIndex);
+      if (found) {
+        return normalizePad({
+          type: 'mute',
+          inputName: found,
+          mode: 'toggle',
+          label: found,
+          icon: def.icon || '🎙️',
+          color: '#854d0e',
+        });
+      }
+      return emptySlotPad();
+    }
+
+    if (def.slot === 'source') {
+      const targets = [...new Set([...(obs.scenes || []), ...(obs.groups || [])])];
+      let foundScene = '';
+      let foundSource = '';
+      for (const sc of targets) {
+        const items = obs.itemsByScene[sc] || [];
+        const item = def.match
+          ? items.find((it) => it?.sourceName && def.match.test(it.sourceName))
+          : items[0];
+        if (item && item.sourceName) {
+          foundScene = sc;
+          foundSource = item.sourceName;
+          break;
+        }
+      }
+      if (foundSource) {
+        return normalizePad({
+          type: 'source',
+          sceneName: foundScene,
+          sourceName: foundSource,
+          mode: 'toggle',
+          label: foundSource,
+          icon: smartSourceIcon(foundSource, obs.inputKinds[foundSource]),
+          color: '#115e59',
+        });
+      }
+      return emptySlotPad();
+    }
+
+    if (def.slot === 'media') {
+      const mediaList = obs.mediaInputs || [];
+      let found = def.match ? mediaList.find((m) => def.match.test(m)) : mediaList[0];
+      if (found) {
+        return normalizePad({
+          type: 'media',
+          inputName: found,
+          mediaAction: 'play_pause',
+          label: found,
+          icon: '🎞️',
+          color: '#166534',
+        });
+      }
+      return emptySlotPad();
+    }
+
+    return emptySlotPad();
+  }
+
+  function buildStarterLayoutPage(nameOrId, obs = Deck.obs) {
+    const tpl = STARTER_LAYOUTS.find((t) => t.id === nameOrId || t.name === nameOrId) || STARTER_LAYOUTS[0];
+    if (!tpl) return null;
+    const total = tpl.cols * tpl.rows;
+    const pads = Array.from({ length: total }, emptyPad);
+    for (let i = 0; i < tpl.pads.length && i < total; i++) {
+      pads[i] = resolveStarterPad(tpl.pads[i], obs);
+    }
+    return {
+      id: `page-${tpl.id}`,
+      name: tpl.name,
+      cols: tpl.cols,
+      rows: tpl.rows,
+      pads,
+    };
+  }
+
+  Deck.STARTER_LAYOUTS = STARTER_LAYOUTS;
+  Deck.buildStarterLayoutPage = buildStarterLayoutPage;
+  Deck.applyStarterLayout = async (templateName, { replaceEmptyStarter = true } = {}) => {
+    const page = buildStarterLayoutPage(templateName);
+    if (!page) return [];
+    let snapFailed = false;
+    if (typeof Deck.createSnapshot === 'function') {
+      try {
+        const s = await Deck.createSnapshot('Before Starter Layout');
+        if (s === null && Deck.snapshotsAvailable) snapFailed = true;
+      } catch {
+        snapFailed = true;
+      }
+    }
+    const res = await Deck.applyAutoImport([page], { replaceEmptyStarter, skipSnapshot: true });
+    if (snapFailed) {
+      Deck.setMsg('No snapshot was saved');
+    }
+    return res;
+  };
+
+  Deck.getCurrentPassword = () => (Deck.cfg?.ws?.password) || ($('ws-pass') ? $('ws-pass').value : '') || '';
+
+  Deck.syncWsInputs = () => {
+    if (!Deck.cfg?.ws) return;
+    if ($('ws-host')) $('ws-host').value = Deck.cfg.ws.host ?? '';
+    if ($('ws-port')) $('ws-port').value = Deck.cfg.ws.port ?? '';
+    if ($('ws-pass')) $('ws-pass').value = Deck.cfg.ws.password ?? '';
   };
 
   Deck.setMsg = (txt) => {
@@ -1108,6 +1777,170 @@
     }
   };
 
+  function formatTimecode(timecode, durationMs) {
+    if (typeof timecode === 'string' && timecode.trim()) {
+      return timecode.trim().replace(/\.\d+$/, '');
+    }
+    if (typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs >= 0) {
+      const totalSec = Math.floor(durationMs / 1000);
+      const sec = totalSec % 60;
+      const min = Math.floor(totalSec / 60) % 60;
+      const hr = Math.floor(totalSec / 3600);
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${pad(hr)}:${pad(min)}:${pad(sec)}`;
+    }
+    return '';
+  }
+
+  function formatMediaTimeLeft(durationMs, cursorMs, timecode) {
+    if (typeof timecode === 'string' && timecode.trim()) {
+      return timecode.trim().replace(/\.\d+$/, '');
+    }
+    if (typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs >= 0) {
+      const cur = typeof cursorMs === 'number' && Number.isFinite(cursorMs) ? cursorMs : 0;
+      const remainingMs = Math.max(0, durationMs - cur);
+      const totalSec = Math.floor(remainingMs / 1000);
+      const sec = totalSec % 60;
+      const min = Math.floor(totalSec / 60) % 60;
+      const hr = Math.floor(totalSec / 3600);
+      const pad = (n) => String(n).padStart(2, '0');
+      if (hr > 0) return `${pad(hr)}:${pad(min)}:${pad(sec)}`;
+      return `${pad(min)}:${pad(sec)}`;
+    }
+    return '';
+  }
+
+  function isReadoutPad(p) {
+    if (!p) return false;
+    if (p.type === 'volume') return true;
+    if (p.type === 'media') return true;
+    if (p.type === 'output' && (p.target === 'stream' || p.target === 'record' || p.target === 'recordPause')) return true;
+    return false;
+  }
+
+  function needsReadoutPolling(p) {
+    if (!p) return false;
+    if (p.type === 'media') return true;
+    if (p.type === 'output' && (p.target === 'stream' || p.target === 'record' || p.target === 'recordPause')) return true;
+    return false;
+  }
+
+  Deck.isReadoutPad = isReadoutPad;
+
+  Deck.getPadReadoutText = (p) => {
+    if (!p) return '';
+    const { obs } = Deck;
+    const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+    if (!connected) return '';
+
+    if (p.type === 'volume' && p.inputName) {
+      const cur = obs.volumes?.[p.inputName];
+      if (typeof cur === 'number' && Number.isFinite(cur)) {
+        const dbVal = Math.round(cur * 10) / 10;
+        return `${dbVal} dB`;
+      }
+      return '';
+    }
+
+    if (p.type === 'output' && p.target === 'stream') {
+      if (!obs.outputs.stream) return '';
+      const st = obs.streamStatus;
+      if (!st) return '00:00:00';
+      return formatTimecode(st.outputTimecode, st.outputDuration) || '00:00:00';
+    }
+
+    if (p.type === 'output' && (p.target === 'record' || p.target === 'recordPause')) {
+      if (!obs.outputs.record) return '';
+      if (obs.outputs.recordPaused || obs.recordStatus?.outputPaused) return 'PAUSED';
+      const st = obs.recordStatus;
+      if (!st) return '00:00:00';
+      return formatTimecode(st.outputTimecode, st.outputDuration) || '00:00:00';
+    }
+
+    if (p.type === 'media' && p.inputName) {
+      const st = obs.mediaStatus?.[p.inputName];
+      const state = st?.mediaState || obs.mediaStates?.[p.inputName];
+      if (!state || state === 'OBS_MEDIA_STATE_STOPPED' || state === 'OBS_MEDIA_STATE_ENDED') return '';
+      if (st) {
+        return formatMediaTimeLeft(st.mediaDuration, st.mediaCursor, st.mediaTimecode);
+      }
+      return '';
+    }
+
+    return '';
+  };
+
+  Deck.fetchReadouts = async () => {
+    const { obs } = Deck;
+    const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+    if (!connected) return;
+    const activePads = Deck.getActivePads();
+    const hasStream = activePads.some((p) => p && p.type === 'output' && p.target === 'stream');
+    const hasRecord = activePads.some((p) => p && p.type === 'output' && (p.target === 'record' || p.target === 'recordPause'));
+    const mediaInputs = [...new Set(activePads.filter((p) => p && p.type === 'media' && p.inputName).map((p) => p.inputName))];
+
+    const calls = [];
+    if (hasStream) {
+      calls.push(Deck.obsCall('GetStreamStatus').then((r) => {
+        obs.streamStatus = r;
+        if (typeof r.outputActive === 'boolean') obs.outputs.stream = r.outputActive;
+      }).catch(() => {}));
+    }
+    if (hasRecord) {
+      calls.push(Deck.obsCall('GetRecordStatus').then((r) => {
+        obs.recordStatus = r;
+        if (typeof r.outputActive === 'boolean') obs.outputs.record = r.outputActive;
+        if (typeof r.outputPaused === 'boolean') obs.outputs.recordPaused = r.outputPaused;
+      }).catch(() => {}));
+    }
+    for (const name of mediaInputs) {
+      calls.push(Deck.obsCall('GetMediaInputStatus', { inputName: name }).then((r) => {
+        obs.mediaStatus = obs.mediaStatus || {};
+        obs.mediaStatus[name] = r;
+        if (r.mediaState) obs.mediaStates[name] = r.mediaState;
+      }).catch(() => {}));
+    }
+
+    if (calls.length > 0) {
+      await Promise.all(calls);
+    }
+    if (typeof Deck.updateReadoutPads === 'function') {
+      Deck.updateReadoutPads();
+    }
+  };
+
+  Deck.syncReadoutPolling = () => {
+    const { obs } = Deck;
+    const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+    const needsPolling = connected && Deck.getActivePads().some(needsReadoutPolling);
+    if (connected) {
+      const missingVolumes = Deck.getActivePads()
+        .filter((p) => p && p.type === 'volume' && p.inputName && typeof obs.volumes[p.inputName] !== 'number')
+        .map((p) => p.inputName);
+      if (missingVolumes.length > 0) {
+        Promise.all([...new Set(missingVolumes)].map(Deck.fetchVolume)).then(() => {
+          if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+        });
+      }
+    }
+    if (needsPolling) {
+      if (!obs.readoutTimer) {
+        Deck.fetchReadouts();
+        obs.readoutTimer = setInterval(() => {
+          const stillConnected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+          if (stillConnected && Deck.getActivePads().some(needsReadoutPolling)) {
+            Deck.fetchReadouts();
+          } else {
+            Deck.syncReadoutPolling();
+          }
+        }, 1000);
+      }
+    } else if (obs.readoutTimer) {
+      clearInterval(obs.readoutTimer);
+      obs.readoutTimer = null;
+    }
+  };
+
   function applyInputList(rawInputs) {
     const { obs } = Deck;
     const list = Array.isArray(rawInputs) ? rawInputs : [];
@@ -1134,18 +1967,19 @@
     const r = await Deck.obsCall(req, { sceneName: name });
     const items = r.sceneItems || [];
     obs.itemsByScene[name] = items;
-    for (const it of items) {
-      if (it.isGroup) {
+    const groupItems = items.filter((it) => it.isGroup);
+    if (groupItems.length) {
+      await Promise.all(groupItems.map(async (it) => {
         obs.groups.add(it.sourceName);
         try {
           const gr = await Deck.obsCall('GetGroupSceneItemList', { sceneName: it.sourceName });
           obs.itemsByScene[it.sourceName] = gr.sceneItems || [];
         } catch {}
-      }
+      }));
     }
   }
 
-  Deck.syncObsState = async () => {
+  async function performSync() {
     const { obs, cfg } = Deck;
     try {
       const safe = (req, data) => Deck.obsCall(req, data).catch(() => null);
@@ -1221,9 +2055,7 @@
 
       obs.groups = new Set();
       obs.itemsByScene = {};
-      for (const s of obs.scenes) {
-        try { await refreshSceneOrGroupItems(s); } catch {}
-      }
+      await Promise.all(obs.scenes.map((s) => refreshSceneOrGroupItems(s).catch(() => {})));
 
       const filterSources = new Set([...obs.scenes, ...obs.groups, ...obs.inputs]);
       for (const list of Object.values(obs.itemsByScene)) {
@@ -1257,29 +2089,100 @@
         ...[...monitorInputs].map(Deck.fetchMonitorType),
       ]);
 
+      if (typeof Deck.syncTransforms === 'function') {
+        try { await Deck.syncTransforms(); } catch {}
+      }
+
       Deck.updateSceneHeader();
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
       Deck.syncStatsPolling();
+      Deck.syncReadoutPolling();
+      if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
     } catch (e) {
       Deck.setMsg(`Sync error: ${e.message}`);
     }
+  }
+
+  Deck.syncObsState = () => {
+    const { obs } = Deck;
+    if (obs.activeSync) {
+      if (!obs.queuedSync) {
+        obs.queuedSync = obs.activeSync
+          .catch(() => {})
+          .then(() => {
+            obs.queuedSync = null;
+            if (!obs.ws || obs.ws.readyState !== 1) return;
+            return Deck.syncObsState();
+          });
+      }
+      return obs.queuedSync;
+    }
+    obs.activeSync = performSync().finally(() => {
+      obs.activeSync = null;
+    });
+    return obs.activeSync;
   };
+
+  function syncSceneLinkedPage(sceneName) {
+    if (Deck.editMode || !sceneName) return false;
+    const linked = (Deck.cfg.pages || []).find((p) => p.sceneName && p.sceneName === sceneName);
+    if (linked && Deck.cfg.activePageId !== linked.id) {
+      Deck.setActivePage(linked.id);
+      return true;
+    }
+    return false;
+  }
+  Deck.syncSceneLinkedPage = syncSceneLinkedPage;
 
   async function handleObsEvent(type, d) {
     const { obs } = Deck;
     if (type === 'CurrentProgramSceneChanged') {
       obs.programScene = d.sceneName || '';
+      syncSceneLinkedPage(obs.programScene);
       Deck.updateSceneHeader();
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'CurrentPreviewSceneChanged') {
       obs.previewScene = d.sceneName || '';
       Deck.updateSceneHeader();
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'StudioModeStateChanged') {
       obs.studioModeEnabled = !!d.studioModeEnabled;
       Deck.updateSceneHeader();
-      Deck.renderGrid();
-    } else if (type === 'SceneListChanged' || type === 'SceneNameChanged' || type === 'InputNameChanged' || type === 'CurrentSceneCollectionChanged') {
+      Deck.scheduleRenderGrid();
+    } else if (type === 'SceneNameChanged') {
+      const oldName = d.oldSceneName;
+      const newName = d.sceneName;
+      if (oldName && newName && oldName !== newName) {
+        if (obs.programScene === oldName) obs.programScene = newName;
+        if (obs.previewScene === oldName) obs.previewScene = newName;
+        applyRename('scene', oldName, newName);
+      }
+      await Deck.syncObsState();
+    } else if (type === 'SceneRemoved') {
+      const removedScene = d.sceneName;
+      if (removedScene) {
+        const clearedPages = [];
+        for (const page of (Deck.cfg.pages || [])) {
+          if (page.sceneName === removedScene) {
+            delete page.sceneName;
+            clearedPages.push(page.name);
+          }
+        }
+        if (clearedPages.length) {
+          Deck.saveCfg();
+          Deck.renderGrid();
+          Deck.setMsg(`Cleared scene link on Page "${clearedPages.join(', ')}": scene "${removedScene}" removed`);
+        }
+      }
+      await Deck.syncObsState();
+    } else if (type === 'InputNameChanged') {
+      const oldName = d.oldInputName;
+      const newName = d.inputName;
+      if (oldName && newName && oldName !== newName) {
+        applyRename('input', oldName, newName);
+      }
+      await Deck.syncObsState();
+    } else if (type === 'SceneListChanged' || type === 'CurrentSceneCollectionChanged') {
       if (type === 'CurrentSceneCollectionChanged' && d.sceneCollectionName) {
         obs.currentCollection = d.sceneCollectionName;
       }
@@ -1289,74 +2192,102 @@
         const il = await Deck.obsCall('GetInputList');
         applyInputList(il.inputs);
       } catch {}
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'SceneItemEnableStateChanged') {
       const arr = obs.itemsByScene[d.sceneName];
       if (arr) {
         const it = arr.find((x) => x.sceneItemId === d.sceneItemId);
         if (it) it.sceneItemEnabled = !!d.sceneItemEnabled;
       }
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'SceneItemCreated' || type === 'SceneItemRemoved') {
       try { await refreshSceneOrGroupItems(d.sceneName); } catch {}
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'SourceFilterEnableStateChanged') {
       const arr = obs.filtersBySource[d.sourceName];
       if (arr) {
         const f = arr.find((x) => x.filterName === d.filterName);
         if (f) f.filterEnabled = !!d.filterEnabled;
       }
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'SourceFilterCreated' || type === 'SourceFilterRemoved' || type === 'SourceFilterListReindexed' || type === 'SourceFilterNameChanged') {
       await Deck.refreshFilters(d.sourceName);
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'InputMuteStateChanged') {
       obs.mutes[d.inputName] = !!d.inputMuted;
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'InputVolumeChanged') {
       if (d.inputName && typeof d.inputVolumeDb === 'number') obs.volumes[d.inputName] = d.inputVolumeDb;
-      Deck.renderGrid();
+      if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+      Deck.scheduleRenderGrid();
     } else if (type === 'InputAudioMonitorTypeChanged') {
       if (d.inputName && d.monitorType) obs.monitors[d.inputName] = d.monitorType;
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'StreamStateChanged') {
       obs.outputs.stream = !!d.outputActive;
-      Deck.renderGrid();
+      if (!d.outputActive) obs.streamStatus = null;
+      else if (typeof Deck.fetchReadouts === 'function') Deck.fetchReadouts();
+      if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+      Deck.scheduleRenderGrid();
     } else if (type === 'RecordStateChanged') {
       obs.outputs.record = !!d.outputActive;
       if (d.outputState === 'OBS_WEBSOCKET_OUTPUT_PAUSED') obs.outputs.recordPaused = true;
       else if (d.outputState === 'OBS_WEBSOCKET_OUTPUT_RESUMED' || !d.outputActive) obs.outputs.recordPaused = false;
-      Deck.renderGrid();
+      if (!d.outputActive) obs.recordStatus = null;
+      else if (typeof Deck.fetchReadouts === 'function') Deck.fetchReadouts();
+      if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+      Deck.scheduleRenderGrid();
     } else if (type === 'VirtualcamStateChanged') {
       obs.outputs.vcam = !!d.outputActive;
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'ReplayBufferStateChanged') {
       obs.outputs.replay = !!d.outputActive;
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'ReplayBufferSaved') {
       if (d.savedReplayPath) Deck.setMsg(`Replay saved: ${d.savedReplayPath}`);
     } else if (type === 'MediaInputPlaybackStarted') {
       if (d.inputName) obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_PLAYING';
-      Deck.renderGrid();
+      if (typeof Deck.fetchReadouts === 'function') Deck.fetchReadouts();
+      if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+      Deck.scheduleRenderGrid();
     } else if (type === 'MediaInputPlaybackEnded') {
-      if (d.inputName) obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_ENDED';
-      Deck.renderGrid();
+      if (d.inputName) {
+        obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_ENDED';
+        if (obs.mediaStatus) delete obs.mediaStatus[d.inputName];
+      }
+      if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+      Deck.scheduleRenderGrid();
+    } else if (type === 'MediaInputActionTriggered') {
+      if (d.inputName) {
+        if (d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' || d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART' || d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_NEXT' || d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PREVIOUS') {
+          obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_PLAYING';
+        } else if (d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE') {
+          obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_PAUSED';
+        } else if (d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP') {
+          obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_STOPPED';
+        }
+      }
+      Deck.scheduleRenderGrid();
+    } else if (type === 'SceneItemTransformChanged') {
+      if (typeof Deck.syncTransforms === 'function') {
+        Deck.syncTransforms();
+      }
     } else if (type === 'CurrentProfileChanged') {
       obs.currentProfile = d.profileName || '';
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'ProfileListChanged') {
       if (Array.isArray(d.profiles)) {
         obs.profiles = d.profiles.map((p) => (typeof p === 'string' ? p : p?.profileName)).filter(Boolean);
       }
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'SceneCollectionListChanged') {
       if (Array.isArray(d.sceneCollections)) {
         obs.collections = d.sceneCollections.map((c) => (typeof c === 'string' ? c : c?.sceneCollectionName)).filter(Boolean);
       }
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'CurrentSceneTransitionChanged') {
       obs.currentTransition = d.transitionName || '';
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'CurrentSceneTransitionDurationChanged') {
       if (typeof d.transitionDuration === 'number') obs.transitionDuration = d.transitionDuration;
     }
@@ -1406,19 +2337,108 @@
     return idx >= 0 ? list[idx] : null;
   };
 
+  const CLOSE_CODES = {
+    1000: { name: 'Normal Closure' },
+    1001: { name: 'Going Away' },
+    1002: { name: 'Protocol Error', unrecoverable: true },
+    1003: { name: 'Unsupported Data', unrecoverable: true },
+    1005: { name: 'No Status' },
+    1006: { name: 'Abnormal Closure' },
+    1008: { name: 'Policy Violation', unrecoverable: true },
+    4000: { name: 'Unknown Reason' },
+    4002: { name: 'Message Decode Error', unrecoverable: true },
+    4003: { name: 'Missing Data Field', unrecoverable: true },
+    4004: { name: 'Invalid Data Field Type', unrecoverable: true },
+    4005: { name: 'Invalid Data Field Value', unrecoverable: true },
+    4006: { name: 'Unknown OpCode', unrecoverable: true },
+    4009: { name: 'Auth Failed', unrecoverable: true },
+    4010: { name: 'Unsupported RPC Version', unrecoverable: true },
+    4011: { name: 'Session Invalidated', unrecoverable: true },
+  };
+
   Deck.disconnectObs = (manual = true) => {
     const { obs } = Deck;
+    if (typeof Deck.releaseHold === 'function') {
+      try { Deck.releaseHold(); } catch {}
+    }
     obs.manualClose = manual;
     clearTimeout(obs.reconnectTimer);
+    obs.reconnectTimer = null;
+    if (obs.reconnectCountdown) {
+      clearInterval(obs.reconnectCountdown);
+      obs.reconnectCountdown = null;
+    }
     if (obs.statsTimer) {
       clearInterval(obs.statsTimer);
       obs.statsTimer = null;
     }
+    if (obs.readoutTimer) {
+      clearInterval(obs.readoutTimer);
+      obs.readoutTimer = null;
+    }
+    obs.streamStatus = null;
+    obs.recordStatus = null;
+    obs.mediaStatus = {};
+    if (typeof Deck.clearReadoutPads === 'function') Deck.clearReadoutPads();
+    obs.activeSync = null;
+    obs.queuedSync = null;
     for (const p of obs.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Disconnected')); }
     obs.pending.clear();
     if (obs.ws) { const w = obs.ws; obs.ws = null; try { w.close(); } catch {} }
-    if (manual) Deck.setConn('bad', 'Disconnected');
+    if (manual) {
+      obs.retryCount = 0;
+      Deck.setConn('bad', 'Disconnected');
+      Deck.setMsg('Disconnected');
+    }
   };
+
+  function scheduleReconnect(ev) {
+    const { obs, cfg } = Deck;
+    clearTimeout(obs.reconnectTimer);
+    obs.reconnectTimer = null;
+    if (obs.reconnectCountdown) {
+      clearInterval(obs.reconnectCountdown);
+      obs.reconnectCountdown = null;
+    }
+    const attempt = obs.retryCount || 0;
+    const delaySec = Math.min(3 * Math.pow(2, attempt), 30);
+    obs.retryCount = attempt + 1;
+
+    const code = ev?.code;
+    const codeStr = code ? ` (${code})` : '';
+    const entry = code ? CLOSE_CODES[code] : null;
+    const reasonText = ev?.reason || entry?.name || (code ? `Code ${code}` : 'Connection dropped');
+    let remaining = delaySec;
+
+    const host = obs.currentHost || cfg?.ws?.host || '';
+    const isNonLocal = host && !isLocalHost(host);
+    const lanNote = isNonLocal ? ' · OBS WebSocket must be reachable on the LAN' : '';
+
+    const updateStatus = () => {
+      Deck.setConn('bad', `Retry in ${remaining}s`);
+      Deck.setMsg(`Disconnected: ${reasonText}${codeStr}${lanNote} · Retrying in ${remaining}s…`);
+    };
+
+    updateStatus();
+    obs.reconnectCountdown = setInterval(() => {
+      remaining -= 1;
+      if (remaining > 0) {
+        updateStatus();
+      } else {
+        clearInterval(obs.reconnectCountdown);
+        obs.reconnectCountdown = null;
+      }
+    }, 1000);
+
+    obs.reconnectTimer = setTimeout(() => {
+      if (obs.reconnectCountdown) {
+        clearInterval(obs.reconnectCountdown);
+        obs.reconnectCountdown = null;
+      }
+      obs.reconnectTimer = null;
+      Deck.connectObs({ isBoot: false });
+    }, delaySec * 1000);
+  }
 
   function buildWsTarget(rawHostInput, rawPortInput) {
     let raw = (rawHostInput || '127.0.0.1').trim();
@@ -1460,12 +2480,16 @@
     if ($('ws-host')) $('ws-host').value = host;
     if ($('ws-port')) $('ws-port').value = port;
 
+    obs.currentHost = host;
+
+    const urlHost = getUrlHost();
     const urlPort = getUrlPort();
     const isManual = !isBoot && (opts?.manual === true || (typeof Event !== 'undefined' && opts instanceof Event));
-    const keepManual = Boolean(cfg.ws.manualPort) || (isManual && port !== (urlPort || 4455));
-    cfg.ws = keepManual
-      ? { host, port, password, manualPort: true }
-      : { host, port, password };
+    const keepManualPort = Boolean(cfg.ws.manualPort) || (isManual && port !== (urlPort || 4455));
+    const keepManualHost = Boolean(cfg.ws.manualHost) || (isManual && host !== (urlHost || '127.0.0.1'));
+    cfg.ws = { host, port, password };
+    if (keepManualPort) cfg.ws.manualPort = true;
+    if (keepManualHost) cfg.ws.manualHost = true;
     Deck.saveCfg();
     Deck.setConn('wait', 'Connecting…');
 
@@ -1477,13 +2501,28 @@
 
     ws.onclose = async (ev) => {
       if (obs.ws !== ws) return;
+      if (typeof Deck.releaseHold === 'function') {
+        try { Deck.releaseHold(); } catch {}
+      }
       obs.ws = null;
+      obs.activeSync = null;
+      obs.queuedSync = null;
       if (obs.statsTimer) {
         clearInterval(obs.statsTimer);
         obs.statsTimer = null;
       }
+      if (obs.readoutTimer) {
+        clearInterval(obs.readoutTimer);
+        obs.readoutTimer = null;
+      }
+      obs.streamStatus = null;
+      obs.recordStatus = null;
+      obs.mediaStatus = {};
+      if (typeof Deck.clearReadoutPads === 'function') Deck.clearReadoutPads();
       for (const p of obs.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Closed')); }
       obs.pending.clear();
+      if (obs.manualClose) return;
+
       if (ev.code === 4009) {
         Deck.setConn('bad', 'Auth Failed');
         Deck.setMsg('OBS WebSocket password rejected');
@@ -1491,8 +2530,19 @@
         return;
       }
 
-      if (!obs.manualClose && !opened && isBoot && !obs.hasProbedOnBoot
-        && host === '127.0.0.1' && port === 4455 && !cfg.ws.manualPort && !urlPort) {
+      const closeEntry = CLOSE_CODES[ev.code];
+      if (closeEntry?.unrecoverable) {
+        const name = closeEntry.name;
+        const isNonLocal = host && !isLocalHost(host);
+        const lanNote = isNonLocal ? ' · OBS WebSocket must be reachable on the LAN' : '';
+        const detail = ev.reason ? `${ev.reason} (${ev.code})` : `${name} (${ev.code})`;
+        Deck.setConn('bad', name);
+        Deck.setMsg(`${detail}${lanNote} — retries stopped`);
+        return;
+      }
+
+      if (!opened && isBoot && !obs.hasProbedOnBoot
+        && isLocalHost(host) && port === 4455 && !cfg.ws.manualPort && !cfg.ws.manualHost && !urlPort && !urlHost) {
         obs.hasProbedOnBoot = true;
         Deck.setConn('wait', 'Scanning OBS ports…');
         Deck.setMsg('Probing local OBS WebSocket ports…');
@@ -1507,14 +2557,11 @@
           Deck.connectObs({ isBoot: false });
           return;
         }
-        Deck.setConn('bad', 'Disconnected');
-        Deck.setMsg('No OBS WebSocket found on ports 4455–4458, 4444');
-        obs.reconnectTimer = setTimeout(() => Deck.connectObs({ isBoot: false }), 3000);
+        scheduleReconnect({ code: 1006, reason: 'No OBS WebSocket found on ports 4455–4458, 4444' });
         return;
       }
 
-      Deck.setConn('bad', 'Disconnected');
-      if (!obs.manualClose) obs.reconnectTimer = setTimeout(() => Deck.connectObs({ isBoot: false }), 3000);
+      scheduleReconnect(ev);
     };
 
     ws.onmessage = async (ev) => {
@@ -1529,9 +2576,14 @@
         }
         ws.send(JSON.stringify({ op: 1, d }));
       } else if (msg.op === 2) {
+        obs.retryCount = 0;
         Deck.setConn('ok', 'Connected');
         Deck.setMsg(`Connected to ${url}`);
         await Deck.syncObsState();
+        if (typeof Deck.applyPendingHoldRestores === 'function') {
+          await Deck.applyPendingHoldRestores();
+        }
+        syncSceneLinkedPage(obs.programScene);
         if (typeof Deck.onObsConnected === 'function') Deck.onObsConnected();
       } else if (msg.op === 5) {
         await handleObsEvent(msg.d?.eventType, msg.d?.eventData || {});

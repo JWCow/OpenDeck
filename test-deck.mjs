@@ -931,6 +931,7 @@ try {
     await page.click('#btn-conn-toggle');
   }
   await page.click('#btn-reset-layout');
+  await page.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0]?.textContent?.includes('Go Slides'));
   assert.equal((await pad(0).textContent()).includes('Go Slides'), false, 'reset cleared pads');
   assert.equal(await page.locator('#deck-tabs .page-tab').count(), 1, 'reset restored single starter page');
 
@@ -974,6 +975,23 @@ try {
     assert.equal(sp.ctx, sp.sceneName, `Source pad "${sp.label}" context subtitle matches parent scene`);
   }
 
+  // Test that running auto-off timer is cancelled by import and never sends its reversal
+  await page.evaluate(() => {
+    const p = Deck.getActivePads()[0];
+    p.type = 'filter';
+    p.sourceName = 'Webcam';
+    p.filterName = 'Blur';
+    p.mode = 'toggle';
+    p.autoOffMs = 1500;
+    Deck.saveCfg();
+    Deck.renderGrid();
+  });
+  state.filters['Webcam'][0].filterEnabled = false;
+  await pad(0).click();
+  await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('running'));
+  assert.equal(state.filters['Webcam'][0].filterEnabled, true, 'auto-off started filter ON');
+  const callsAtAutoOffStart = state.calls.length;
+
   // Test importing a legacy v1 JSON layout
   const v1Path = join(tmpDir, 'legacy-v1.json');
   const v1Pads = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
@@ -981,6 +999,14 @@ try {
   fs.writeFileSync(v1Path, JSON.stringify({ version: 1, ws: { host: '127.0.0.1', port }, pads: v1Pads, panicSteps: [] }));
   await page.setInputFiles('#file-import', v1Path);
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].textContent.includes('V1 BRB'));
+
+  // Wait past original auto-off expiration and verify reversal was cancelled and never sent
+  await page.waitForTimeout(1800);
+  const autoOffReversals = state.calls.slice(callsAtAutoOffStart).filter((c) => c.requestType === 'SetSourceFilterEnabled');
+  assert.equal(autoOffReversals.length, 0, 'cancelled auto-off never sends reversal after import');
+  assert.equal(state.filters['Webcam'][0].filterEnabled, true, 'filter stayed in ON state and was not reversed by old timer');
+  assert.equal(await page.evaluate(() => Deck.activeAutoOffs.size), 0, 'activeAutoOffs stopped on import');
+  assert.equal(await page.evaluate(() => Deck.activeMacros.size), 0, 'activeMacros stopped on import');
 
   // Test importing a legacy v2.0.0 JSON layout (decks[], activeDeckId, deckId)
   const v20Path = join(tmpDir, 'legacy-v200.json');
@@ -1019,6 +1045,15 @@ try {
   assert.equal(await page.locator('#deck-tabs .page-tab').count(), 2, 'v2.1.0 import restored multi-page layout');
   assert.equal(await pad(16).locator('.pad-icon-img').count(), 1, 'custom image restored on re-import');
   assert.ok((await pad(16).locator('.pad-icon-img').getAttribute('src')).startsWith('data:image/'), 'restored pad image src is data URL');
+
+  // Verify that saved OBS password was preserved across imports and survives reload
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  await page.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+  assert.equal(await page.textContent('#scene-info'), 'Program: Slides | Preview: Slides', 'reconnected to password-protected OBS after import and reload');
+  assert.equal(await page.evaluate(() => Deck.cfg.ws.password), PASSWORD, 'password preserved in Deck.cfg');
+  await page.click('#btn-conn-toggle');
+  assert.equal(await page.inputValue('#ws-pass'), PASSWORD, 'password preserved in ws-pass input');
   console.log('  ✓ v2.1.0 localStorage + Export/Import + Auto-Import Wizard + v1 & v2.0.0 JSON migration');
 
   // 15. No-auth OBS WebSocket v5 server handshake

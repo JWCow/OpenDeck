@@ -55,3 +55,34 @@ _Avoid_: Button picture, tile background
 **Auto-Label**:
 The automatic synchronization of a Pad's Label to match the name of the selected target Scene, Source, Filter, or Audio Input in the Pad Editor.
 _Avoid_: Auto-namer, default title sync
+
+**Hold Pad**:
+A Pad whose action stays on only while it is pressed and turns back off when released, such as a cough button or push-to-talk.
+_Avoid_: Momentary key, push button
+
+**Scene-Linked Page**:
+A Page that comes to the front automatically when its chosen OBS scene goes live on program.
+_Avoid_: Auto-page, scene profile
+
+**Live Readout**:
+A live value shown on a Pad alongside its on/off state, such as elapsed stream or recording time, or an input's volume level.
+_Avoid_: Pad stats, overlay text
+
+**Snapshot**:
+An automatic layout backup stored in browser IndexedDB before destructive operations or debounced after edits, capable of restoring earlier Pages and Pad Graphics without persisting the OBS WebSocket password.
+_Avoid_: Backup file, revision, autosave slot
+
+**Undo History**:
+An in-memory stack of up to 50 previous layout states recorded during Edit Mode that allows reverting and replaying layout changes step-by-step without affecting OBS or surviving a page reload.
+_Avoid_: Change log, edit history, revision stack
+
+**Starter Layout**:
+A pre-configured Deck Page template (such as Solo Streamer, Talk + Slides, or Podcast/Interview) with fixed broadcast pads and dynamic slots populated from read-only OBS state when connected, or marked empty pads when disconnected.
+_Avoid_: Preset profile, sample deck, default template
+
+**Phone Deck**:
+The OpenDeck control surface served over local HTTP and accessed from a phone or tablet browser on the same local network, connecting directly to OBS WebSocket on the host machine without embedding passwords in URLs.
+_Avoid_: Remote deck, mobile app, web companion
+
+
+

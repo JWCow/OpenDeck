@@ -1,13 +1,13 @@
 # 🎛️ OpenDeck
 
 [![Latest Release](https://img.shields.io/github/v/release/JWCow/obs-virtual-deck?label=Release&color=2563eb)](https://github.com/JWCow/obs-virtual-deck/releases/latest)
-[![Download ZIP](https://img.shields.io/badge/Download-opendeck--v2.2.1.zip-16a34a?logo=github)](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck-v2.2.1.zip)
+[![Download ZIP](https://img.shields.io/badge/Download-opendeck.zip-16a34a?logo=github)](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck.zip)
 [![Platforms](https://img.shields.io/badge/macOS%20%26%20Windows-OBS%2028%2B-334155)](#quick-start)
 
 **Zero-backend virtual Stream Deck for OBS Studio.**  
 Drop `deck.html` into an OBS Custom Browser Dock — no plugins, no server, no build step.
 
-**[⬇️ Download opendeck-v2.2.1.zip](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck-v2.2.1.zip)** · [All Releases](https://github.com/JWCow/obs-virtual-deck/releases)
+**[⬇️ Download the latest opendeck.zip](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck.zip)** · [All Releases](https://github.com/JWCow/obs-virtual-deck/releases)
 
 <br>
 
@@ -70,9 +70,9 @@ Drop `deck.html` into an OBS Custom Browser Dock — no plugins, no server, no b
 
 ## 🚀 Quick Start
 
-**1. 📦 Install** — Download & extract the ZIP, then run the setup helper inside:
+**1. 📦 Install** — Download & extract the ZIP (it unpacks to an `obs-virtual-deck` folder), then run the setup helper inside. It copies OpenDeck to `Documents/obs-virtual-deck` and **copies the dock URL to your clipboard**:
 - 🪟 **Windows:** `Install-Windows.bat` *(SmartScreen: More info → Run anyway)*
-- 🍎 **macOS:** `Install-Mac.command` *(Right-click → Open, or `bash ~/Downloads/obs-virtual-deck/Install-Mac.command`)*
+- 🍎 **macOS:** `Install-Mac.command` *(Right-click → Open, or run `bash ~/Downloads/obs-virtual-deck/Install-Mac.command` if you extracted it in Downloads)*
 
 <br>
 
@@ -80,13 +80,19 @@ Drop `deck.html` into an OBS Custom Browser Dock — no plugins, no server, no b
 
 <br>
 
-**3. 🖥️ Add OBS Dock** — **Docks → Custom Browser Docks...** → name it `OpenDeck` → paste the copied `file:///.../deck.html` URL → **Apply**.
+**3. 🖥️ Add OBS Dock** — **Docks → Custom Browser Docks...** → name it `OpenDeck` → paste the `file:///.../deck.html` URL the installer copied (it also prints it in the installer window) → **Apply**.
 
 <br>
 
 **4. 🔗 Connect** — Click **WS**, enter your password (if set), click **Connect**, and run **🪄 Auto-Import**.
 
 > 💡 *Upgrading from v1/v2.x?* Opening `deck.html` at the same `file://` path migrates your layout automatically. Click **Export** first for a backup.
+
+<br>
+
+## 📱 Phone Deck
+
+Open the URL printed by the installer or LAN helper (`node scripts/lan-helper.mjs`) on a phone or tablet on the same Wi-Fi. An exported layout JSON placed in the Deck folder can be loaded with **Import from link** at its served URL (e.g. `http://<ip>:8080/layout.json`).
 
 <br>
 
@@ -98,7 +104,20 @@ Drop `deck.html` into an OBS Custom Browser Dock — no plugins, no server, no b
 | 🔑 **Auth Failed** | Copy password from OBS **Show Connect Info** into **WS → Pass** |
 | ⬜ **Blank Dock** | URL must start with `file:///` and point to `deck.html` (macOS: allow Files & Folders access) |
 | 🔄 **Missing Items** | Connect to OBS, then click **↻ Sync** |
-| 📂 **Layout Reset** | `localStorage` follows the file path — **Export** before moving the folder |
+| 📂 **Layout Reset** | Layouts live in the browser's storage, not in the folder — **Export** to back up, and use **Snapshots** to roll back |
+
+<br>
+
+## 🖥️ Multiple OBS Computers
+
+> 💡 **Tip:** Open one dock per OBS machine (e.g. a gaming PC and a streaming PC) and point each at its own OBS with `?host=` and `?port=` in the dock URL.
+
+| Computer | Dock or Phone URL |
+|---|---|
+| 🎮 **Gaming PC** (local) | `file:///.../obs-virtual-deck/deck.html?port=4455` |
+| 📡 **Streaming PC** (remote) | `file:///.../obs-virtual-deck/deck.html?host=192.168.1.50&port=4455` |
+
+Each dock connects to the OBS in its own URL, but **both share one layout**: the browser keeps a single storage area for every `file://` page, so copying the folder does not separate them. Keep the controls for both machines on separate Pages. Leave the WS host and port fields alone in these docks; typing a host or port there is saved and then overrides the URL in every dock. On Phone Deck, add the same `?host=` and `?port=` to the LAN URL (e.g. `http://192.168.1.50:8080/deck.html?host=192.168.1.50&port=4455`).
 
 <br>
 
