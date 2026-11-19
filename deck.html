@@ -175,6 +175,13 @@
       <input id="d-name" maxlength="24" placeholder="Main">
     </div>
     <div class="row">
+      <label for="d-scene">Linked Scene (auto-switch)</label>
+      <select id="d-scene">
+        <option value="">None</option>
+      </select>
+    </div>
+    <div id="d-scene-warn" class="warn" hidden></div>
+    <div class="row">
       <label>Page Grid Size Presets</label>
       <div id="d-presets" class="presets">
         <button type="button" class="btn sm" data-cols="3" data-rows="2">3×2</button>

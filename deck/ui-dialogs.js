@@ -15,12 +15,66 @@
     });
   }
 
+  function syncSceneWarning() {
+    const cur = Deck.getActivePage();
+    const selScene = $('d-scene')?.value.trim() || '';
+    const warnEl = $('d-scene-warn');
+    const applyBtn = $('deck-dlg')?.querySelector('button[type="submit"]');
+    if (!selScene) {
+      if (warnEl) { warnEl.hidden = true; warnEl.textContent = ''; }
+      if (applyBtn) applyBtn.disabled = false;
+      return null;
+    }
+    const other = (Deck.cfg.pages || []).find((p) => p.id !== cur.id && p.sceneName === selScene);
+    if (other) {
+      if (warnEl) {
+        warnEl.hidden = false;
+        warnEl.textContent = `Scene "${selScene}" is already linked to Page "${other.name}"`;
+      }
+      if (applyBtn) applyBtn.disabled = true;
+      return other;
+    } else {
+      if (warnEl) { warnEl.hidden = true; warnEl.textContent = ''; }
+      if (applyBtn) applyBtn.disabled = false;
+      return null;
+    }
+  }
+
   function openPageDialog() {
     const page = Deck.getActivePage();
     $('d-name').value = page.name || 'Main';
     $('d-cols').value = page.cols;
     $('d-rows').value = page.rows;
     $('btn-deck-del').disabled = Deck.cfg.pages.length <= 1;
+
+    const sel = $('d-scene');
+    if (sel) {
+      sel.innerHTML = '<option value="">None</option>';
+      const scenes = Deck.obs.scenes || [];
+      const curScene = page.sceneName || '';
+      let hasCur = false;
+      for (const s of scenes) {
+        const opt = document.createElement('option');
+        opt.value = s;
+        opt.textContent = s;
+        if (s === curScene) {
+          opt.selected = true;
+          hasCur = true;
+        }
+        sel.appendChild(opt);
+      }
+      if (curScene && !hasCur) {
+        const opt = document.createElement('option');
+        opt.value = curScene;
+        opt.textContent = `${curScene} (saved)`;
+        opt.selected = true;
+        sel.appendChild(opt);
+      }
+      if (!curScene) {
+        sel.value = '';
+      }
+    }
+    syncSceneWarning();
     syncPagePresetHighlight();
     $('deck-dlg').showModal();
   }
@@ -116,6 +170,8 @@
   $('btn-deck-cancel').addEventListener('click', () => $('deck-dlg').close());
   $('d-cols').addEventListener('input', syncPagePresetHighlight);
   $('d-rows').addEventListener('input', syncPagePresetHighlight);
+  $('d-scene')?.addEventListener('change', syncSceneWarning);
+  $('d-scene')?.addEventListener('input', syncSceneWarning);
   $('d-presets').querySelectorAll('button').forEach((b) => {
     b.addEventListener('click', () => {
       $('d-cols').value = b.dataset.cols;
@@ -141,14 +197,23 @@
       Deck.setMsg(`Deleted Page "${cur.name}"`);
     });
   });
-  $('deck-form').addEventListener('submit', () => {
+  $('deck-form').addEventListener('submit', (e) => {
     const cur = Deck.getActivePage();
+    const selScene = $('d-scene')?.value.trim() || '';
+    if (selScene) {
+      const other = (Deck.cfg.pages || []).find((p) => p.id !== cur.id && p.sceneName === selScene);
+      if (other) {
+        if (e) e.preventDefault();
+        return;
+      }
+    }
     const name = $('d-name').value.trim() || cur.name;
     const cols = Number($('d-cols').value) || cur.cols;
     const rows = Number($('d-rows').value) || cur.rows;
     Deck.pushHistory(() => {
       Deck.renamePage(cur.id, name);
       Deck.resizePage(cur.id, cols, rows);
+      Deck.setPageScene(cur.id, selScene);
       const updated = Deck.getActivePage();
       Deck.setMsg(`Page "${updated.name}" (${updated.cols}×${updated.rows})`);
     });
