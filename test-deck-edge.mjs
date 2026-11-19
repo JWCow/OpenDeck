@@ -616,6 +616,7 @@ try {
     'obs-virtual-deck/deck/ui-palette.js',
     'obs-virtual-deck/deck/ui-select.js',
     'obs-virtual-deck/deck/ui-dialogs.js',
+    'obs-virtual-deck/deck/snapshots.js',
     'obs-virtual-deck/deck/ui-boot.js',
     'obs-virtual-deck/README.md',
     'obs-virtual-deck/Install-Windows.bat',
@@ -1276,6 +1277,416 @@ try {
     console.log('  ✓ output stop protection and in-flight guard (#5)');
   } finally {
     outObs.wss.close();
+  }
+
+  // 16. Media, Image and Transform Pad state fixes (#12)
+  const obs12 = createFakeObs(false);
+  await new Promise((r) => obs12.wss.once('listening', r));
+  const port12 = obs12.wss.address().port;
+  try {
+    const ctx12 = await browser.newContext();
+    const page12 = await ctx12.newPage();
+    page12.on('pageerror', (e) => pageErrors.push(e.message));
+    await page12.goto(`${DECK_URL}?port=${port12}`);
+    await page12.waitForSelector('#grid .pad');
+    await page12.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await page12.waitForTimeout(100);
+    if (await page12.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await page12.click('#btn-wiz-cancel');
+    }
+
+    // AC 1: A media pause event from OBS turns the Media Pad off
+    await page12.evaluate(() => {
+      Deck.cfg.pages[0].pads[0] = {
+        type: 'media',
+        inputName: 'Intro Video',
+        mediaAction: 'play_pause',
+        label: 'Video',
+      };
+      Deck.obs.mediaStates['Intro Video'] = 'OBS_MEDIA_STATE_PLAYING';
+      Deck.renderGrid();
+    });
+    await page12.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    obs12.broadcast('MediaInputActionTriggered', {
+      inputName: 'Intro Video',
+      mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE',
+    });
+    await page12.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'), null, { timeout: 3000 });
+    console.log('  ✓ media pause event from OBS turns Media Pad off (#12)');
+
+    // AC 2: Set file on a slideshow sends the slideshow file-list setting
+    obs12.state.calls.length = 0;
+    await page12.evaluate(async () => {
+      Deck.cfg.pages[0].pads[1] = {
+        type: 'image',
+        inputName: 'Photo Slideshow',
+        mode: 'set_file',
+        filePath: '/img/slideshow-new.png',
+        label: 'Slideshow File',
+      };
+      Deck.renderGrid();
+    });
+    await page12.locator('#grid .pad').nth(1).click();
+    await page12.waitForFunction(() => document.querySelectorAll('#grid .pad')[1].className.includes('active'));
+    const slideshowCall = obs12.state.calls.find(
+      (c) => c.requestType === 'SetInputSettings' && c.requestData?.inputName === 'Photo Slideshow'
+    );
+    assert.ok(slideshowCall, 'SetInputSettings called for Photo Slideshow');
+    assert.equal(slideshowCall.requestData.inputSettings.file, undefined, 'does not send single file setting on slideshow');
+    assert.deepEqual(
+      slideshowCall.requestData.inputSettings.files,
+      [{ value: '/img/slideshow-new.png', hidden: false, selected: false }],
+      'sends slideshow file-list setting'
+    );
+    console.log('  ✓ set file on slideshow sends file-list setting (#12)');
+
+    // AC 3: After a reload, a PiP'd source shows its Transform Pad as active
+    await page12.evaluate(() => {
+      Deck.cfg.pages[0].pads[2] = {
+        type: 'transform',
+        sceneName: 'Main Cam',
+        sourceName: 'Webcam',
+        preset: 'toggle_pip',
+        label: 'Cam PiP',
+      };
+      Deck.saveCfg();
+    });
+    obs12.state.itemTransforms['Main Cam:1'] = {
+      positionX: 1350,
+      positionY: 746,
+      scaleX: 0.28,
+      scaleY: 0.28,
+      sourceWidth: 1920,
+      sourceHeight: 1080,
+      alignment: 5,
+    };
+    await page12.reload();
+    await page12.waitForSelector('#grid .pad');
+    await page12.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await page12.waitForFunction(() => document.querySelectorAll('#grid .pad')[2].className.includes('active'), null, { timeout: 3000 });
+
+    // Reset source transform to full scale in OBS and reload; pad must be inactive
+    obs12.state.itemTransforms['Main Cam:1'] = {
+      positionX: 0,
+      positionY: 0,
+      scaleX: 1,
+      scaleY: 1,
+      sourceWidth: 1920,
+      sourceHeight: 1080,
+      alignment: 5,
+    };
+    await page12.reload();
+    await page12.waitForSelector('#grid .pad');
+    await page12.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await page12.waitForFunction(() => !document.querySelectorAll('#grid .pad')[2].className.includes('active'), null, { timeout: 3000 });
+
+    await ctx12.close();
+    console.log('  ✓ PiP source shows Transform Pad as active after reload (#12)');
+  } finally {
+    obs12.wss.close();
+  }
+
+  // 19. Snapshots in IndexedDB (#14)
+  const snapCtx = await browser.newContext();
+  const pageSnap = await snapCtx.newPage();
+  pageSnap.on('pageerror', (e) => pageErrors.push(e.message));
+  pageSnap.on('dialog', (d) => d.accept());
+  await pageSnap.goto(DECK_URL);
+  await pageSnap.waitForSelector('#grid .pad');
+
+  // Verify feature is available and #btn-snapshots exists
+  assert.equal(await pageSnap.locator('#btn-snapshots').isVisible(), true, '#btn-snapshots is visible when IndexedDB is supported');
+
+  // Ensure password is set in Deck.cfg
+  await pageSnap.evaluate(() => {
+    Deck.cfg.ws.password = 'my-secret-obs-password';
+    Deck.saveCfg();
+  });
+
+  // AC: No Snapshot contains the password
+  await pageSnap.evaluate(async () => {
+    await Deck.createSnapshot('Initial Layout');
+  });
+  let snaps = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.ok(snaps.length >= 1, 'at least 1 snapshot recorded');
+  for (const s of snaps) {
+    assert.equal(s.password, undefined, 'no password field on snapshot root');
+    assert.equal(s.ws?.password, undefined, 'no password in snapshot ws object');
+    assert.equal(JSON.stringify(s).includes('my-secret-obs-password'), false, 'password never appears anywhere in snapshot');
+  }
+
+  // Set up Page 1 with a custom pad and Pad Graphic
+  const testGraphic = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  await pageSnap.evaluate(([img]) => {
+    Deck.cfg.pages[0].pads[0] = Deck.normalizePad({
+      type: 'scene',
+      sceneName: 'Main Cam',
+      label: 'Main Cam Graphic',
+      image: img,
+      imageFit: 'fill',
+    });
+    Deck.saveCfg();
+    Deck.renderGrid();
+  }, [testGraphic]);
+
+  // Add Page 2
+  await pageSnap.click('#btn-deck-add');
+  await pageSnap.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 2);
+
+  // Hook 1: Delete Page creates a Snapshot first
+  const countBeforeDel = (await pageSnap.evaluate(async () => Deck.listSnapshots())).length;
+  await pageSnap.click('#btn-deck-cfg');
+  await pageSnap.waitForSelector('#deck-dlg[open]');
+  await pageSnap.click('#btn-deck-del');
+  await pageSnap.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 1);
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeDel + 1);
+  const snapsAfterDel = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterDel.length, countBeforeDel + 1, 'delete Page created a snapshot first');
+  assert.equal(snapsAfterDel[0].pageCount, 2, 'snapshot before delete Page captured both pages');
+
+  // Hook 2: Reset Deck creates a Snapshot first
+  const countBeforeReset = snapsAfterDel.length;
+  await pageSnap.click('#btn-conn-toggle');
+  await pageSnap.waitForSelector('#conn-bar');
+  await pageSnap.click('#btn-reset-layout');
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeReset + 1);
+  const snapsAfterReset = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterReset.length, countBeforeReset + 1, 'reset Deck created a snapshot first');
+
+  // Hook 3: Import creates a Snapshot first
+  const countBeforeImport = snapsAfterReset.length;
+  await pageSnap.evaluate(async () => {
+    const fakeJson = JSON.stringify({
+      version: 2,
+      pages: [{ id: 'page-imported', name: 'Imported', cols: 4, rows: 3, pads: [] }],
+    });
+    const dt = new DataTransfer();
+    const file = new File([fakeJson], 'imported-layout.json', { type: 'application/json' });
+    dt.items.add(file);
+    const input = document.getElementById('file-import');
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await pageSnap.waitForFunction(() => Deck.cfg.pages[0].name === 'Imported');
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeImport + 1);
+  const snapsAfterImport = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterImport.length, countBeforeImport + 1, 'import created a snapshot first');
+
+  // Hook 4: Auto-Import replace creates a Snapshot first
+  await pageSnap.evaluate(() => {
+    Deck.cfg.pages = Deck.defaultPages();
+    Deck.cfg.activePageId = Deck.cfg.pages[0].id;
+    Deck.saveCfg();
+    Deck.renderGrid();
+  });
+  assert.equal(await pageSnap.evaluate(() => Deck.isStarterDeck()), true, 'deck is starter deck');
+  const countBeforeAutoImport = (await pageSnap.evaluate(async () => Deck.listSnapshots())).length;
+  await pageSnap.evaluate(() => {
+    const dummyPages = [{
+      id: 'page-auto',
+      name: 'Auto Scenes',
+      cols: 4,
+      rows: 3,
+      pads: [{ type: 'scene', sceneName: 'Main Cam', label: 'Cam' }],
+    }];
+    Deck.applyAutoImport(dummyPages, { replaceEmptyStarter: true });
+  });
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeAutoImport + 1);
+  const snapsAfterAutoImport = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterAutoImport.length, countBeforeAutoImport + 1, 'Auto-Import replace created a snapshot first');
+
+  // AC: Restoring brings back earlier Pages and Pad Graphics, while keeping password
+  const snapWithGraphic = snapsAfterAutoImport.find((s) => s.pageCount === 2 && s.pages?.some((p) => p.pads?.some((pad) => pad?.image === testGraphic)));
+  assert.ok(snapWithGraphic, 'found snapshot containing the Pad Graphic and 2 pages');
+  const currentPassword = await pageSnap.evaluate(() => Deck.cfg.ws.password);
+  assert.equal(currentPassword, 'my-secret-obs-password');
+
+  // Restore the snapshot
+  await pageSnap.evaluate(async (snapId) => {
+    await Deck.restoreSnapshot(snapId);
+  }, snapWithGraphic.timestamp);
+
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.pages.length), 2, 'restored 2 pages');
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.pages[0].pads[0].label), 'Main Cam Graphic', 'restored pad label');
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.pages[0].pads[0].image), testGraphic, 'restored Pad Graphic image');
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.ws.password), 'my-secret-obs-password', 'password preserved across restore');
+
+  // Verify that restoring a snapshot took a snapshot of the current layout first
+  const snapsAfterRestore = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterRestore[0].description, 'Before Restore', 'restoring took a snapshot of current layout first');
+
+  // AC: Only the newest 20 are kept (pruning)
+  await pageSnap.evaluate(async () => {
+    for (let i = 0; i < 25; i++) {
+      await Deck.createSnapshot(`Batch Snap ${i}`);
+    }
+  });
+  const snapsPruned = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsPruned.length, 20, 'only the newest 20 snapshots are kept');
+
+  // Snapshots dialog UI: opens, lists snapshots with time and Page count, restores via UI
+  await pageSnap.click('#btn-snapshots');
+  await pageSnap.waitForSelector('#snapshots-dlg[open]');
+  assert.equal(await pageSnap.locator('#snapshots-list .snapshot-item').count(), 20, 'dialog lists 20 snapshot items');
+  const firstItemText = await pageSnap.locator('#snapshots-list .snapshot-item').first().textContent();
+  assert.ok(/Page|Pages/.test(firstItemText), 'snapshot row displays Page count');
+  await pageSnap.click('#snapshots-close');
+  await pageSnap.waitForFunction(() => !document.getElementById('snapshots-dlg').open);
+
+  // If IndexedDB is unavailable, feature hides itself
+  await pageSnap.evaluate(() => {
+    Deck.setSnapshotsAvailable(false);
+  });
+  assert.equal(await pageSnap.locator('#btn-snapshots').isVisible(), false, '#btn-snapshots is hidden when snapshots are unavailable');
+
+  await snapCtx.close();
+  console.log('  ✓ automatic layout Snapshots in IndexedDB (#14)');
+
+  // 17. Ticket #9: Redraw only the Pads that changed
+  const burstObs = createFakeObs(false);
+  await new Promise((r) => burstObs.wss.once('listening', r));
+  const burstPort = burstObs.wss.address().port;
+  try {
+    const ctxBurst = await browser.newContext();
+    const pageBurst = await ctxBurst.newPage();
+    pageBurst.on('pageerror', (e) => pageErrors.push(e.message));
+    await pageBurst.goto(`${DECK_URL}?port=${burstPort}`);
+    await pageBurst.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    if (await pageBurst.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageBurst.click('#btn-wiz-cancel');
+    }
+
+    const TEST_IMG_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    await pageBurst.evaluate((img) => {
+      const page = Deck.getActivePage();
+      page.pads[0] = {
+        type: 'scene',
+        mode: 'named',
+        sceneName: 'Main Cam',
+        label: 'Main Cam',
+        image: img,
+        imageFit: 'icon',
+      };
+      page.pads[1] = {
+        type: 'scene',
+        mode: 'named',
+        sceneName: 'Slides',
+        label: 'Slides',
+      };
+      page.pads[2] = {
+        type: 'macro',
+        label: 'Test Macro',
+        steps: [{ type: 'wait', delayMs: 4000 }],
+      };
+      page.pads[3] = {
+        type: 'filter',
+        sourceName: 'Webcam',
+        filterName: 'Blur',
+        mode: 'toggle',
+        autoOffMs: 4000,
+        label: 'Blur AutoOff',
+      };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    }, TEST_IMG_URL);
+
+    // Ensure Pad Graphic element exists on Pad 0
+    await pageBurst.waitForSelector('#grid .pad[data-idx="0"] img.pad-icon-img');
+
+    // Attach MutationObserver watching for removal/replacement of Pad Graphic elements
+    await pageBurst.evaluate(() => {
+      window.__removedPadGraphics = 0;
+      const initialImg = document.querySelector('#grid .pad[data-idx="0"] img.pad-icon-img');
+      window.__initialImg = initialImg;
+      const obs = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          for (const node of m.removedNodes) {
+            if (node === initialImg ||
+                (node.nodeType === 1 && (node.matches('img.pad-icon-img') || node.querySelector('img.pad-icon-img')))) {
+              window.__removedPadGraphics++;
+            }
+          }
+        }
+      });
+      obs.observe(document.getElementById('grid'), { childList: true, subtree: true });
+    });
+
+    // Acceptance criterion 1: A burst of 50 volume events replaces no Pad Graphic elements (mutation observer)
+    for (let i = 0; i < 50; i++) {
+      burstObs.broadcast('InputVolumeChanged', {
+        inputName: 'Desktop Audio',
+        inputVolumeDb: -10 - (i % 10),
+      });
+    }
+
+    // Give time for any events / frames to settle
+    await pageBurst.waitForTimeout(200);
+
+    const removedCount = await pageBurst.evaluate(() => window.__removedPadGraphics);
+    const stillSameElement = await pageBurst.evaluate(() => {
+      const currentImg = document.querySelector('#grid .pad[data-idx="0"] img.pad-icon-img');
+      return currentImg === window.__initialImg;
+    });
+
+    assert.equal(removedCount, 0, `burst of 50 volume events replaced ${removedCount} Pad Graphic elements (expected 0)`);
+    assert.equal(stillSameElement, true, 'Pad Graphic element remained identically in DOM without re-decoding');
+
+    // Acceptance criterion 2: Pad active states still update correctly after events
+    assert.ok((await pageBurst.locator('#grid .pad[data-idx="0"]').getAttribute('class')).includes('active'), 'Pad 0 active on Main Cam');
+    assert.ok(!(await pageBurst.locator('#grid .pad[data-idx="1"]').getAttribute('class')).includes('active'), 'Pad 1 inactive');
+
+    burstObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Slides' });
+    await pageBurst.waitForFunction(() => {
+      const p0 = document.querySelector('#grid .pad[data-idx="0"]');
+      const p1 = document.querySelector('#grid .pad[data-idx="1"]');
+      return p1?.classList.contains('active') && !p0?.classList.contains('active');
+    });
+
+    assert.ok((await pageBurst.locator('#grid .pad[data-idx="1"]').getAttribute('class')).includes('active'), 'Pad 1 active after scene event');
+    assert.ok(!(await pageBurst.locator('#grid .pad[data-idx="0"]').getAttribute('class')).includes('active'), 'Pad 0 inactive after scene event');
+
+    // Acceptance criterion 3: Timed Macro and Auto-Off countdown ticks still update in place
+    // 3a. Start Timed Macro on Pad 2
+    await pageBurst.locator('#grid .pad[data-idx="2"]').click();
+    await pageBurst.waitForFunction(() => document.querySelector('#grid .pad[data-idx="2"] .sub')?.textContent.includes('s'));
+
+    const macroSub1 = await pageBurst.locator('#grid .pad[data-idx="2"] .sub').textContent();
+    // Fire volume events while macro is ticking
+    for (let i = 0; i < 10; i++) {
+      burstObs.broadcast('InputVolumeChanged', { inputName: 'Desktop Audio', inputVolumeDb: -20 + i });
+    }
+    await pageBurst.waitForTimeout(300);
+    const macroSub2 = await pageBurst.locator('#grid .pad[data-idx="2"] .sub').textContent();
+    assert.ok(macroSub1.length > 0 && macroSub2.length > 0, 'Timed Macro tick text present');
+    assert.notEqual(macroSub1, macroSub2, 'Timed Macro tick updated in place while events fired');
+
+    // Cancel macro before starting next test
+    await pageBurst.locator('#grid .pad[data-idx="2"]').click();
+    await pageBurst.waitForFunction(() => !document.querySelector('#grid .pad[data-idx="2"]').classList.contains('running'));
+
+    // 3b. Start Auto-Off on Pad 3
+    await pageBurst.locator('#grid .pad[data-idx="3"]').click();
+    await pageBurst.waitForFunction(() => document.querySelector('#grid .pad[data-idx="3"] .sub')?.textContent.includes('s'));
+
+    const autoOffSub1 = await pageBurst.locator('#grid .pad[data-idx="3"] .sub').textContent();
+    // Fire volume events while auto-off is ticking
+    for (let i = 0; i < 10; i++) {
+      burstObs.broadcast('InputVolumeChanged', { inputName: 'Desktop Audio', inputVolumeDb: -15 + i });
+    }
+    await pageBurst.waitForTimeout(300);
+    const autoOffSub2 = await pageBurst.locator('#grid .pad[data-idx="3"] .sub').textContent();
+    assert.ok(autoOffSub1.length > 0 && autoOffSub2.length > 0, 'Auto-Off tick text present');
+    assert.notEqual(autoOffSub1, autoOffSub2, 'Auto-Off tick updated in place while events fired');
+
+    // Cancel auto-off
+    await pageBurst.locator('#grid .pad[data-idx="3"]').click();
+    await pageBurst.waitForFunction(() => !document.querySelector('#grid .pad[data-idx="3"] .sub'));
+
+    await ctxBurst.close();
+    console.log('  ✓ ticket #9: redraw only changed pads on events & non-destructive ticks (burst of 50 volume events replaced 0 graphics)');
+  } finally {
+    burstObs.wss.close();
   }
 
   // 17. Undo and redo in Edit Mode (#15)

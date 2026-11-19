@@ -137,6 +137,7 @@ function main() {
 
   const requiredFiles = [
     'deck.html',
+    'deck/snapshots.js',
     'README.md',
     'installers/Install-Windows.bat',
     'installers/Install-Mac.command',
