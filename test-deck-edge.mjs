@@ -69,6 +69,16 @@ try {
   page.on('pageerror', (e) => pageErrors.push(e.message));
   page.on('dialog', (d) => d.accept());
 
+  await page.addInitScript(() => {
+    const origSet = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(k, v) {
+      if (window.sessionStorage && sessionStorage.getItem('fail_storage') === '1' && k === 'opendeck_config') {
+        throw new Error('QuotaExceededError: simulated migration write failure');
+      }
+      return origSet.apply(this, arguments);
+    };
+  });
+
   await page.goto(DECK_URL);
   await page.waitForSelector('#grid .pad');
 
@@ -78,6 +88,7 @@ try {
     pads[0] = { type: 'scene', sceneName: 'Slides', label: 'Migrated Slides', icon: '📺', color: '#1e3a8a' };
     pads[10] = { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'toggle', label: 'Migrated Blur', icon: '', color: '#581c87' };
     pads[63] = { type: 'panic', label: 'PANIC', icon: '🚨', color: '#991b1b' };
+    localStorage.removeItem('opendeck_config');
     localStorage.removeItem('obs_virtual_deck_v2');
     localStorage.setItem('obs_virtual_deck_v1', JSON.stringify({
       ws: { host: '127.0.0.1', port: p, password: '' },
@@ -87,8 +98,8 @@ try {
   }, port);
   await page.reload();
   await page.waitForSelector('#grid .pad');
-  const migrated = await page.evaluate(() => JSON.parse(localStorage.getItem('obs_virtual_deck_v2') || 'null'));
-  assert.equal(migrated?.version, 2, 'migrated to v2 storage key');
+  const migrated = await page.evaluate(() => JSON.parse(localStorage.getItem('opendeck_config') || 'null'));
+  assert.equal(migrated?.version, 2, 'migrated to canonical storage key');
   assert.equal(migrated.pages.length, 1);
   assert.equal(migrated.activePageId, 'page-1');
   assert.equal(migrated.pages[0].pads.length, 64);
@@ -97,6 +108,8 @@ try {
   assert.equal(migrated.pages[0].pads[63].type, 'panic');
   assert.equal(migrated.panicSteps.length, 1);
   assert.ok((await page.locator('#grid .pad').nth(0).textContent()).includes('Migrated Slides'));
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v1')), null, 'legacy v1 key removed after migration');
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v2')), null, 'legacy v2 key removed after migration');
 
   // 1b. v2.0.0 (decks[], activeDeckId, deckId) -> v2.1.0 (pages[], activePageId, pageId) migration
   await page.evaluate((p) => {
@@ -104,6 +117,7 @@ try {
     d1[0] = { type: 'page', mode: 'goto', deckId: 'deck-2', label: 'Jump D2', icon: '', color: '#222733' };
     const d2 = Array.from({ length: 12 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
     d2[1] = { type: 'scene', sceneName: 'BRB', label: 'D2 BRB', icon: '', color: '#1e3a8a' };
+    localStorage.removeItem('opendeck_config');
     localStorage.removeItem('obs_virtual_deck_v1');
     localStorage.setItem('obs_virtual_deck_v2', JSON.stringify({
       version: 2,
@@ -118,12 +132,13 @@ try {
   }, port);
   await page.reload();
   await page.waitForSelector('#grid .pad');
-  const migratedV20 = await page.evaluate(() => JSON.parse(localStorage.getItem('obs_virtual_deck_v2') || 'null'));
+  const migratedV20 = await page.evaluate(() => JSON.parse(localStorage.getItem('opendeck_config') || 'null'));
   assert.equal(migratedV20.decks, undefined, 'legacy decks[] replaced by pages[]');
   assert.equal(migratedV20.activePageId, 'deck-2', 'activeDeckId migrated to activePageId');
   assert.equal(migratedV20.pages.length, 2);
   assert.equal(migratedV20.pages[0].pads[0].pageId, 'deck-2', 'page pad deckId migrated to pageId');
   assert.ok((await page.locator('#grid .pad').nth(1).textContent()).includes('D2 BRB'));
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v2')), null, 'legacy v2 key removed after migration');
 
   // 1c. obs_deck_config_v2 -> opendeck_config backward-compatible migration & pad image field defaults
   await page.evaluate((p) => {
@@ -147,6 +162,96 @@ try {
   assert.equal(migratedOpenDeck.pages[0].pads[0].imageFit, undefined);
   assert.equal(Boolean(migratedOpenDeck.pages[0].pads[0].hideLabel), false);
   assert.ok((await page.locator('#grid .pad').nth(0).textContent()).includes('Legacy V2 Scene'));
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_deck_config_v2')), null, 'legacy obs_deck_config_v2 key removed after migration');
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v2')), null, 'legacy obs_virtual_deck_v2 key removed after migration');
+
+  // 1d. Save failure warning in status area (suggests Export and fewer/smaller Pad Graphics) & recovery
+  await page.evaluate(() => {
+    const origSet = Storage.prototype.setItem;
+    Storage.prototype.setItem = () => {
+      throw new Error('QuotaExceededError: Setting the value of "opendeck_config" exceeded the quota.');
+    };
+    try {
+      Deck.saveCfg();
+    } finally {
+      Storage.prototype.setItem = origSet;
+    }
+  });
+
+  const saveWarn = page.locator('#save-warning');
+  assert.equal(await saveWarn.isVisible(), true, 'save failure warning is visible in status area');
+  const warnText = await page.textContent('.status');
+  assert.match(warnText, /Save failed/i, 'status mentions save failed');
+  assert.match(warnText, /export/i, 'warning suggests export');
+  assert.match(warnText, /fewer or smaller Pad Graphics/i, 'warning suggests fewer or smaller Pad Graphics');
+
+  // Next successful save clears warning
+  await page.evaluate(() => {
+    Deck.saveCfg();
+  });
+  assert.equal(await saveWarn.isVisible(), false, 'warning is hidden after next successful save');
+  assert.ok(!(await page.textContent('.status')).includes('Save failed'), 'status area cleared of save failure message');
+
+  // 1e. Precedence: canonical opendeck_config wins whenever it exists, ignoring stale legacy keys
+  await page.evaluate((p) => {
+    const padsCanonical = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+    padsCanonical[0] = { type: 'scene', sceneName: 'Slides', label: 'Canonical Layout Pad', icon: '⭐', color: '#1e3a8a' };
+
+    const padsV1 = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+    padsV1[0] = { type: 'scene', sceneName: 'BRB', label: 'Stale V1 Pad', icon: '💀', color: '#991b1b' };
+
+    localStorage.setItem('opendeck_config', JSON.stringify({
+      version: 2,
+      ws: { host: '127.0.0.1', port: p, password: '' },
+      activePageId: 'page-1',
+      pages: [{ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads: padsCanonical }],
+      panicSteps: [],
+    }));
+    localStorage.setItem('obs_virtual_deck_v1', JSON.stringify({
+      ws: { host: '127.0.0.1', port: p, password: '' },
+      pads: padsV1,
+      panicSteps: [],
+    }));
+    localStorage.removeItem('obs_virtual_deck_v2');
+    localStorage.removeItem('obs_deck_config_v2');
+  }, port);
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  const precedenceConfig = await page.evaluate(() => JSON.parse(localStorage.getItem('opendeck_config') || 'null'));
+  assert.equal(precedenceConfig?.pages[0]?.pads[0]?.label, 'Canonical Layout Pad', 'canonical layout loads when stale v1 layout also exists');
+  assert.ok((await page.locator('#grid .pad').nth(0).textContent()).includes('Canonical Layout Pad'), 'grid shows canonical layout pad');
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v1')), null, 'stale v1 key removed after canonical load');
+
+  // 1f. Data-loss prevention during migration: legacy keys preserved if canonical write throws
+  await page.evaluate((p) => {
+    localStorage.removeItem('opendeck_config');
+    localStorage.removeItem('obs_deck_config_v2');
+    localStorage.removeItem('obs_virtual_deck_v1');
+    const pads = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+    pads[0] = { type: 'scene', sceneName: 'Slides', label: 'Unlost Legacy Scene', icon: '💾', color: '#1e3a8a' };
+    localStorage.setItem('obs_virtual_deck_v2', JSON.stringify({
+      version: 2,
+      ws: { host: '127.0.0.1', port: p, password: '' },
+      activePageId: 'page-1',
+      pages: [{ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads }],
+      panicSteps: [],
+    }));
+    sessionStorage.setItem('fail_storage', '1');
+  }, port);
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  // While write failed during migration, legacy key must NOT be deleted
+  assert.notEqual(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v2')), null, 'legacy key preserved when migration write throws');
+  assert.equal(await page.evaluate(() => localStorage.getItem('opendeck_config')), null, 'canonical key not saved when write throws');
+
+  // Make writes work again and reload
+  await page.evaluate(() => sessionStorage.removeItem('fail_storage'));
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  const recovered = await page.evaluate(() => JSON.parse(localStorage.getItem('opendeck_config') || 'null'));
+  assert.equal(recovered?.pages[0]?.pads[0]?.label, 'Unlost Legacy Scene', 'layout preserved and migrated after writes succeed again');
+  assert.ok((await page.locator('#grid .pad').nth(0).textContent()).includes('Unlost Legacy Scene'), 'grid displays unlost legacy scene pad');
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v2')), null, 'legacy key removed after successful migration write');
 
   // Reset back to clean defaults before continuing
   await page.evaluate(() => {
@@ -1318,6 +1423,274 @@ try {
     console.log('  ✓ ticket #9: redraw only changed pads on events & non-destructive ticks (burst of 50 volume events replaced 0 graphics)');
   } finally {
     burstObs.wss.close();
+  }
+
+  // 17. Undo and redo in Edit Mode (#15)
+  const undoObs = createFakeObs(false);
+  await new Promise((r) => undoObs.wss.once('listening', r));
+  const undoPort = undoObs.wss.address().port;
+  try {
+    const ctxUndo = await browser.newContext();
+    const pageUndo = await ctxUndo.newPage();
+    pageUndo.on('pageerror', (e) => pageErrors.push(e.message));
+    pageUndo.on('dialog', (dlg) => dlg.accept());
+    await pageUndo.goto(`${DECK_URL}?port=${undoPort}`);
+    await pageUndo.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageUndo.waitForTimeout(100);
+    if (await pageUndo.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageUndo.click('#btn-wiz-cancel');
+    }
+
+    // Enter Edit Mode
+    await pageUndo.click('#btn-edit');
+    assert.ok(await pageUndo.evaluate(() => Deck.editMode), 'Edit Mode enabled');
+
+    // Undo & Redo buttons exist in Edit Mode and are initially disabled
+    const undoBtn = pageUndo.locator('#btn-undo');
+    const redoBtn = pageUndo.locator('#btn-redo');
+    assert.equal(await undoBtn.count(), 1, '#btn-undo button exists in Edit Mode');
+    assert.equal(await redoBtn.count(), 1, '#btn-redo button exists in Edit Mode');
+    assert.equal(await undoBtn.isDisabled(), true, 'Undo button initially disabled');
+    assert.equal(await redoBtn.isDisabled(), true, 'Redo button initially disabled');
+
+    const padEl = (idx) => pageUndo.locator('#grid .pad').nth(idx);
+
+    // 1. Pad Editor Save action
+    await padEl(0).click();
+    await pageUndo.waitForSelector('#pad-dlg[open]');
+    await pageUndo.fill('#f-label', 'UndoTestPad');
+    await pageUndo.click('#pad-form button[type="submit"]');
+    await pageUndo.waitForFunction(() => !document.getElementById('pad-dlg').open);
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'UndoTestPad');
+    assert.equal(await undoBtn.isDisabled(), false, 'Undo button enabled after Pad Editor save');
+    assert.equal(await redoBtn.isDisabled(), true, 'Redo button disabled after new edit');
+
+    // Undo via button
+    undoObs.state.calls.length = 0;
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), '', 'Pad Editor save undone');
+    assert.equal(await undoBtn.isDisabled(), true, 'Undo button disabled when stack empty');
+    assert.equal(await redoBtn.isDisabled(), false, 'Redo button enabled after undo');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during Undo');
+
+    // Redo via button
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'UndoTestPad', 'Pad Editor save redone');
+    assert.equal(await undoBtn.isDisabled(), false, 'Undo button enabled after redo');
+    assert.equal(await redoBtn.isDisabled(), true, 'Redo button disabled after redo');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during Redo');
+
+    // 2. Drag swap on grid
+    await pageUndo.evaluate(() => {
+      const p0 = document.querySelectorAll('#grid .pad')[0];
+      const p1 = document.querySelectorAll('#grid .pad')[1];
+      const dt = new DataTransfer();
+      p0.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      p1.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      p1.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      p0.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    });
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[1].label), 'UndoTestPad', 'Pads swapped');
+
+    // Undo via Ctrl+Z keyboard shortcut
+    undoObs.state.calls.length = 0;
+    await pageUndo.keyboard.press('Control+z');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'UndoTestPad', 'Drag swap undone via Ctrl+Z');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[1].label), '');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during Ctrl+Z');
+
+    // Redo via Ctrl+Shift+Z
+    await pageUndo.keyboard.press('Control+Shift+z');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[1].label), 'UndoTestPad', 'Drag swap redone via Ctrl+Shift+Z');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during Ctrl+Shift+Z');
+
+    // 3. Multi-select bulk actions: bulk recolor in ONE step
+    await pageUndo.waitForTimeout(300);
+    await pageUndo.evaluate(() => {
+      const page = Deck.getActivePage();
+      page.pads[2] = { type: 'scene', sceneName: 'Scene A', label: 'Scene A', color: '#1e293b' };
+      page.pads[3] = { type: 'scene', sceneName: 'Scene B', label: 'Scene B', color: '#1e293b' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+    // Select pads 2 and 3
+    await pageUndo.click('#btn-sel-none');
+    await padEl(2).click({ modifiers: ['Control'] });
+    await padEl(3).click({ modifiers: ['Control'] });
+    assert.equal(await pageUndo.locator('#grid .pad.selected').count(), 2);
+
+    // Bulk recolor to #991b1b
+    await pageUndo.click('#btn-sel-color');
+    await pageUndo.locator('#sel-color-pop .sw[title="#991b1b"]').click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].color), '#991b1b');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].color), '#991b1b');
+
+    // Undo bulk recolor in ONE step
+    undoObs.state.calls.length = 0;
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].color), '#1e293b', 'Pad 2 color reverted');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].color), '#1e293b', 'Pad 3 color reverted in same step');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during bulk undo');
+
+    // Redo bulk recolor in ONE step
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].color), '#991b1b');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].color), '#991b1b');
+
+    // 4. Bulk clear in ONE step
+    await padEl(2).click({ modifiers: ['Control'] });
+    await padEl(3).click({ modifiers: ['Control'] });
+    await pageUndo.click('#btn-sel-clear');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].type), 'none');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].type), 'none');
+
+    // Undo bulk clear in ONE step
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].type), 'scene');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].type), 'scene');
+
+    // Redo bulk clear in ONE step
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].type), 'none');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].type), 'none');
+
+    // 5. Page operations: Add, Duplicate, Rename, Resize, Delete
+    // Add Page
+    await pageUndo.click('#btn-deck-add');
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page added');
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 1, 'Page add undone');
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page add redone');
+
+    // Duplicate Page
+    await pageUndo.click('#btn-deck-dup');
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 3, 'Page duplicated');
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page duplicate undone');
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 3, 'Page duplicate redone');
+
+    // Rename and Resize Page via Dialog
+    await pageUndo.click('#btn-deck-cfg');
+    await pageUndo.waitForSelector('#deck-dlg[open]');
+    await pageUndo.fill('#d-name', 'RenamedPage');
+    await pageUndo.fill('#d-cols', '6');
+    await pageUndo.fill('#d-rows', '4');
+    await pageUndo.click('#deck-form button[type="submit"]');
+    await pageUndo.waitForFunction(() => !document.getElementById('deck-dlg').open);
+    const renamed = await pageUndo.evaluate(() => {
+      const p = Deck.getActivePage();
+      return { name: p.name, cols: p.cols, rows: p.rows };
+    });
+    assert.deepEqual(renamed, { name: 'RenamedPage', cols: 6, rows: 4 });
+
+    // Undo rename & resize in ONE step
+    await undoBtn.click();
+    const reverted = await pageUndo.evaluate(() => {
+      const p = Deck.getActivePage();
+      return { name: p.name, cols: p.cols, rows: p.rows };
+    });
+    assert.equal(reverted.name !== 'RenamedPage', true, 'Page rename undone');
+    assert.deepEqual({ cols: reverted.cols, rows: reverted.rows }, { cols: 8, rows: 8 }, 'Page resize undone in same step');
+
+    // Redo rename & resize
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().name), 'RenamedPage');
+
+    // Delete Page
+    await pageUndo.click('#btn-deck-cfg');
+    await pageUndo.waitForSelector('#deck-dlg[open]');
+    await pageUndo.click('#btn-deck-del');
+    await pageUndo.waitForFunction(() => !document.getElementById('deck-dlg').open);
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page deleted');
+
+    // Undo delete Page
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 3, 'Page delete undone');
+
+    // Redo delete Page
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page delete redone');
+
+    // 6. Move pad to Page via drag onto page tab
+    await pageUndo.evaluate(() => {
+      const p = Deck.getActivePage();
+      p.pads[0] = { type: 'scene', sceneName: 'MoveMe', label: 'MoveMe' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'MoveMe');
+    const targetTab = pageUndo.locator('#deck-tabs .page-tab').nth(0);
+    await pageUndo.evaluate(() => {
+      const p0 = document.querySelectorAll('#grid .pad')[0];
+      const tab0 = document.querySelectorAll('#deck-tabs .page-tab')[0];
+      const dt = new DataTransfer();
+      p0.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      tab0.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      tab0.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      p0.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    });
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), '', 'Pad moved away from active page');
+
+    // Undo move to Page
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'MoveMe', 'Pad restored on active page after undo');
+
+    // Redo move to Page
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), '', 'Pad moved again after redo');
+
+    // 7. PANIC steps save
+    await pageUndo.click('#btn-panic-cfg');
+    await pageUndo.waitForSelector('#panic-dlg[open]');
+    await pageUndo.click('#btn-panic-add');
+    await pageUndo.click('#btn-panic-save');
+    await pageUndo.waitForFunction(() => !document.getElementById('panic-dlg').open);
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.panicSteps.length), 1, 'Panic step saved');
+
+    // Undo PANIC steps save
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.panicSteps.length), 0, 'Panic step save undone');
+
+    // Redo PANIC steps save
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.panicSteps.length), 1, 'Panic step save redone');
+
+    // 8. History depth capped at 50
+    await pageUndo.evaluate(() => {
+      const page = Deck.getActivePage();
+      for (let i = 0; i < 55; i++) {
+        Deck.pushHistory(() => {
+          page.pads[0] = { type: 'scene', label: `Depth${i}` };
+          Deck.saveCfg();
+        });
+      }
+    });
+    // Can undo up to 50 times
+    let undoCount = 0;
+    while (await undoBtn.isEnabled()) {
+      await undoBtn.click();
+      undoCount++;
+      if (undoCount > 60) break;
+    }
+    assert.equal(undoCount, 50, 'History depth capped at exactly 50 states');
+
+    // 9. History clears on reload
+    await pageUndo.reload();
+    await pageUndo.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageUndo.click('#btn-edit');
+    assert.equal(await pageUndo.locator('#btn-undo').isDisabled(), true, 'Undo disabled after reload');
+    assert.equal(await pageUndo.locator('#btn-redo').isDisabled(), true, 'Redo disabled after reload');
+
+    // 10. Glossary contains Undo History
+    const glossaryText = fs.readFileSync(join(__dirname, 'GLOSSARY.md'), 'utf8');
+    assert.ok(glossaryText.includes('**Undo History**:'), 'GLOSSARY.md contains Undo History');
+
+    await ctxUndo.close();
+    console.log('  ✓ undo and redo in Edit Mode (#15)');
+  } finally {
+    undoObs.wss.close();
   }
 
   console.log('\nPASS: all deck edge E2E checks succeeded.');

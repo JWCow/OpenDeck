@@ -67,3 +67,8 @@ _Avoid_: Auto-page, scene profile
 **Live Readout**:
 A live value shown on a Pad alongside its on/off state, such as elapsed stream or recording time, or an input's volume level.
 _Avoid_: Pad stats, overlay text
+
+**Undo History**:
+An in-memory stack of up to 50 previous layout states recorded during Edit Mode that allows reverting and replaying layout changes step-by-step without affecting OBS or surviving a page reload.
+_Avoid_: Change log, edit history, revision stack
+
