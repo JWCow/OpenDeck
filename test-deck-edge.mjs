@@ -1960,6 +1960,158 @@ try {
     undoObs.wss.close();
   }
 
+  // 20. Starter layouts (#16)
+  const starterObs = createFakeObs(false);
+  await new Promise((r) => starterObs.wss.once('listening', r));
+  const starterPort = starterObs.wss.address().port;
+  try {
+    const ctxStarter = await browser.newContext();
+    const pageStarter = await ctxStarter.newPage();
+    pageStarter.on('pageerror', (e) => pageErrors.push(e.message));
+    pageStarter.on('dialog', (d) => d.accept());
+
+    // Connect to fake OBS
+    await pageStarter.goto(`${DECK_URL}?port=${starterPort}`);
+    await pageStarter.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageStarter.waitForFunction(() => Deck.obs.scenes.length >= 3);
+
+    const templates = ['Solo Streamer', 'Talk + Slides', 'Podcast/Interview'];
+
+    // 1. Each template applies while connected with slots filled from fake OBS
+    // Test Solo Streamer replaces initial empty starter deck
+    const callsBefore = starterObs.state.calls.length;
+    const snapsBefore = (await pageStarter.evaluate(async () => Deck.listSnapshots?.() || [])).length;
+
+    await pageStarter.waitForSelector('#import-wiz-dlg[open]');
+    await pageStarter.click('#wiz-mode-starter');
+    await pageStarter.selectOption('#wiz-starter-layout', 'Solo Streamer');
+    await pageStarter.click('#btn-wiz-apply');
+    await pageStarter.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+    // Solo Streamer verification
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages.length), 1, 'Starter deck replaced on first apply');
+    assert.equal(await pageStarter.evaluate(() => Deck.getActivePage().name), 'Solo Streamer', 'Active page renamed to Solo Streamer');
+    const soloPads = await pageStarter.evaluate(() => Deck.getActivePads());
+
+    // Fixed pads: Stream, Record, Chapter, Stats (Telemetry Pad), PANIC
+    assert.ok(soloPads.some((p) => p.type === 'output' && p.target === 'stream'), 'Solo Streamer has Stream pad');
+    assert.ok(soloPads.some((p) => p.type === 'output' && p.target === 'record'), 'Solo Streamer has Record pad');
+    assert.ok(soloPads.some((p) => p.type === 'chapter'), 'Solo Streamer has Chapter pad');
+    assert.ok(soloPads.some((p) => p.type === 'stats'), 'Solo Streamer has Telemetry Pad (stats)');
+    assert.ok(soloPads.some((p) => p.type === 'panic'), 'Solo Streamer has PANIC pad');
+
+    // Filled slots from fake OBS
+    const soloScenes = soloPads.filter((p) => p.type === 'scene' && p.mode === 'named').map((p) => p.sceneName);
+    assert.ok(soloScenes.includes('Main Cam'), 'Main Cam scene slot filled');
+    assert.ok(soloScenes.includes('Slides'), 'Slides scene slot filled');
+    assert.ok(soloScenes.includes('BRB'), 'BRB scene slot filled');
+
+    const soloMutes = soloPads.filter((p) => p.type === 'mute').map((p) => p.inputName);
+    assert.ok(soloMutes.includes('Mic/Aux'), 'Mic/Aux mute slot filled');
+    assert.ok(soloMutes.includes('Desktop Audio'), 'Desktop Audio mute slot filled');
+
+    const soloSources = soloPads.filter((p) => p.type === 'source').map((p) => p.sourceName);
+    assert.ok(soloSources.includes('Webcam'), 'Webcam source slot filled');
+
+    // Snapshot was taken first
+    const snapsAfterFirst = (await pageStarter.evaluate(async () => Deck.listSnapshots?.() || [])).length;
+    assert.ok(snapsAfterFirst > snapsBefore, 'Snapshot taken before applying starter layout');
+
+    // 2. An existing layout is never overwritten (append-vs-replace rule)
+    // Apply "Talk + Slides" when deck already has a page
+    await pageStarter.click('#btn-auto-import');
+    await pageStarter.waitForSelector('#import-wiz-dlg[open]');
+    await pageStarter.click('#wiz-mode-starter');
+    await pageStarter.selectOption('#wiz-starter-layout', 'Talk + Slides');
+    assert.equal(await pageStarter.evaluate(() => document.getElementById('wiz-replace').disabled), true, 'Replace disabled for existing layout');
+    await pageStarter.click('#btn-wiz-apply');
+    await pageStarter.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages.length), 2, 'Talk + Slides appended as new page, existing layout preserved');
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages[0].name), 'Solo Streamer', 'Existing Solo Streamer page preserved');
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages[1].name), 'Talk + Slides', 'New Talk + Slides page appended');
+
+    const talkPads = await pageStarter.evaluate(() => Deck.cfg.pages[1].pads);
+    assert.ok(talkPads.some((p) => p.type === 'output' && p.target === 'stream'), 'Talk + Slides has Stream pad');
+    assert.ok(talkPads.some((p) => p.type === 'output' && p.target === 'record'), 'Talk + Slides has Record pad');
+    assert.ok(talkPads.some((p) => p.type === 'chapter'), 'Talk + Slides has Chapter pad');
+    assert.ok(talkPads.some((p) => p.type === 'stats'), 'Talk + Slides has Telemetry Pad');
+    assert.ok(talkPads.some((p) => p.type === 'panic'), 'Talk + Slides has PANIC pad');
+
+    const talkScenes = talkPads.filter((p) => p.type === 'scene' && p.mode === 'named').map((p) => p.sceneName);
+    assert.ok(talkScenes.includes('Main Cam') && talkScenes.includes('Slides'), 'Talk + Slides scenes filled');
+
+    // Apply "Podcast/Interview"
+    await pageStarter.click('#btn-auto-import');
+    await pageStarter.waitForSelector('#import-wiz-dlg[open]');
+    await pageStarter.click('#wiz-mode-starter');
+    await pageStarter.selectOption('#wiz-starter-layout', 'Podcast/Interview');
+    await pageStarter.click('#btn-wiz-apply');
+    await pageStarter.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages.length), 3, 'Podcast/Interview appended as 3rd page');
+    const podcastPads = await pageStarter.evaluate(() => Deck.cfg.pages[2].pads);
+    assert.ok(podcastPads.some((p) => p.type === 'output' && p.target === 'stream'), 'Podcast has Stream pad');
+    assert.ok(podcastPads.some((p) => p.type === 'output' && p.target === 'record'), 'Podcast has Record pad');
+    assert.ok(podcastPads.some((p) => p.type === 'chapter'), 'Podcast has Chapter pad');
+    assert.ok(podcastPads.some((p) => p.type === 'stats'), 'Podcast has Telemetry Pad');
+    assert.ok(podcastPads.some((p) => p.type === 'panic'), 'Podcast has PANIC pad');
+    assert.ok(podcastPads.some((p) => p.type === 'media' && p.inputName === 'Intro Video'), 'Podcast has Intro Video media slot filled');
+
+    // 3. No OBS write requests were sent
+    const mutatingCalls = starterObs.state.calls.slice(callsBefore).filter((c) => /^(Create|Set|Remove|Press|Trigger)/.test(c.requestType));
+    assert.equal(mutatingCalls.length, 0, 'Starter layouts sent 0 OBS write requests');
+
+    await ctxStarter.close();
+
+    // 4. Each template applies while disconnected with slots marked
+    const ctxOffline = await browser.newContext();
+    const pageOffline = await ctxOffline.newPage();
+    pageOffline.on('pageerror', (e) => pageErrors.push(e.message));
+    pageOffline.on('dialog', (d) => d.accept());
+
+    await pageOffline.goto(DECK_URL);
+    await pageOffline.waitForSelector('#grid .pad');
+    assert.notEqual(await pageOffline.evaluate(() => Deck.obs.status), 'ok', 'Deck is disconnected');
+
+    for (const tplName of templates) {
+      await pageOffline.click('#btn-auto-import');
+      await pageOffline.waitForSelector('#import-wiz-dlg[open]');
+      await pageOffline.click('#wiz-mode-starter');
+      await pageOffline.selectOption('#wiz-starter-layout', tplName);
+      assert.equal(await pageOffline.isEnabled('#btn-wiz-apply'), true, 'Create button enabled when disconnected in Starter mode');
+      await pageOffline.click('#btn-wiz-apply');
+      await pageOffline.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+      const page = await pageOffline.evaluate((name) => Deck.cfg.pages.find((p) => p.name === name), tplName);
+      assert.ok(page, `Disconnected template "${tplName}" created page`);
+
+      // Fixed pads are still configured
+      assert.ok(page.pads.some((p) => p.type === 'output' && p.target === 'stream'), `${tplName} has Stream pad while disconnected`);
+      assert.ok(page.pads.some((p) => p.type === 'output' && p.target === 'record'), `${tplName} has Record pad while disconnected`);
+      assert.ok(page.pads.some((p) => p.type === 'chapter'), `${tplName} has Chapter pad while disconnected`);
+      assert.ok(page.pads.some((p) => p.type === 'stats'), `${tplName} has Telemetry Pad while disconnected`);
+      assert.ok(page.pads.some((p) => p.type === 'panic'), `${tplName} has PANIC pad while disconnected`);
+
+      // Unfilled slots are marked empty pads (type: 'none', non-empty label and icon)
+      const markedEmptyPads = page.pads.filter((p) => p.type === 'none' && p.label && p.label.length > 0);
+      assert.ok(markedEmptyPads.length >= 5, `${tplName} has marked empty slot pads while disconnected (found ${markedEmptyPads.length})`);
+      for (const p of markedEmptyPads) {
+        assert.ok(p.icon, `Marked slot "${p.label}" has an icon`);
+      }
+    }
+
+    await ctxOffline.close();
+
+    // 5. Glossary gains Starter Layout
+    const glossaryText = fs.readFileSync(join(__dirname, 'GLOSSARY.md'), 'utf8');
+    assert.ok(glossaryText.includes('**Starter Layout**:'), 'GLOSSARY.md contains Starter Layout');
+
+    console.log('  ✓ starter layout templates as data + auto-import wizard choice (#16)');
+  } finally {
+    starterObs.wss.close();
+  }
+
   // 18. Scene-Linked Page (#20)
   const sceneObs = createFakeObs(false);
   await new Promise((r) => sceneObs.wss.once('listening', r));
