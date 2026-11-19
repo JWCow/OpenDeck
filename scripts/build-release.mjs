@@ -222,9 +222,6 @@ function main() {
     `opendeck-v${version}.zip`,
     'opendeck-latest.zip',
     'opendeck.zip',
-    `obs-virtual-deck-v${version}.zip`,
-    'obs-virtual-deck-latest.zip',
-    'obs-virtual-deck.zip',
   ];
   for (const name of zipNames) {
     fs.writeFileSync(path.join(DIST_DIR, name), zipBuffer);
