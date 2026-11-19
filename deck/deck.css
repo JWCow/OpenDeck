@@ -760,6 +760,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .65); }
 .snapshot-meta { display: flex; flex-direction: column; gap: 2px; }
 .snapshot-time { font-weight: 600; color: var(--text); }
 .snapshot-details { font-size: 11px; color: var(--muted); }
+.snapshots-empty { padding: 16px; text-align: center; color: var(--muted); font-size: 12px; }
 .step { display: grid; gap: 4px; padding: 6px; background: #1a1e29; border: 1px solid var(--border); border-radius: 6px; }
 .step-top { display: flex; gap: 4px; align-items: center; }
 .swatches { display: flex; gap: 5px; flex-wrap: wrap; }

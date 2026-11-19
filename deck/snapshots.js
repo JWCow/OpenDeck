@@ -242,7 +242,7 @@
     if (!listEl) return;
     const items = await listSnapshots();
     if (!items.length) {
-      listEl.innerHTML = '<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px">No snapshots recorded yet.</div>';
+      listEl.innerHTML = '<div class="snapshots-empty">No snapshots recorded yet.</div>';
       return;
     }
     listEl.innerHTML = items.map((s) => {
