@@ -1278,6 +1278,153 @@ try {
     outObs.wss.close();
   }
 
+  // 17. Ticket #9: Redraw only the Pads that changed
+  const burstObs = createFakeObs(false);
+  await new Promise((r) => burstObs.wss.once('listening', r));
+  const burstPort = burstObs.wss.address().port;
+  try {
+    const ctxBurst = await browser.newContext();
+    const pageBurst = await ctxBurst.newPage();
+    pageBurst.on('pageerror', (e) => pageErrors.push(e.message));
+    await pageBurst.goto(`${DECK_URL}?port=${burstPort}`);
+    await pageBurst.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    if (await pageBurst.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageBurst.click('#btn-wiz-cancel');
+    }
+
+    const TEST_IMG_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    await pageBurst.evaluate((img) => {
+      const page = Deck.getActivePage();
+      page.pads[0] = {
+        type: 'scene',
+        mode: 'named',
+        sceneName: 'Main Cam',
+        label: 'Main Cam',
+        image: img,
+        imageFit: 'icon',
+      };
+      page.pads[1] = {
+        type: 'scene',
+        mode: 'named',
+        sceneName: 'Slides',
+        label: 'Slides',
+      };
+      page.pads[2] = {
+        type: 'macro',
+        label: 'Test Macro',
+        steps: [{ type: 'wait', delayMs: 4000 }],
+      };
+      page.pads[3] = {
+        type: 'filter',
+        sourceName: 'Webcam',
+        filterName: 'Blur',
+        mode: 'toggle',
+        autoOffMs: 4000,
+        label: 'Blur AutoOff',
+      };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    }, TEST_IMG_URL);
+
+    // Ensure Pad Graphic element exists on Pad 0
+    await pageBurst.waitForSelector('#grid .pad[data-idx="0"] img.pad-icon-img');
+
+    // Attach MutationObserver watching for removal/replacement of Pad Graphic elements
+    await pageBurst.evaluate(() => {
+      window.__removedPadGraphics = 0;
+      const initialImg = document.querySelector('#grid .pad[data-idx="0"] img.pad-icon-img');
+      window.__initialImg = initialImg;
+      const obs = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          for (const node of m.removedNodes) {
+            if (node === initialImg ||
+                (node.nodeType === 1 && (node.matches('img.pad-icon-img') || node.querySelector('img.pad-icon-img')))) {
+              window.__removedPadGraphics++;
+            }
+          }
+        }
+      });
+      obs.observe(document.getElementById('grid'), { childList: true, subtree: true });
+    });
+
+    // Acceptance criterion 1: A burst of 50 volume events replaces no Pad Graphic elements (mutation observer)
+    for (let i = 0; i < 50; i++) {
+      burstObs.broadcast('InputVolumeChanged', {
+        inputName: 'Desktop Audio',
+        inputVolumeDb: -10 - (i % 10),
+      });
+    }
+
+    // Give time for any events / frames to settle
+    await pageBurst.waitForTimeout(200);
+
+    const removedCount = await pageBurst.evaluate(() => window.__removedPadGraphics);
+    const stillSameElement = await pageBurst.evaluate(() => {
+      const currentImg = document.querySelector('#grid .pad[data-idx="0"] img.pad-icon-img');
+      return currentImg === window.__initialImg;
+    });
+
+    assert.equal(removedCount, 0, `burst of 50 volume events replaced ${removedCount} Pad Graphic elements (expected 0)`);
+    assert.equal(stillSameElement, true, 'Pad Graphic element remained identically in DOM without re-decoding');
+
+    // Acceptance criterion 2: Pad active states still update correctly after events
+    assert.ok((await pageBurst.locator('#grid .pad[data-idx="0"]').getAttribute('class')).includes('active'), 'Pad 0 active on Main Cam');
+    assert.ok(!(await pageBurst.locator('#grid .pad[data-idx="1"]').getAttribute('class')).includes('active'), 'Pad 1 inactive');
+
+    burstObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Slides' });
+    await pageBurst.waitForFunction(() => {
+      const p0 = document.querySelector('#grid .pad[data-idx="0"]');
+      const p1 = document.querySelector('#grid .pad[data-idx="1"]');
+      return p1?.classList.contains('active') && !p0?.classList.contains('active');
+    });
+
+    assert.ok((await pageBurst.locator('#grid .pad[data-idx="1"]').getAttribute('class')).includes('active'), 'Pad 1 active after scene event');
+    assert.ok(!(await pageBurst.locator('#grid .pad[data-idx="0"]').getAttribute('class')).includes('active'), 'Pad 0 inactive after scene event');
+
+    // Acceptance criterion 3: Timed Macro and Auto-Off countdown ticks still update in place
+    // 3a. Start Timed Macro on Pad 2
+    await pageBurst.locator('#grid .pad[data-idx="2"]').click();
+    await pageBurst.waitForFunction(() => document.querySelector('#grid .pad[data-idx="2"] .sub')?.textContent.includes('s'));
+
+    const macroSub1 = await pageBurst.locator('#grid .pad[data-idx="2"] .sub').textContent();
+    // Fire volume events while macro is ticking
+    for (let i = 0; i < 10; i++) {
+      burstObs.broadcast('InputVolumeChanged', { inputName: 'Desktop Audio', inputVolumeDb: -20 + i });
+    }
+    await pageBurst.waitForTimeout(300);
+    const macroSub2 = await pageBurst.locator('#grid .pad[data-idx="2"] .sub').textContent();
+    assert.ok(macroSub1.length > 0 && macroSub2.length > 0, 'Timed Macro tick text present');
+    assert.notEqual(macroSub1, macroSub2, 'Timed Macro tick updated in place while events fired');
+
+    // Cancel macro before starting next test
+    await pageBurst.locator('#grid .pad[data-idx="2"]').click();
+    await pageBurst.waitForFunction(() => !document.querySelector('#grid .pad[data-idx="2"]').classList.contains('running'));
+
+    // 3b. Start Auto-Off on Pad 3
+    await pageBurst.locator('#grid .pad[data-idx="3"]').click();
+    await pageBurst.waitForFunction(() => document.querySelector('#grid .pad[data-idx="3"] .sub')?.textContent.includes('s'));
+
+    const autoOffSub1 = await pageBurst.locator('#grid .pad[data-idx="3"] .sub').textContent();
+    // Fire volume events while auto-off is ticking
+    for (let i = 0; i < 10; i++) {
+      burstObs.broadcast('InputVolumeChanged', { inputName: 'Desktop Audio', inputVolumeDb: -15 + i });
+    }
+    await pageBurst.waitForTimeout(300);
+    const autoOffSub2 = await pageBurst.locator('#grid .pad[data-idx="3"] .sub').textContent();
+    assert.ok(autoOffSub1.length > 0 && autoOffSub2.length > 0, 'Auto-Off tick text present');
+    assert.notEqual(autoOffSub1, autoOffSub2, 'Auto-Off tick updated in place while events fired');
+
+    // Cancel auto-off
+    await pageBurst.locator('#grid .pad[data-idx="3"]').click();
+    await pageBurst.waitForFunction(() => !document.querySelector('#grid .pad[data-idx="3"] .sub'));
+
+    await ctxBurst.close();
+    console.log('  ✓ ticket #9: redraw only changed pads on events & non-destructive ticks (burst of 50 volume events replaced 0 graphics)');
+  } finally {
+    burstObs.wss.close();
+  }
+
   // 17. Undo and redo in Edit Mode (#15)
   const undoObs = createFakeObs(false);
   await new Promise((r) => undoObs.wss.once('listening', r));

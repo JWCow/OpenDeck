@@ -615,6 +615,7 @@
       }
     },
     renderGrid: () => {},
+    scheduleRenderGrid: () => Deck.renderGrid(),
     updateMacroTicks: () => {},
     updateStatsPads: () => Deck.renderGrid(),
   };
@@ -1377,7 +1378,7 @@
       ]);
 
       Deck.updateSceneHeader();
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
       Deck.syncStatsPolling();
     } catch (e) {
       Deck.setMsg(`Sync error: ${e.message}`);
@@ -1409,15 +1410,15 @@
     if (type === 'CurrentProgramSceneChanged') {
       obs.programScene = d.sceneName || '';
       Deck.updateSceneHeader();
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'CurrentPreviewSceneChanged') {
       obs.previewScene = d.sceneName || '';
       Deck.updateSceneHeader();
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'StudioModeStateChanged') {
       obs.studioModeEnabled = !!d.studioModeEnabled;
       Deck.updateSceneHeader();
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'SceneNameChanged') {
       const oldName = d.oldSceneName;
       const newName = d.sceneName;
@@ -1444,74 +1445,74 @@
         const il = await Deck.obsCall('GetInputList');
         applyInputList(il.inputs);
       } catch {}
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'SceneItemEnableStateChanged') {
       const arr = obs.itemsByScene[d.sceneName];
       if (arr) {
         const it = arr.find((x) => x.sceneItemId === d.sceneItemId);
         if (it) it.sceneItemEnabled = !!d.sceneItemEnabled;
       }
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'SceneItemCreated' || type === 'SceneItemRemoved') {
       try { await refreshSceneOrGroupItems(d.sceneName); } catch {}
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'SourceFilterEnableStateChanged') {
       const arr = obs.filtersBySource[d.sourceName];
       if (arr) {
         const f = arr.find((x) => x.filterName === d.filterName);
         if (f) f.filterEnabled = !!d.filterEnabled;
       }
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'SourceFilterCreated' || type === 'SourceFilterRemoved' || type === 'SourceFilterListReindexed' || type === 'SourceFilterNameChanged') {
       await Deck.refreshFilters(d.sourceName);
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'InputMuteStateChanged') {
       obs.mutes[d.inputName] = !!d.inputMuted;
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'InputVolumeChanged') {
       if (d.inputName && typeof d.inputVolumeDb === 'number') obs.volumes[d.inputName] = d.inputVolumeDb;
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'InputAudioMonitorTypeChanged') {
       if (d.inputName && d.monitorType) obs.monitors[d.inputName] = d.monitorType;
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'StreamStateChanged') {
       obs.outputs.stream = !!d.outputActive;
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'RecordStateChanged') {
       obs.outputs.record = !!d.outputActive;
       if (d.outputState === 'OBS_WEBSOCKET_OUTPUT_PAUSED') obs.outputs.recordPaused = true;
       else if (d.outputState === 'OBS_WEBSOCKET_OUTPUT_RESUMED' || !d.outputActive) obs.outputs.recordPaused = false;
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'VirtualcamStateChanged') {
       obs.outputs.vcam = !!d.outputActive;
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'ReplayBufferStateChanged') {
       obs.outputs.replay = !!d.outputActive;
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'ReplayBufferSaved') {
       if (d.savedReplayPath) Deck.setMsg(`Replay saved: ${d.savedReplayPath}`);
     } else if (type === 'MediaInputPlaybackStarted') {
       if (d.inputName) obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_PLAYING';
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'MediaInputPlaybackEnded') {
       if (d.inputName) obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_ENDED';
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'CurrentProfileChanged') {
       obs.currentProfile = d.profileName || '';
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'ProfileListChanged') {
       if (Array.isArray(d.profiles)) {
         obs.profiles = d.profiles.map((p) => (typeof p === 'string' ? p : p?.profileName)).filter(Boolean);
       }
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'SceneCollectionListChanged') {
       if (Array.isArray(d.sceneCollections)) {
         obs.collections = d.sceneCollections.map((c) => (typeof c === 'string' ? c : c?.sceneCollectionName)).filter(Boolean);
       }
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'CurrentSceneTransitionChanged') {
       obs.currentTransition = d.transitionName || '';
-      Deck.renderGrid();
+      Deck.scheduleRenderGrid();
     } else if (type === 'CurrentSceneTransitionDurationChanged') {
       if (typeof d.transitionDuration === 'number') obs.transitionDuration = d.transitionDuration;
     }
