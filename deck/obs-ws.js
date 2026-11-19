@@ -297,6 +297,10 @@
     let changed = false;
     const { cfg } = Deck;
     for (const page of (cfg.pages || [])) {
+      if (kind === 'scene' && page.sceneName === oldName) {
+        page.sceneName = newName;
+        changed = true;
+      }
       for (const pad of (page.pads || [])) {
         if (renameReference(pad, kind, oldName, newName)) {
           changed = true;
@@ -310,6 +314,9 @@
     }
     if (changed) {
       Deck.saveCfg();
+      if (kind === 'scene' && typeof Deck.renderPageBar === 'function') {
+        Deck.renderPageBar();
+      }
     }
     return changed;
   }
@@ -343,7 +350,7 @@
     return `page-${n}`;
   }
 
-  function normalizePage(raw, idx, usedIds, seedPanicIfMissing = false) {
+  function normalizePage(raw, idx, usedIds, seedPanicIfMissing = false, usedScenes = null) {
     const cols = clampInt(raw?.cols, MIN_COLS, MAX_COLS, DEFAULT_COLS);
     const rows = clampInt(raw?.rows, MIN_ROWS, MAX_ROWS, DEFAULT_ROWS);
     const id = uniquePageId(usedIds, raw?.id || `page-${idx + 1}`);
@@ -359,7 +366,15 @@
         if (raw.pads[i]) pads[i] = normalizePad(raw.pads[i]);
       }
     }
-    return { id, name, cols, rows, pads };
+    const page = { id, name, cols, rows, pads };
+    if (typeof raw?.sceneName === 'string' && raw.sceneName.trim()) {
+      const sc = raw.sceneName.trim();
+      if (!usedScenes || !usedScenes.has(sc)) {
+        page.sceneName = sc;
+        if (usedScenes) usedScenes.add(sc);
+      }
+    }
+    return page;
   }
 
   function migrateConfig(raw, fallbackPassword = '') {
@@ -383,15 +398,17 @@
 
     if (sourcePages) {
       const usedIds = new Set();
+      const usedScenes = new Set();
       pages = sourcePages
         .filter((d) => d && typeof d === 'object')
-        .map((d, idx) => normalizePage(d, idx, usedIds, false));
+        .map((d, idx) => normalizePage(d, idx, usedIds, false, usedScenes));
       if (!pages.length) throw new Error('Invalid layout JSON (empty pages[])');
       const rawActiveId = raw.activePageId || raw.activeDeckId;
       activePageId = pages.some((d) => d.id === rawActiveId) ? rawActiveId : pages[0].id;
     } else if (Array.isArray(raw.pads)) {
       const usedIds = new Set();
-      const single = normalizePage({ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads: raw.pads }, 0, usedIds, false);
+      const usedScenes = new Set();
+      const single = normalizePage({ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads: raw.pads }, 0, usedIds, false, usedScenes);
       pages = [single];
       activePageId = single.id;
     } else {
@@ -649,13 +666,17 @@
       version: 2,
       ws: { host: cfg.ws.host, port: cfg.ws.port },
       activePageId: cfg.activePageId,
-      pages: cfg.pages.map((d) => ({
-        id: d.id,
-        name: d.name,
-        cols: d.cols,
-        rows: d.rows,
-        pads: d.pads.map(normalizePad),
-      })),
+      pages: cfg.pages.map((d) => {
+        const out = {
+          id: d.id,
+          name: d.name,
+          cols: d.cols,
+          rows: d.rows,
+          pads: d.pads.map(normalizePad),
+        };
+        if (d.sceneName) out.sceneName = d.sceneName;
+        return out;
+      }),
       panicSteps: (cfg.panicSteps || []).map(normalizeStep).filter((s) => s.type !== 'none' && s.type !== 'wait'),
     };
   };
@@ -725,6 +746,22 @@
     const trimmed = String(name || '').trim();
     if (!trimmed) return false;
     page.name = trimmed;
+    Deck.saveCfg();
+    Deck.renderGrid();
+    return true;
+  };
+
+  Deck.setPageScene = (pageId, sceneName) => {
+    const page = Deck.cfg.pages.find((d) => d.id === pageId);
+    if (!page) return false;
+    const trimmed = String(sceneName || '').trim();
+    if (trimmed) {
+      const other = Deck.cfg.pages.find((p) => p.id !== pageId && p.sceneName === trimmed);
+      if (other) return false;
+      page.sceneName = trimmed;
+    } else {
+      delete page.sceneName;
+    }
     Deck.saveCfg();
     Deck.renderGrid();
     return true;
@@ -1411,10 +1448,22 @@
     return obs.activeSync;
   };
 
+  function syncSceneLinkedPage(sceneName) {
+    if (Deck.editMode || !sceneName) return false;
+    const linked = (Deck.cfg.pages || []).find((p) => p.sceneName && p.sceneName === sceneName);
+    if (linked && Deck.cfg.activePageId !== linked.id) {
+      Deck.setActivePage(linked.id);
+      return true;
+    }
+    return false;
+  }
+  Deck.syncSceneLinkedPage = syncSceneLinkedPage;
+
   async function handleObsEvent(type, d) {
     const { obs } = Deck;
     if (type === 'CurrentProgramSceneChanged') {
       obs.programScene = d.sceneName || '';
+      syncSceneLinkedPage(obs.programScene);
       Deck.updateSceneHeader();
       Deck.scheduleRenderGrid();
     } else if (type === 'CurrentPreviewSceneChanged') {
@@ -1432,6 +1481,23 @@
         if (obs.programScene === oldName) obs.programScene = newName;
         if (obs.previewScene === oldName) obs.previewScene = newName;
         applyRename('scene', oldName, newName);
+      }
+      await Deck.syncObsState();
+    } else if (type === 'SceneRemoved') {
+      const removedScene = d.sceneName;
+      if (removedScene) {
+        const clearedPages = [];
+        for (const page of (Deck.cfg.pages || [])) {
+          if (page.sceneName === removedScene) {
+            delete page.sceneName;
+            clearedPages.push(page.name);
+          }
+        }
+        if (clearedPages.length) {
+          Deck.saveCfg();
+          Deck.renderGrid();
+          Deck.setMsg(`Cleared scene link on Page "${clearedPages.join(', ')}": scene "${removedScene}" removed`);
+        }
       }
       await Deck.syncObsState();
     } else if (type === 'InputNameChanged') {
@@ -1713,6 +1779,7 @@
         Deck.setConn('ok', 'Connected');
         Deck.setMsg(`Connected to ${url}`);
         await Deck.syncObsState();
+        syncSceneLinkedPage(obs.programScene);
         if (typeof Deck.onObsConnected === 'function') Deck.onObsConnected();
       } else if (msg.op === 5) {
         await handleObsEvent(msg.d?.eventType, msg.d?.eventData || {});

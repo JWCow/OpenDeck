@@ -27,8 +27,14 @@
       b.setAttribute('role', 'tab');
       b.setAttribute('aria-selected', String(d.id === active.id));
       b.dataset.pageId = d.id;
-      b.textContent = d.name || 'Page';
-      b.title = `${d.name} (${d.cols}×${d.rows})`;
+      if (d.sceneName) {
+        b.dataset.scene = d.sceneName;
+        b.innerHTML = `<span class="page-tab-name">${Deck.esc(d.name || 'Page')}</span> <span class="page-tab-scene">${Deck.esc(d.sceneName)}</span>`;
+        b.title = `${d.name} (${d.cols}×${d.rows}) — Linked: ${d.sceneName}`;
+      } else {
+        b.textContent = d.name || 'Page';
+        b.title = `${d.name} (${d.cols}×${d.rows})`;
+      }
       b.addEventListener('click', () => {
         Deck.clearSelection();
         Deck.setActivePage(d.id);
