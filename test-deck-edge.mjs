@@ -733,6 +733,551 @@ try {
     seamObs.wss.close();
   }
 
+  // 16. Ticket #8: Pads follow scene and input renames
+  const ctxRenames = await browser.newContext();
+  const pageRenames = await ctxRenames.newPage();
+  pageRenames.on('pageerror', (e) => pageErrors.push(e.message));
+  try {
+    await pageRenames.goto(`${DECK_URL}?port=${port}`);
+    await pageRenames.waitForFunction(() => document.getElementById('conn-text')?.textContent === 'Connected');
+    if (await pageRenames.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageRenames.click('#btn-wiz-cancel');
+    }
+
+    // Verify renameReference and applyRename are not exported on Deck (ticket #8 review)
+    const exportedHelpers = await pageRenames.evaluate(() => ({
+      renameReference: typeof Deck.renameReference,
+      applyRename: typeof Deck.applyRename,
+    }));
+    assert.equal(exportedHelpers.renameReference, 'undefined', 'renameReference must not be exported on Deck');
+    assert.equal(exportedHelpers.applyRename, 'undefined', 'applyRename must not be exported on Deck');
+
+    // 16a. Scene renames update Scene, Source, Transform, Studio preview, Macro and PANIC steps + label preservation
+    await pageRenames.evaluate(() => {
+      const p = Deck.getActivePads();
+      p[0] = { type: 'scene', mode: 'named', sceneName: 'Slides', label: 'Slides', color: '#1e3a8a' };
+      p[1] = { type: 'scene', mode: 'named', sceneName: 'Slides', label: 'My Presentation', color: '#1e3a8a' };
+      p[2] = { type: 'source', sceneName: 'Slides', sourceName: 'Deck Slides', mode: 'toggle', label: 'Deck Slides', color: '#222733' };
+      p[3] = { type: 'transform', sceneName: 'Slides', sourceName: 'Deck Slides', preset: 'toggle_pip', label: 'Slides', color: '#222733' };
+      p[4] = { type: 'studio', action: 'preview', sceneName: 'Slides', label: 'Preview Slides', color: '#222733' };
+      p[5] = {
+        type: 'macro',
+        label: 'Macro 1',
+        color: '#222733',
+        steps: [
+          { type: 'scene', mode: 'named', sceneName: 'Slides' },
+          { type: 'transform', sceneName: 'Slides', sourceName: 'Deck Slides', preset: 'toggle_pip' },
+        ],
+      };
+      Deck.cfg.panicSteps = [
+        { type: 'scene', mode: 'named', sceneName: 'Slides' },
+      ];
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="0"] .lbl').textContent(), 'Slides');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="1"] .lbl').textContent(), 'My Presentation');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="2"] .ctx').textContent(), 'Slides');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="3"] .lbl').textContent(), 'Slides');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="4"] .lbl').textContent(), 'Preview Slides');
+
+    broadcast('SceneNameChanged', { oldSceneName: 'Slides', sceneName: 'Slide Deck' });
+
+    await pageRenames.waitForFunction(
+      () => document.querySelector('#grid .pad[data-idx="0"] .lbl')?.textContent === 'Slide Deck',
+      null,
+      { timeout: 3000 }
+    );
+
+    // Verify Pad properties and labels
+    const pAfter = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pAfter[0].sceneName, 'Slide Deck', 'scene pad sceneName updated');
+    assert.equal(pAfter[0].label, 'Slide Deck', 'scene pad auto-label updated');
+    assert.equal(pAfter[1].sceneName, 'Slide Deck', 'custom-labeled scene pad sceneName updated');
+    assert.equal(pAfter[1].label, 'My Presentation', 'custom label preserved');
+    assert.equal(pAfter[2].sceneName, 'Slide Deck', 'source pad sceneName updated');
+    assert.equal(pAfter[2].label, 'Deck Slides', 'source pad custom label preserved');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="2"] .ctx').textContent(), 'Slide Deck', 'source pad context subtitle updated');
+    assert.equal(pAfter[3].sceneName, 'Slide Deck', 'transform pad sceneName updated');
+    assert.equal(pAfter[3].label, 'Slide Deck', 'transform pad matching label updated');
+    assert.equal(pAfter[4].sceneName, 'Slide Deck', 'studio preview pad sceneName updated');
+    assert.equal(pAfter[4].label, 'Preview Slides', 'studio preview custom label preserved');
+    assert.equal(pAfter[5].steps[0].sceneName, 'Slide Deck', 'macro step 0 sceneName updated');
+    assert.equal(pAfter[5].steps[1].sceneName, 'Slide Deck', 'macro step 1 sceneName updated');
+
+    const panicAfter = await pageRenames.evaluate(() => Deck.cfg.panicSteps);
+    assert.equal(panicAfter[0].sceneName, 'Slide Deck', 'panic step sceneName updated');
+
+    // Changes survive a reload
+    await pageRenames.reload();
+    await pageRenames.waitForSelector('#grid .pad');
+    const pReloaded = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pReloaded[0].sceneName, 'Slide Deck', 'reloaded sceneName preserved');
+    assert.equal(pReloaded[0].label, 'Slide Deck', 'reloaded auto-label preserved');
+    assert.equal(pReloaded[1].label, 'My Presentation', 'reloaded custom label preserved');
+    assert.equal(pReloaded[2].sceneName, 'Slide Deck', 'reloaded source sceneName preserved');
+    assert.equal(pReloaded[5].steps[0].sceneName, 'Slide Deck', 'reloaded macro step preserved');
+    assert.equal((await pageRenames.evaluate(() => Deck.cfg.panicSteps))[0].sceneName, 'Slide Deck', 'reloaded panic step preserved');
+    console.log('  ✓ scene renames update Scene, Source, Transform, Studio, Macro & PANIC steps with label preservation');
+
+    // Filter Pad on the scene "Main Cam" follows SceneNameChanged rename
+    await pageRenames.evaluate(() => {
+      const p = Deck.getActivePads();
+      p[6] = { type: 'filter', sourceName: 'Main Cam', filterName: 'Color Grade', mode: 'toggle', label: 'Main Cam' };
+      p[7] = { type: 'filter', sourceName: 'Main Cam', filterName: 'Blur', mode: 'toggle', label: 'My Custom Filter' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="6"] .ctx').textContent(), 'Main Cam');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="6"] .lbl').textContent(), 'Main Cam');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="7"] .ctx').textContent(), 'Main Cam');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="7"] .lbl').textContent(), 'My Custom Filter');
+
+    broadcast('SceneNameChanged', { oldSceneName: 'Main Cam', sceneName: 'Studio Cam' });
+
+    await pageRenames.waitForFunction(
+      () => document.querySelector('#grid .pad[data-idx="6"] .lbl')?.textContent === 'Studio Cam',
+      null,
+      { timeout: 3000 }
+    );
+
+    const pFilterScene = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pFilterScene[6].sourceName, 'Studio Cam', 'filter pad on scene sourceName updated');
+    assert.equal(pFilterScene[6].label, 'Studio Cam', 'filter pad on scene matching label updated');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="6"] .ctx').textContent(), 'Studio Cam', 'filter pad on scene context subtitle updated');
+    assert.equal(pFilterScene[7].sourceName, 'Studio Cam', 'filter pad on scene custom label sourceName updated');
+    assert.equal(pFilterScene[7].label, 'My Custom Filter', 'filter pad on scene custom label preserved');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="7"] .ctx').textContent(), 'Studio Cam', 'filter pad on scene custom label context subtitle updated');
+
+    // Reload check for scene filter pad
+    await pageRenames.reload();
+    await pageRenames.waitForSelector('#grid .pad');
+    const pFilterReloaded = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pFilterReloaded[6].sourceName, 'Studio Cam', 'reloaded scene filter pad sourceName preserved');
+    assert.equal(pFilterReloaded[6].label, 'Studio Cam', 'reloaded scene filter pad label preserved');
+    assert.equal(pFilterReloaded[7].sourceName, 'Studio Cam', 'reloaded scene filter pad custom label sourceName preserved');
+    assert.equal(pFilterReloaded[7].label, 'My Custom Filter', 'reloaded scene filter pad custom label preserved');
+    console.log('  ✓ Filter Pad on scene "Main Cam" follows SceneNameChanged rename');
+
+    // 16b. Input renames update all input/source target types (source, filter, mute, volume, monitor, media, image, browser, screenshot, transform)
+    await pageRenames.evaluate(() => {
+      const p = Deck.getActivePads();
+      p[0] = { type: 'source', sceneName: 'Slide Deck', sourceName: 'Webcam', mode: 'toggle', label: 'Webcam' };
+      p[1] = { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'toggle', label: 'Webcam' };
+      p[2] = { type: 'screenshot', sourceName: 'Webcam', label: 'Webcam' };
+      p[3] = { type: 'transform', sceneName: 'Slide Deck', sourceName: 'Webcam', preset: 'toggle_pip', label: 'Webcam' };
+      p[4] = { type: 'mute', inputName: 'Webcam', mode: 'toggle', label: 'Webcam' };
+      p[5] = { type: 'volume', inputName: 'Webcam', mode: 'step', volumeDb: -3, label: 'Webcam' };
+      p[6] = { type: 'monitor', inputName: 'Webcam', monitorType: 'cycle', label: 'Webcam' };
+      p[7] = { type: 'media', inputName: 'Webcam', mediaAction: 'play_pause', label: 'Webcam' };
+      p[8] = { type: 'image', inputName: 'Webcam', mode: 'set_file', filePath: '/img/cam.png', label: 'Webcam' };
+      p[9] = { type: 'browser', inputName: 'Webcam', mode: 'refresh', label: 'Webcam' };
+      p[10] = { type: 'mute', inputName: 'Webcam', mode: 'toggle', label: 'My Custom Mic' };
+      p[11] = {
+        type: 'macro',
+        label: 'Macro 2',
+        steps: [
+          { type: 'mute', inputName: 'Webcam', mode: 'toggle' },
+          { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'disable' },
+        ],
+      };
+      Deck.cfg.panicSteps = [
+        { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'disable' },
+        { type: 'mute', inputName: 'Webcam', mode: 'mute' },
+      ];
+      // Also add a second page to verify cross-page rename updates
+      Deck.addPage({ name: 'Page 2', switchTo: false });
+      const p2 = Deck.cfg.pages.find((pg) => pg.name === 'Page 2').pads;
+      p2[0] = { type: 'mute', inputName: 'Webcam', mode: 'toggle', label: 'Webcam' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+
+    broadcast('InputNameChanged', { oldInputName: 'Webcam', inputName: 'Studio Camera' });
+
+    await pageRenames.waitForFunction(
+      () => document.querySelector('#grid .pad[data-idx="0"] .lbl')?.textContent === 'Studio Camera',
+      null,
+      { timeout: 3000 }
+    );
+
+    const pInputsAfter = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pInputsAfter[0].sourceName, 'Studio Camera', 'source pad sourceName updated');
+    assert.equal(pInputsAfter[0].label, 'Studio Camera', 'source pad label updated');
+    assert.equal(pInputsAfter[1].sourceName, 'Studio Camera', 'filter pad sourceName (filter owner) updated');
+    assert.equal(pInputsAfter[1].label, 'Studio Camera', 'filter pad label updated');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="1"] .ctx').textContent(), 'Studio Camera', 'filter pad context subtitle updated');
+    assert.equal(pInputsAfter[2].sourceName, 'Studio Camera', 'screenshot pad sourceName updated');
+    assert.equal(pInputsAfter[2].label, 'Studio Camera', 'screenshot pad label updated');
+    assert.equal(pInputsAfter[3].sourceName, 'Studio Camera', 'transform pad sourceName updated');
+    assert.equal(pInputsAfter[3].label, 'Studio Camera', 'transform pad label updated');
+    assert.equal(pInputsAfter[4].inputName, 'Studio Camera', 'mute pad inputName updated');
+    assert.equal(pInputsAfter[4].label, 'Studio Camera', 'mute pad label updated');
+    assert.equal(pInputsAfter[5].inputName, 'Studio Camera', 'volume pad inputName updated');
+    assert.equal(pInputsAfter[5].label, 'Studio Camera', 'volume pad label updated');
+    assert.equal(pInputsAfter[6].inputName, 'Studio Camera', 'monitor pad inputName updated');
+    assert.equal(pInputsAfter[6].label, 'Studio Camera', 'monitor pad label updated');
+    assert.equal(pInputsAfter[7].inputName, 'Studio Camera', 'media pad inputName updated');
+    assert.equal(pInputsAfter[7].label, 'Studio Camera', 'media pad label updated');
+    assert.equal(pInputsAfter[8].inputName, 'Studio Camera', 'image pad inputName updated');
+    assert.equal(pInputsAfter[8].label, 'Studio Camera', 'image pad label updated');
+    assert.equal(pInputsAfter[9].inputName, 'Studio Camera', 'browser pad inputName updated');
+    assert.equal(pInputsAfter[9].label, 'Studio Camera', 'browser pad label updated');
+    assert.equal(pInputsAfter[10].inputName, 'Studio Camera', 'custom-labeled mute pad inputName updated');
+    assert.equal(pInputsAfter[10].label, 'My Custom Mic', 'custom label preserved');
+    assert.equal(pInputsAfter[11].steps[0].inputName, 'Studio Camera', 'macro mute step updated');
+    assert.equal(pInputsAfter[11].steps[1].sourceName, 'Studio Camera', 'macro filter step updated');
+    assert.equal(pInputsAfter[11].label, 'Macro 2', 'macro custom label preserved');
+
+    const panicInputsAfter = await pageRenames.evaluate(() => Deck.cfg.panicSteps);
+    assert.equal(panicInputsAfter[0].sourceName, 'Studio Camera', 'panic filter step sourceName updated');
+    assert.equal(panicInputsAfter[1].inputName, 'Studio Camera', 'panic mute step inputName updated');
+
+    const page2PadAfter = await pageRenames.evaluate(() => Deck.cfg.pages.find((pg) => pg.name === 'Page 2')?.pads[0]);
+    assert.equal(page2PadAfter.inputName, 'Studio Camera', 'cross-page pad inputName updated on non-active page');
+    assert.equal(page2PadAfter.label, 'Studio Camera', 'cross-page pad label updated on non-active page');
+
+    // Changes survive reload
+    await pageRenames.reload();
+    await pageRenames.waitForSelector('#grid .pad');
+    const pInputsReloaded = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pInputsReloaded[0].sourceName, 'Studio Camera', 'reloaded source sourceName preserved');
+    assert.equal(pInputsReloaded[1].sourceName, 'Studio Camera', 'reloaded filter sourceName preserved');
+    assert.equal(pInputsReloaded[4].inputName, 'Studio Camera', 'reloaded mute inputName preserved');
+    assert.equal(pInputsReloaded[10].label, 'My Custom Mic', 'reloaded custom label preserved');
+    assert.equal(pInputsReloaded[11].steps[0].inputName, 'Studio Camera', 'reloaded macro step inputName preserved');
+    const panicInputsReloaded = await pageRenames.evaluate(() => Deck.cfg.panicSteps);
+    assert.equal(panicInputsReloaded[0].sourceName, 'Studio Camera', 'reloaded panic filter step preserved');
+    assert.equal(panicInputsReloaded[1].inputName, 'Studio Camera', 'reloaded panic mute step preserved');
+
+    const page2PadReloaded = await pageRenames.evaluate(() => Deck.cfg.pages.find((pg) => pg.name === 'Page 2')?.pads[0]);
+    assert.equal(page2PadReloaded.inputName, 'Studio Camera', 'reloaded cross-page pad inputName preserved');
+    console.log('  ✓ input renames update all 10 input/source target types, Macro & PANIC steps with label preservation across pages');
+  } finally {
+    await ctxRenames.close();
+  }
+
+  // 16. Single-flight OBS sync with parallel scene loading (ticket #10)
+  const syncObs = createFakeObs(false);
+  await new Promise((r) => syncObs.wss.once('listening', r));
+  const syncPort = syncObs.wss.address().port;
+  try {
+    syncObs.state.sceneItemListDelayMs = 25;
+    const ctxSync = await browser.newContext();
+    const pageSync = await ctxSync.newPage();
+    pageSync.on('pageerror', (e) => pageErrors.push(e.message));
+
+    // Connect to fake OBS with delayed scene item loading to measure parallel requests
+    await pageSync.goto(`${DECK_URL}?port=${syncPort}`);
+    await pageSync.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageSync.waitForFunction(() => Deck.obs.scenes.length >= 4);
+
+    // Assert criterion 3: scene item requests were sent in parallel (concurrently in-flight)
+    assert.ok(
+      syncObs.state.maxConcurrentSceneItemRequests > 1,
+      `expected parallel scene item requests (> 1 concurrent), got ${syncObs.state.maxConcurrentSceneItemRequests}`
+    );
+
+    // Reset request tracking for burst test
+    syncObs.state.calls.length = 0;
+    syncObs.state.maxConcurrentSceneItemRequests = 0;
+
+    // Mutate state in fake OBS: add a new scene with scene items
+    syncObs.state.scenes.push('Burst Scene');
+    syncObs.state.sceneItems['Burst Scene'] = [
+      { sceneItemId: 99, sourceName: 'Burst Mic', sceneItemEnabled: true, isGroup: false },
+    ];
+
+    // Emit a burst of 5 SceneListChanged events in rapid succession
+    for (let i = 0; i < 5; i++) {
+      syncObs.broadcast('SceneListChanged');
+    }
+
+    // Wait until the Deck reflects the new scene and sync is complete
+    await pageSync.waitForFunction(() => Deck.obs.scenes.includes('Burst Scene'));
+    // Wait briefly for any queued sync to finish settling
+    await pageSync.waitForTimeout(100);
+
+    // Assert criterion 1: A burst of scene-list changes produces at most two full syncs
+    const getSceneListCalls = syncObs.state.calls.filter((c) => c.requestType === 'GetSceneList');
+    assert.ok(
+      getSceneListCalls.length >= 1 && getSceneListCalls.length <= 2,
+      `burst produced ${getSceneListCalls.length} full syncs (expected at most 2)`
+    );
+
+    // Assert criterion 2: After the burst, the Deck's scenes and sources match the fake OBS
+    const deckScenes = await pageSync.evaluate(() => Deck.obs.scenes);
+    const expectedScenes = [...syncObs.state.scenes].reverse();
+    assert.deepEqual(deckScenes, expectedScenes, "Deck's scenes match fake OBS after burst");
+
+    const burstItems = await pageSync.evaluate(() => Deck.obs.itemsByScene['Burst Scene']);
+    assert.deepEqual(
+      burstItems,
+      [{ sceneItemId: 99, sourceName: 'Burst Mic', sceneItemEnabled: true, isGroup: false }],
+      "Deck's scene items match fake OBS after burst"
+    );
+
+    await ctxSync.close();
+    console.log('  ✓ single-flight OBS sync (burst produces <= 2 syncs) & parallel scene item loading');
+  } finally {
+    syncObs.wss.close();
+  }
+
+  // 16. Auto-Import past 63 items (100 sources -> 2 Sources Pages holding all 100, footer reports Pad and Page counts, read-only)
+  const bigObs = createFakeObs(false);
+  const hundredSources = Array.from({ length: 100 }, (_, i) => `Source ${String(i + 1).padStart(3, '0')}`);
+  bigObs.state.scenes = ['Main Scene'];
+  bigObs.state.sceneItems = {
+    'Main Scene': hundredSources.map((name, i) => ({
+      sceneItemId: 1000 + i,
+      sourceName: name,
+      sceneItemEnabled: true,
+      isGroup: false,
+    })),
+  };
+  await new Promise((r) => bigObs.wss.once('listening', r));
+  const bigPort = bigObs.wss.address().port;
+  try {
+    const ctxBig = await browser.newContext();
+    const pageBig = await ctxBig.newPage();
+    pageBig.on('pageerror', (e) => pageErrors.push(e.message));
+    await pageBig.goto(`${DECK_URL}?port=${bigPort}`);
+    await pageBig.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageBig.waitForSelector('#import-wiz-dlg[open]');
+
+    // Uncheck scenes, filters, broadcast so only sources are imported
+    await pageBig.uncheck('#wiz-scenes');
+    await pageBig.uncheck('#wiz-filters');
+    await pageBig.uncheck('#wiz-broadcast');
+    bigObs.state.calls.length = 0;
+
+    await pageBig.click('#btn-wiz-apply');
+    await pageBig.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+    const tabNames = await pageBig.locator('#deck-tabs .page-tab').allTextContents();
+    assert.deepEqual(tabNames, ['Sources', 'Sources 2'], '100 sources produces two Sources Pages');
+
+    const importedSources = await pageBig.evaluate(() => {
+      const p1 = Deck.cfg.pages.find((p) => p.name === 'Sources');
+      const p2 = Deck.cfg.pages.find((p) => p.name === 'Sources 2');
+      const s1 = p1 ? p1.pads.filter((p) => p.type === 'source').map((p) => p.sourceName) : [];
+      const s2 = p2 ? p2.pads.filter((p) => p.type === 'source').map((p) => p.sourceName) : [];
+      return { s1, s2 };
+    });
+
+    assert.equal(importedSources.s1.length, 63, 'First Sources Page holds 63 sources');
+    assert.equal(importedSources.s2.length, 37, 'Second Sources Page holds remaining 37 sources');
+    assert.deepEqual(
+      [...importedSources.s1, ...importedSources.s2],
+      hundredSources,
+      'All 100 sources are held across the two Sources Pages'
+    );
+
+    // Footer message reports Pad and Page counts
+    const footerMsg = await pageBig.textContent('#msg-info');
+    assert.match(footerMsg, /Auto-Imported \d+ pad\(s\) across 2 page\(s\)/i, 'Footer message reports Pad and Page counts');
+    assert.ok(footerMsg.includes('102 pad(s)') || footerMsg.includes('100 pad(s)'), 'Footer message contains pad count');
+
+    // No OBS write requests are sent
+    const mutatingCalls = bigObs.state.calls.filter((c) => /^(Create|Set|Remove|Press|Trigger)/.test(c.requestType));
+    assert.equal(mutatingCalls.length, 0, 'No OBS write requests are sent during Auto-Import');
+
+    await ctxBig.close();
+    console.log('  ✓ Auto-Import past 63 items (100 sources -> 2 Sources Pages holding all 100, footer reports Pad and Page counts, read-only)');
+  } finally {
+    bigObs.wss.close();
+  }
+
+  // 16. Output stop protection and in-flight guard (#5)
+  const outObs = createFakeObs(false);
+  await new Promise((r) => outObs.wss.once('listening', r));
+  const outPort = outObs.wss.address().port;
+  try {
+    const ctxOut = await browser.newContext();
+    const pageOut = await ctxOut.newPage();
+    pageOut.on('pageerror', (e) => pageErrors.push(e.message));
+    await pageOut.goto(`${DECK_URL}?port=${outPort}`);
+    await pageOut.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageOut.waitForTimeout(100);
+    if (await pageOut.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageOut.click('#btn-wiz-cancel');
+    }
+
+    // Configure pads for testing:
+    // Slot 0: Stream toggle
+    // Slot 1: Record toggle
+    // Slot 2: Virtual Cam toggle
+    // Slot 3: Replay Buffer toggle
+    // Slot 4: Stream stop
+    // Slot 5: Macro with wait and stop
+    // Slot 6: PANIC pad
+    await pageOut.evaluate(() => {
+      const page = Deck.getActivePage();
+      page.pads[0] = { type: 'output', target: 'stream', mode: 'toggle', label: 'Stream' };
+      page.pads[1] = { type: 'output', target: 'record', mode: 'toggle', label: 'Record' };
+      page.pads[2] = { type: 'output', target: 'vcam', mode: 'toggle', label: 'Virtual Cam' };
+      page.pads[3] = { type: 'output', target: 'replay', mode: 'toggle', label: 'Replay Buffer' };
+      page.pads[4] = { type: 'output', target: 'stream', mode: 'stop', label: 'Stop Stream' };
+      page.pads[5] = {
+        type: 'macro',
+        label: 'Stream Macro',
+        steps: [
+          { type: 'wait', delayMs: 1500 },
+          { type: 'output', target: 'stream', mode: 'stop' },
+        ],
+      };
+      page.pads[6] = { type: 'panic', label: 'PANIC' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+
+    const padEl = (idx) => pageOut.locator('#grid .pad').nth(idx);
+
+    // AC 4: A double-tap on an idle output Pad sends exactly one request
+    outObs.state.calls.length = 0;
+    await Promise.all([
+      padEl(0).click(),
+      padEl(0).click(),
+    ]);
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, true, 'stream started');
+    const streamStartCalls = outObs.state.calls.filter((c) => c.requestType === 'ToggleStream' || c.requestType === 'StartStream');
+    assert.equal(streamStartCalls.length, 1, 'double-tap on idle output Pad sends exactly one request');
+
+    // AC 1: A single tap on a live Stream Pad sends no stop request and shows the armed state
+    outObs.state.calls.length = 0;
+    await padEl(0).click();
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleStream' || c.requestType === 'StopStream').length, 0, 'single tap sends no stop request');
+    assert.ok((await padEl(0).getAttribute('class')).includes('armed'), 'pad shows armed state class');
+    const armedMsg = await pageOut.textContent('#msg-info');
+    assert.match(armedMsg, /armed/i, 'footer message shows armed confirmation warning');
+
+    // AC 3: The armed state expires on its own
+    await pageOut.waitForTimeout(2100);
+    assert.equal((await padEl(0).getAttribute('class')).includes('armed'), false, 'armed state expired after ~2 seconds');
+    assert.equal(outObs.state.outputs.stream, true, 'output stream still running after armed state expires');
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleStream' || c.requestType === 'StopStream').length, 0, 'no stop request sent on expiration');
+
+    // AC 2: A second tap within the window sends the stop request
+    outObs.state.calls.length = 0;
+    await padEl(0).click(); // tap 1: arms
+    assert.ok((await padEl(0).getAttribute('class')).includes('armed'), 'pad armed on first tap');
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleStream' || c.requestType === 'StopStream').length, 0, 'no stop sent yet');
+    await padEl(0).click(); // tap 2: confirms stop
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, false, 'second tap stopped the stream');
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleStream' || c.requestType === 'StopStream').length, 1, 'stop request sent on second tap');
+    assert.equal((await padEl(0).getAttribute('class')).includes('armed'), false, 'armed state cleared on stop');
+
+    // AC 2 (hold): A hold sends the stop request
+    await padEl(0).click(); // start stream again
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, true, 'stream running for hold test');
+    outObs.state.calls.length = 0;
+    await padEl(0).click({ delay: 650 }); // press and hold
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, false, 'hold stopped the stream');
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleStream' || c.requestType === 'StopStream').length, 1, 'hold sent stop request');
+    assert.equal((await padEl(0).getAttribute('class')).includes('armed'), false, 'armed state cleared after hold stop');
+
+    // Stop protection also applies to Record, Virtual Cam, Replay Buffer, and mode: stop
+    // Record toggle
+    await padEl(1).click(); // start record
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[1].className.includes('active'));
+    assert.equal(outObs.state.outputs.record, true);
+    outObs.state.calls.length = 0;
+    await padEl(1).click(); // tap 1: arm
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleRecord' || c.requestType === 'StopRecord').length, 0);
+    assert.ok((await padEl(1).getAttribute('class')).includes('armed'), 'record pad armed');
+    await padEl(1).click(); // tap 2: stop
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[1].className.includes('active'));
+    assert.equal(outObs.state.outputs.record, false, 'record stopped on second tap');
+
+    // Virtual Cam toggle
+    await padEl(2).click(); // start vcam
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[2].className.includes('active'));
+    assert.equal(outObs.state.outputs.vcam, true);
+    outObs.state.calls.length = 0;
+    await padEl(2).click(); // tap 1: arm
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleVirtualCam' || c.requestType === 'StopVirtualCam').length, 0);
+    assert.ok((await padEl(2).getAttribute('class')).includes('armed'), 'vcam pad armed');
+    await padEl(2).click(); // tap 2: stop
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[2].className.includes('active'));
+    assert.equal(outObs.state.outputs.vcam, false, 'vcam stopped on second tap');
+
+    // Replay Buffer toggle
+    await padEl(3).click(); // start replay
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[3].className.includes('active'));
+    assert.equal(outObs.state.outputs.replay, true);
+    outObs.state.calls.length = 0;
+    await padEl(3).click(); // tap 1: arm
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'ToggleReplayBuffer' || c.requestType === 'StopReplayBuffer').length, 0);
+    assert.ok((await padEl(3).getAttribute('class')).includes('armed'), 'replay pad armed');
+    await padEl(3).click(); // tap 2: stop
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[3].className.includes('active'));
+    assert.equal(outObs.state.outputs.replay, false, 'replay stopped on second tap');
+
+    // Mode: 'stop' pad
+    await padEl(0).click(); // start stream
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, true);
+    outObs.state.calls.length = 0;
+    await padEl(4).click(); // tap 1: arm stop pad
+    assert.equal(outObs.state.calls.filter((c) => c.requestType === 'StopStream').length, 0);
+    assert.ok((await padEl(4).getAttribute('class')).includes('armed'), 'mode:stop pad armed');
+    await padEl(4).click(); // tap 2: stop stream
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, false, 'mode:stop pad stopped stream on second tap');
+
+    // AC 5: Tapping a running Timed Macro still cancels it; PANIC always runs
+    await padEl(5).click(); // start macro (1.5s wait step)
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[5].className.includes('running'));
+    await padEl(5).click(); // cancel macro
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[5].className.includes('running'));
+    assert.match(await pageOut.textContent('#msg-info'), /Cancelled macro/);
+
+    await padEl(6).click(); // PANIC always runs
+    assert.match(await pageOut.textContent('#msg-info'), /PANIC executed/);
+
+    // AC 6: Stop steps inside Timed Macros and PANIC run without confirmation
+    // Test PANIC stop step
+    await padEl(0).click(); // start stream
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, true);
+    await pageOut.evaluate(() => {
+      Deck.cfg.panicSteps = [{ type: 'output', target: 'stream', mode: 'stop' }];
+    });
+    outObs.state.calls.length = 0;
+    await padEl(6).click(); // trigger PANIC
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, false, 'PANIC stopped stream without confirmation');
+    assert.ok(outObs.state.calls.some((c) => c.requestType === 'StopStream'), 'StopStream executed by PANIC');
+
+    // Test Timed Macro stop step without confirmation
+    await padEl(0).click(); // start stream
+    await pageOut.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, true);
+    await pageOut.evaluate(() => {
+      Deck.cfg.pages[0].pads[5] = {
+        type: 'macro',
+        label: 'Instant Stop Macro',
+        steps: [{ type: 'output', target: 'stream', mode: 'stop' }],
+      };
+      Deck.renderGrid();
+    });
+    outObs.state.calls.length = 0;
+    await padEl(5).click(); // run macro
+    await pageOut.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    assert.equal(outObs.state.outputs.stream, false, 'Timed Macro stop step stopped stream without confirmation');
+    assert.ok(outObs.state.calls.some((c) => c.requestType === 'StopStream'), 'StopStream executed by Timed Macro');
+
+    await ctxOut.close();
+    console.log('  ✓ output stop protection and in-flight guard (#5)');
+  } finally {
+    outObs.wss.close();
+  }
+
   console.log('\nPASS: all deck edge E2E checks succeeded.');
 } finally {
   if (browser) await browser.close();
