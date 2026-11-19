@@ -259,6 +259,12 @@
           changed = true;
         }
       }
+      if (['source', 'filter', 'screenshot', 'transform'].includes(item.type)) {
+        if (item.sourceName === oldName) {
+          item.sourceName = newName;
+          changed = true;
+        }
+      }
     } else if (kind === 'input') {
       if (['source', 'filter', 'screenshot', 'transform'].includes(item.type)) {
         if (item.sourceName === oldName) {
@@ -507,8 +513,6 @@
     getPadContextSubtitle,
     normalizePad,
     normalizeStep,
-    renameReference,
-    applyRename,
     defaultPads,
     defaultPages,
     migrateConfig,

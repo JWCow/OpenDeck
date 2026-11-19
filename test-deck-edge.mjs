@@ -639,6 +639,14 @@ try {
       await pageRenames.click('#btn-wiz-cancel');
     }
 
+    // Verify renameReference and applyRename are not exported on Deck (ticket #8 review)
+    const exportedHelpers = await pageRenames.evaluate(() => ({
+      renameReference: typeof Deck.renameReference,
+      applyRename: typeof Deck.applyRename,
+    }));
+    assert.equal(exportedHelpers.renameReference, 'undefined', 'renameReference must not be exported on Deck');
+    assert.equal(exportedHelpers.applyRename, 'undefined', 'applyRename must not be exported on Deck');
+
     // 16a. Scene renames update Scene, Source, Transform, Studio preview, Macro and PANIC steps + label preservation
     await pageRenames.evaluate(() => {
       const p = Deck.getActivePads();
@@ -707,6 +715,45 @@ try {
     assert.equal(pReloaded[5].steps[0].sceneName, 'Slide Deck', 'reloaded macro step preserved');
     assert.equal((await pageRenames.evaluate(() => Deck.cfg.panicSteps))[0].sceneName, 'Slide Deck', 'reloaded panic step preserved');
     console.log('  ✓ scene renames update Scene, Source, Transform, Studio, Macro & PANIC steps with label preservation');
+
+    // Filter Pad on the scene "Main Cam" follows SceneNameChanged rename
+    await pageRenames.evaluate(() => {
+      const p = Deck.getActivePads();
+      p[6] = { type: 'filter', sourceName: 'Main Cam', filterName: 'Color Grade', mode: 'toggle', label: 'Main Cam' };
+      p[7] = { type: 'filter', sourceName: 'Main Cam', filterName: 'Blur', mode: 'toggle', label: 'My Custom Filter' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="6"] .ctx').textContent(), 'Main Cam');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="6"] .lbl').textContent(), 'Main Cam');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="7"] .ctx').textContent(), 'Main Cam');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="7"] .lbl').textContent(), 'My Custom Filter');
+
+    broadcast('SceneNameChanged', { oldSceneName: 'Main Cam', sceneName: 'Studio Cam' });
+
+    await pageRenames.waitForFunction(
+      () => document.querySelector('#grid .pad[data-idx="6"] .lbl')?.textContent === 'Studio Cam',
+      null,
+      { timeout: 3000 }
+    );
+
+    const pFilterScene = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pFilterScene[6].sourceName, 'Studio Cam', 'filter pad on scene sourceName updated');
+    assert.equal(pFilterScene[6].label, 'Studio Cam', 'filter pad on scene matching label updated');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="6"] .ctx').textContent(), 'Studio Cam', 'filter pad on scene context subtitle updated');
+    assert.equal(pFilterScene[7].sourceName, 'Studio Cam', 'filter pad on scene custom label sourceName updated');
+    assert.equal(pFilterScene[7].label, 'My Custom Filter', 'filter pad on scene custom label preserved');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="7"] .ctx').textContent(), 'Studio Cam', 'filter pad on scene custom label context subtitle updated');
+
+    // Reload check for scene filter pad
+    await pageRenames.reload();
+    await pageRenames.waitForSelector('#grid .pad');
+    const pFilterReloaded = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pFilterReloaded[6].sourceName, 'Studio Cam', 'reloaded scene filter pad sourceName preserved');
+    assert.equal(pFilterReloaded[6].label, 'Studio Cam', 'reloaded scene filter pad label preserved');
+    assert.equal(pFilterReloaded[7].sourceName, 'Studio Cam', 'reloaded scene filter pad custom label sourceName preserved');
+    assert.equal(pFilterReloaded[7].label, 'My Custom Filter', 'reloaded scene filter pad custom label preserved');
+    console.log('  ✓ Filter Pad on scene "Main Cam" follows SceneNameChanged rename');
 
     // 16b. Input renames update all input/source target types (source, filter, mute, volume, monitor, media, image, browser, screenshot, transform)
     await pageRenames.evaluate(() => {
