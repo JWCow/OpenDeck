@@ -686,6 +686,41 @@
 
   Deck.heldPads = Deck.heldPads || new Map();
 
+  const pendingHoldRestores = [];
+
+  async function applyPendingHoldRestores() {
+    if (!pendingHoldRestores.length) return;
+    const toRestore = [...pendingHoldRestores];
+    pendingHoldRestores.length = 0;
+
+    for (const entry of toRestore) {
+      if (!entry.restoreAction) continue;
+      let stillHeld = true;
+      const { restoreAction, origState } = entry;
+      if (restoreAction.type === 'mute') {
+        const cur = Boolean(Deck.obs?.mutes?.[restoreAction.inputName]);
+        stillHeld = (cur !== origState);
+      } else if (restoreAction.type === 'source') {
+        const items = Deck.obs?.itemsByScene?.[restoreAction.sceneName];
+        const it = (items || []).find((x) => x.sourceName === restoreAction.sourceName);
+        if (it) {
+          stillHeld = (Boolean(it.sceneItemEnabled) !== origState);
+        }
+      } else if (restoreAction.type === 'filter') {
+        const flts = Deck.obs?.filtersBySource?.[restoreAction.sourceName];
+        const f = (flts || []).find((x) => x.filterName === restoreAction.filterName);
+        if (f) {
+          stillHeld = (Boolean(f.filterEnabled) !== origState);
+        }
+      }
+      if (stillHeld) {
+        try {
+          await execAction(restoreAction);
+        } catch {}
+      }
+    }
+  }
+
   function isPadHeld(idx, pageId = Deck.cfg.activePageId) {
     return Deck.heldPads.has(timerKey(pageId, idx));
   }
@@ -697,6 +732,7 @@
     if (!p || p.type === 'none' || !p.hold || !Deck.HOLD_TYPES || !Deck.HOLD_TYPES.has(p.type)) return;
 
     const key = timerKey(page.id, idx);
+    if (Deck.busyPads ? Deck.busyPads.has(key) : false) return;
     if (Deck.heldPads.has(key)) return;
 
     let origState = false;
@@ -737,10 +773,13 @@
     }
 
     try {
+      if (Deck.busyPads) Deck.busyPads.add(key);
       entry.pressPromise = execAction(p);
       await entry.pressPromise;
     } catch (e) {
       Deck.setMsg?.(e.message);
+    } finally {
+      if (Deck.busyPads) Deck.busyPads.delete(key);
     }
   }
 
@@ -761,9 +800,15 @@
     if (entry.restoreAction) {
       try {
         if (Deck.obs?.ws && Deck.obs.ws.readyState === 1) {
+          if (Deck.busyPads) Deck.busyPads.add(key);
           await execAction(entry.restoreAction);
+        } else {
+          pendingHoldRestores.push(entry);
         }
       } catch {}
+      finally {
+        if (Deck.busyPads) Deck.busyPads.delete(key);
+      }
     }
   }
 
@@ -1039,4 +1084,5 @@
   Deck.holdPress = holdPress;
   Deck.releaseHold = releaseHold;
   Deck.isPadHeld = isPadHeld;
+  Deck.applyPendingHoldRestores = applyPendingHoldRestores;
 })();

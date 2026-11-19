@@ -187,15 +187,17 @@
       if (copy) Deck.setMsg(`Duplicated "${cur.name}" -> "${copy.name}"`);
     });
   });
-  $('btn-deck-del').addEventListener('click', () => {
+  $('btn-deck-del').addEventListener('click', async () => {
     if (Deck.cfg.pages.length <= 1) return;
     const cur = Deck.getActivePage();
     if (!confirm(`Delete Page "${cur.name}" and its pads?`)) return;
-    $('deck-dlg').close();
-    Deck.pushHistory(() => {
-      Deck.deletePage(cur.id);
-      Deck.setMsg(`Deleted Page "${cur.name}"`);
+    await Deck.pushHistory(async () => {
+      await Deck.deletePage(cur.id);
+      if ($('msg-info')?.textContent !== 'No snapshot was saved') {
+        Deck.setMsg(`Deleted Page "${cur.name}"`);
+      }
     });
+    $('deck-dlg').close();
   });
   $('deck-form').addEventListener('submit', (e) => {
     const cur = Deck.getActivePage();
@@ -233,10 +235,12 @@
       syncAutoImportState();
     });
   }
-  $('import-wiz-form').addEventListener('submit', () => {
+  $('import-wiz-form').addEventListener('submit', async (e) => {
+    if (e) e.preventDefault();
     if ($('wiz-mode-starter')?.checked) {
       const selected = $('wiz-starter-layout')?.value || 'Solo Streamer';
-      Deck.applyStarterLayout(selected, { replaceEmptyStarter: $('wiz-replace').checked });
+      await Deck.applyStarterLayout(selected, { replaceEmptyStarter: $('wiz-replace').checked });
+      $('import-wiz-dlg').close();
       return;
     }
     const pages = Deck.buildAutoImportPages({
@@ -247,9 +251,11 @@
     });
     if (!pages.length) {
       Deck.setMsg('No items found in OBS for selected categories');
+      $('import-wiz-dlg').close();
       return;
     }
-    Deck.applyAutoImport(pages, { replaceEmptyStarter: $('wiz-replace').checked });
+    await Deck.applyAutoImport(pages, { replaceEmptyStarter: $('wiz-replace').checked });
+    $('import-wiz-dlg').close();
   });
 
   // PANIC Dialog

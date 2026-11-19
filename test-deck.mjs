@@ -931,6 +931,7 @@ try {
     await page.click('#btn-conn-toggle');
   }
   await page.click('#btn-reset-layout');
+  await page.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0]?.textContent?.includes('Go Slides'));
   assert.equal((await pad(0).textContent()).includes('Go Slides'), false, 'reset cleared pads');
   assert.equal(await page.locator('#deck-tabs .page-tab').count(), 1, 'reset restored single starter page');
 

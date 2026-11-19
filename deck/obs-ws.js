@@ -812,12 +812,20 @@
     return true;
   };
 
-  Deck.deletePage = (pageId) => {
+  Deck.deletePage = async (pageId) => {
     const { pages } = Deck.cfg;
     if (pages.length <= 1) return false;
     const idx = pages.findIndex((d) => d.id === pageId);
     if (idx < 0) return false;
-    if (typeof Deck.createSnapshot === 'function') Deck.createSnapshot('Before Delete Page');
+    let snapFailed = false;
+    if (typeof Deck.createSnapshot === 'function') {
+      try {
+        const s = await Deck.createSnapshot('Before Delete Page');
+        if (s === null && Deck.snapshotsAvailable) snapFailed = true;
+      } catch {
+        snapFailed = true;
+      }
+    }
     if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(pageId);
     pages.splice(idx, 1);
     if (Deck.cfg.activePageId === pageId) {
@@ -825,6 +833,9 @@
     }
     Deck.saveCfg();
     Deck.renderGrid();
+    if (snapFailed) {
+      Deck.setMsg('No snapshot was saved');
+    }
     return true;
   };
 
@@ -1143,14 +1154,22 @@
     return pages;
   };
 
-  Deck.applyAutoImport = (pages, { replaceEmptyStarter = true, skipSnapshot = false } = {}) => {
+  Deck.applyAutoImport = async (pages, { replaceEmptyStarter = true, skipSnapshot = false } = {}) => {
     const incoming = Array.isArray(pages) ? pages.filter((p) => p && typeof p === 'object') : [];
     if (!incoming.length) return [];
     const replace = replaceEmptyStarter && Deck.isStarterDeck();
     const usedIds = replace ? new Set() : new Set(Deck.cfg.pages.map((d) => d.id));
     const normalized = incoming.map((p, idx) => normalizePage(p, idx, usedIds, false));
+    let snapFailed = false;
     if (replace) {
-      if (!skipSnapshot && typeof Deck.createSnapshot === 'function') Deck.createSnapshot('Before Auto-Import');
+      if (!skipSnapshot && typeof Deck.createSnapshot === 'function') {
+        try {
+          const s = await Deck.createSnapshot('Before Auto-Import');
+          if (s === null && Deck.snapshotsAvailable) snapFailed = true;
+        } catch {
+          snapFailed = true;
+        }
+      }
       if (typeof Deck.abortPageTimers === 'function') {
         for (const old of Deck.cfg.pages) Deck.abortPageTimers(old.id);
       }
@@ -1161,6 +1180,9 @@
     Deck.cfg.activePageId = normalized[0].id;
     Deck.saveCfg();
     Deck.renderGrid();
+    if (snapFailed) {
+      Deck.setMsg('No snapshot was saved');
+    }
     if (Deck.obs.status === 'ok') {
       const mutesToSync = new Set();
       const monitorsToSync = new Set();
@@ -1594,13 +1616,23 @@
 
   Deck.STARTER_LAYOUTS = STARTER_LAYOUTS;
   Deck.buildStarterLayoutPage = buildStarterLayoutPage;
-  Deck.applyStarterLayout = (templateName, { replaceEmptyStarter = true } = {}) => {
+  Deck.applyStarterLayout = async (templateName, { replaceEmptyStarter = true } = {}) => {
     const page = buildStarterLayoutPage(templateName);
     if (!page) return [];
+    let snapFailed = false;
     if (typeof Deck.createSnapshot === 'function') {
-      Deck.createSnapshot('Before Starter Layout');
+      try {
+        const s = await Deck.createSnapshot('Before Starter Layout');
+        if (s === null && Deck.snapshotsAvailable) snapFailed = true;
+      } catch {
+        snapFailed = true;
+      }
     }
-    return Deck.applyAutoImport([page], { replaceEmptyStarter, skipSnapshot: true });
+    const res = await Deck.applyAutoImport([page], { replaceEmptyStarter, skipSnapshot: true });
+    if (snapFailed) {
+      Deck.setMsg('No snapshot was saved');
+    }
+    return res;
   };
 
   Deck.setMsg = (txt) => {
@@ -2537,6 +2569,9 @@
         Deck.setConn('ok', 'Connected');
         Deck.setMsg(`Connected to ${url}`);
         await Deck.syncObsState();
+        if (typeof Deck.applyPendingHoldRestores === 'function') {
+          await Deck.applyPendingHoldRestores();
+        }
         syncSceneLinkedPage(obs.programScene);
         if (typeof Deck.onObsConnected === 'function') Deck.onObsConnected();
       } else if (msg.op === 5) {

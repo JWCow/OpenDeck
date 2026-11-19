@@ -104,7 +104,15 @@
     if (d && d.ws && !d.ws.password) {
       delete d.ws.password;
     }
-    if (typeof Deck.createSnapshot === 'function') await Deck.createSnapshot('Before Import');
+    let snapFailed = false;
+    if (typeof Deck.createSnapshot === 'function') {
+      try {
+        const s = await Deck.createSnapshot('Before Import');
+        if (s === null && Deck.snapshotsAvailable) snapFailed = true;
+      } catch {
+        snapFailed = true;
+      }
+    }
     Deck.clearSelection();
     const pageIds = new Set((Deck.cfg?.pages || []).map((p) => p.id));
     if (Deck.activeMacros) {
@@ -123,7 +131,11 @@
     Deck.saveCfg();
     Deck.renderGrid();
     if (Deck.obs.status === 'ok') await Deck.syncObsState();
-    Deck.setMsg(`Imported ${sourceName}`);
+    if (snapFailed) {
+      Deck.setMsg('No snapshot was saved');
+    } else {
+      Deck.setMsg(`Imported ${sourceName}`);
+    }
   };
 
   Deck.importFromLink = async (url) => {
@@ -132,6 +144,9 @@
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const d = await res.json();
+      if (d && d.ws) {
+        delete d.ws.password;
+      }
       await Deck.importLayout(d, url);
       return d;
     } catch (err) {
@@ -159,9 +174,17 @@
       Deck.setMsg(`Import error: ${err.message}`);
     }
   });
-  $('btn-reset-layout').addEventListener('click', () => {
+  $('btn-reset-layout').addEventListener('click', async () => {
     if (!confirm('Reset all Pages, pads, and PANIC steps to starter defaults?')) return;
-    if (typeof Deck.createSnapshot === 'function') Deck.createSnapshot('Before Reset');
+    let snapFailed = false;
+    if (typeof Deck.createSnapshot === 'function') {
+      try {
+        const s = await Deck.createSnapshot('Before Reset');
+        if (s === null && Deck.snapshotsAvailable) snapFailed = true;
+      } catch {
+        snapFailed = true;
+      }
+    }
     Deck.clearSelection();
     for (const p of Deck.cfg.pages) {
       if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(p.id);
@@ -171,7 +194,11 @@
     Deck.cfg.panicSteps = [];
     Deck.saveCfg();
     Deck.renderGrid();
-    Deck.setMsg('Deck reset to starter defaults');
+    if (snapFailed) {
+      Deck.setMsg('No snapshot was saved');
+    } else {
+      Deck.setMsg('Deck reset to starter defaults');
+    }
   });
 
   // Boot
@@ -186,13 +213,6 @@
   Deck.renderPalette();
   Deck.renderGrid();
   Deck.connectObs({ isBoot: true });
-
-  const layoutParam = typeof location !== 'undefined' && location.search
-    ? (new URLSearchParams(location.search).get('layout') || new URLSearchParams(location.search).get('import'))
-    : null;
-  if (layoutParam) {
-    Deck.importFromLink(layoutParam).catch(() => {});
-  }
 
   document.addEventListener('keydown', (e) => {
     if (!Deck.editMode) return;

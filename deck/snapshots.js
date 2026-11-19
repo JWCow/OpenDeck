@@ -131,6 +131,7 @@
       return saved;
     } catch (err) {
       console.warn('Failed to save snapshot:', err);
+      Deck.setMsg?.('No snapshot was saved');
       return null;
     }
   }
