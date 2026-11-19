@@ -92,7 +92,7 @@ Drop `deck.html` into an OBS Custom Browser Dock — no plugins, no server, no b
 
 ## 📱 Phone Deck
 
-Open the URL printed by the installer or LAN helper (`node scripts/lan-helper.mjs`) on a phone or tablet on the same Wi-Fi. An exported layout JSON placed in the Deck folder can be loaded with **Import from link** at its served URL (e.g. `http://<ip>:8080/layout.json`).
+Double-click **Phone Helper.bat** (Windows) or run `node scripts/lan-helper.mjs`. It finds the port your running OBS uses, prints the phone URLs and a QR code; scan it or open the URL on a phone or tablet on the same Wi-Fi. If an exported layout is in your Downloads folder, the link carries it and the phone asks before loading it. An exported layout JSON placed in the Deck folder can be loaded with **Import from link** at its served URL (e.g. `http://<ip>:8080/layout.json`).
 
 <br>
 
