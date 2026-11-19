@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { execFile } from 'node:child_process';
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -28,11 +30,57 @@ export function getLanAddresses() {
       }
     }
   }
+  // Home Wi-Fi (192.168.x, then 10.x) first; VPN and virtual adapters last, so the QR code points at the right one.
+  const rank = (ip) => (ip.startsWith('192.168.') ? 0 : ip.startsWith('10.') ? 1 : 2);
+  addresses.sort((a, b) => rank(a) - rank(b));
   return addresses.length > 0 ? addresses : ['127.0.0.1'];
 }
 
-export function formatPhoneUrls(addresses, httpPort, obsPort = 4455) {
-  return addresses.map((ip) => `http://${ip}:${httpPort}/deck.html?host=${ip}&port=${obsPort}`);
+// True when something on this port answers like obs-websocket (HTTP upgrade to the obswebsocket.json protocol).
+export function probeObsPort(port, timeoutMs = 800) {
+  return new Promise((resolve) => {
+    const req = http.request({
+      host: '127.0.0.1',
+      port,
+      headers: {
+        Connection: 'Upgrade',
+        Upgrade: 'websocket',
+        'Sec-WebSocket-Version': '13',
+        'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+        'Sec-WebSocket-Protocol': 'obswebsocket.json',
+      },
+      timeout: timeoutMs,
+    });
+    const done = (ok) => { req.destroy(); resolve(ok); };
+    req.on('upgrade', (res, socket) => { socket.destroy(); resolve(/obswebsocket/.test(res.headers['sec-websocket-protocol'] || '')); });
+    req.on('response', () => done(false));
+    req.on('timeout', () => done(false));
+    req.on('error', () => resolve(false));
+    req.end();
+  });
+}
+
+// Finds the OBS WebSocket port: listening ports of a running OBS (Windows), else the default 4455. Returns { port, found }.
+export async function detectObsPort(defaultPort = 4455) {
+  let candidates = [];
+  if (process.platform === 'win32') {
+    const ps = "Get-Process obs64*,obs32* -ErrorAction SilentlyContinue | ForEach-Object { Get-NetTCPConnection -OwningProcess $_.Id -State Listen -ErrorAction SilentlyContinue } | ForEach-Object { $_.LocalPort }";
+    candidates = await new Promise((resolve) => {
+      execFile('powershell', ['-NoProfile', '-Command', ps], { timeout: 8000 }, (err, out) => {
+        resolve(err ? [] : [...new Set(String(out).split(/\s+/).filter(Boolean).map(Number))]);
+      });
+    });
+  }
+  if (!candidates.includes(defaultPort)) candidates.push(defaultPort);
+  for (const c of candidates) {
+    if (await probeObsPort(c)) return { port: c, found: true };
+  }
+  return { port: defaultPort, found: false };
+}
+
+export function formatPhoneUrls(addresses, httpPort, obsPort = 4455, layout = '') {
+  const extra = layout ? `&layout=${encodeURIComponent(layout)}` : '';
+  return addresses.map((ip) => `http://${ip}:${httpPort}/deck.html?host=${ip}&port=${obsPort}${extra}`);
 }
 
 export function createLanHelper({ rootDir, port = 0, obsPort = 4455 } = {}) {
@@ -141,7 +189,8 @@ export function createLanHelper({ rootDir, port = 0, obsPort = 4455 } = {}) {
     server.listen(port, () => {
       const actualPort = server.address().port;
       const addresses = getLanAddresses();
-      const phoneUrls = formatPhoneUrls(addresses, actualPort, obsPort);
+      const hasLayout = fs.existsSync(path.join(resolvedRoot, 'layout.json'));
+      const phoneUrls = formatPhoneUrls(addresses, actualPort, obsPort, hasLayout ? 'layout.json' : '');
       resolve({
         server,
         port: actualPort,
@@ -159,6 +208,7 @@ function parseCliArgs() {
   const args = process.argv.slice(2);
   let port = process.env.PORT != null ? Number(process.env.PORT) : 8080;
   let obsPort = process.env.OBS_PORT != null ? Number(process.env.OBS_PORT) : 4455;
+  let obsPortExplicit = process.env.OBS_PORT != null;
   let rootDir = null;
 
   for (let i = 0; i < args.length; i++) {
@@ -171,30 +221,46 @@ function parseCliArgs() {
       if (!Number.isNaN(p)) port = p;
     } else if (arg.startsWith('--obs-port=')) {
       const p = Number(arg.slice(11));
-      if (!Number.isNaN(p)) obsPort = p;
+      if (!Number.isNaN(p)) { obsPort = p; obsPortExplicit = true; }
     } else if (arg.startsWith('--dir=')) {
       rootDir = arg.slice(6);
     }
   }
 
-  return { port, obsPort, rootDir };
+  return { port, obsPort, obsPortExplicit, rootDir };
 }
 
 // When run directly from CLI
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) {
-  const { port, obsPort, rootDir } = parseCliArgs();
+  const { port, obsPort: configuredObsPort, obsPortExplicit, rootDir } = parseCliArgs();
+  let obsPort = configuredObsPort;
+  let obsNote = '';
+  if (!obsPortExplicit) {
+    const det = await detectObsPort(configuredObsPort);
+    obsPort = det.port;
+    obsNote = det.found ? ' (detected from running OBS)' : ' (OBS not found: start OBS and enable Tools > WebSocket Server Settings; using the default)';
+  }
   createLanHelper({ rootDir, port, obsPort })
     .then((helper) => {
       console.log('============================================================');
       console.log('  OpenDeck LAN Helper (Phone Deck)');
       console.log(`  Serving Deck folder: ${helper.rootDir}`);
       console.log(`  HTTP port:           ${helper.port}`);
-      console.log(`  OBS WebSocket port:  ${helper.obsPort}`);
+      console.log(`  OBS WebSocket port:  ${helper.obsPort}${obsNote}`);
       console.log('============================================================\n');
       console.log('Open on your phone or tablet on the same Wi-Fi:\n');
       for (const u of helper.phoneUrls) {
         console.log(`  -> ${u}`);
+      }
+      try {
+        const qr = createRequire(import.meta.url)('./vendor/qrcode-terminal.cjs');
+        const first = helper.phoneUrls[0];
+        console.log(`
+Scan with your phone camera (${first}):`);
+        qr.generate(first, { small: true });
+      } catch {
+        // QR is optional: ignore when the vendor files are not installed
       }
       console.log('\n(No password is in the link. Enter password once on your device if enabled in OBS.)');
       console.log('Press Ctrl+C to stop.\n');

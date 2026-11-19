@@ -132,6 +132,11 @@
       const d = await res.json();
       if (d && d.ws) {
         delete d.ws.password;
+        // A link such as ?host=192.168.1.12 names the OBS to use here; the exporting PC's 127.0.0.1 must not override it.
+        const urlHost = Deck.getUrlHost?.();
+        const urlPort = Deck.getUrlPort?.();
+        if (urlHost) d.ws.host = urlHost;
+        if (urlPort) d.ws.port = urlPort;
       }
       await Deck.importLayout(d, url);
       return d;
@@ -194,6 +199,19 @@
   Deck.updateUndoRedoUi?.();
   Deck.renderPalette();
   Deck.renderGrid();
+
+  // Phone Deck: ?layout=layout.json loads a layout served by the same helper (same origin only), asks before importing, then drops the param.
+  const layoutParam = new URLSearchParams(location.search).get('layout');
+  if (layoutParam) {
+    const u = new URL(layoutParam, location.href);
+    const url = new URL(location.href);
+    url.searchParams.delete('layout');
+    history.replaceState(null, '', url);
+    if (u.origin !== location.origin) Deck.setMsg('Ignored layout link from another site');
+    else if (confirm('Load the layout from the computer? This replaces the layout on this device (a Snapshot is saved first).')) {
+      Deck.importFromLink(u.href).catch(() => {});
+    }
+  }
   Deck.connectObs({ isBoot: true });
 
   document.addEventListener('keydown', (e) => {
