@@ -110,6 +110,7 @@
       if (d && d.ws && !d.ws.password) {
         delete d.ws.password;
       }
+      if (typeof Deck.createSnapshot === 'function') Deck.createSnapshot('Before Import');
       Deck.clearSelection();
       const pageIds = new Set((Deck.cfg?.pages || []).map((p) => p.id));
       if (Deck.activeMacros) {
@@ -135,6 +136,7 @@
   });
   $('btn-reset-layout').addEventListener('click', () => {
     if (!confirm('Reset all Pages, pads, and PANIC steps to starter defaults?')) return;
+    if (typeof Deck.createSnapshot === 'function') Deck.createSnapshot('Before Reset');
     Deck.clearSelection();
     for (const p of Deck.cfg.pages) {
       if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(p.id);

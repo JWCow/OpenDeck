@@ -616,6 +616,7 @@ try {
     'obs-virtual-deck/deck/ui-palette.js',
     'obs-virtual-deck/deck/ui-select.js',
     'obs-virtual-deck/deck/ui-dialogs.js',
+    'obs-virtual-deck/deck/snapshots.js',
     'obs-virtual-deck/deck/ui-boot.js',
     'obs-virtual-deck/README.md',
     'obs-virtual-deck/Install-Windows.bat',
@@ -719,11 +720,14 @@ try {
     await pageSeam.waitForFunction(() => Deck.obs.volumes['Host Mic'] === -18);
 
     // Close connection with chosen close code and reason
-    const closedEvent = pageSeam.evaluate(() => new Promise((resolve) => {
-      Deck.obs.ws.addEventListener('close', (ev) => resolve({ code: ev.code, reason: ev.reason }), { once: true });
-    }));
+    await pageSeam.waitForFunction(() => Deck.obs.ws && Deck.obs.ws.readyState === 1);
+    await pageSeam.evaluate(() => {
+      window.__seamClose = new Promise((resolve) => {
+        Deck.obs.ws.addEventListener('close', (ev) => resolve({ code: ev.code, reason: ev.reason }), { once: true });
+      });
+    });
     seamObs.closeAll(4009, 'Custom close reason');
-    const closeInfo = await closedEvent;
+    const closeInfo = await pageSeam.evaluate(() => window.__seamClose);
     assert.deepEqual(closeInfo, { code: 4009, reason: 'Custom close reason' }, 'closed with chosen code and reason');
     await pageSeam.waitForFunction(() => document.getElementById('conn-text').textContent === 'Auth Failed');
 
@@ -1277,6 +1281,269 @@ try {
   } finally {
     outObs.wss.close();
   }
+
+  // 16. Media, Image and Transform Pad state fixes (#12)
+  const obs12 = createFakeObs(false);
+  await new Promise((r) => obs12.wss.once('listening', r));
+  const port12 = obs12.wss.address().port;
+  try {
+    const ctx12 = await browser.newContext();
+    const page12 = await ctx12.newPage();
+    page12.on('pageerror', (e) => pageErrors.push(e.message));
+    await page12.goto(`${DECK_URL}?port=${port12}`);
+    await page12.waitForSelector('#grid .pad');
+    await page12.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await page12.waitForTimeout(100);
+    if (await page12.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await page12.click('#btn-wiz-cancel');
+    }
+
+    // AC 1: A media pause event from OBS turns the Media Pad off
+    await page12.evaluate(() => {
+      Deck.cfg.pages[0].pads[0] = {
+        type: 'media',
+        inputName: 'Intro Video',
+        mediaAction: 'play_pause',
+        label: 'Video',
+      };
+      Deck.obs.mediaStates['Intro Video'] = 'OBS_MEDIA_STATE_PLAYING';
+      Deck.renderGrid();
+    });
+    await page12.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    obs12.broadcast('MediaInputActionTriggered', {
+      inputName: 'Intro Video',
+      mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE',
+    });
+    await page12.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'), null, { timeout: 3000 });
+    console.log('  ✓ media pause event from OBS turns Media Pad off (#12)');
+
+    // AC 2: Set file on a slideshow sends the slideshow file-list setting
+    obs12.state.calls.length = 0;
+    await page12.evaluate(async () => {
+      Deck.cfg.pages[0].pads[1] = {
+        type: 'image',
+        inputName: 'Photo Slideshow',
+        mode: 'set_file',
+        filePath: '/img/slideshow-new.png',
+        label: 'Slideshow File',
+      };
+      Deck.renderGrid();
+    });
+    await page12.locator('#grid .pad').nth(1).click();
+    await page12.waitForFunction(() => document.querySelectorAll('#grid .pad')[1].className.includes('active'));
+    const slideshowCall = obs12.state.calls.find(
+      (c) => c.requestType === 'SetInputSettings' && c.requestData?.inputName === 'Photo Slideshow'
+    );
+    assert.ok(slideshowCall, 'SetInputSettings called for Photo Slideshow');
+    assert.equal(slideshowCall.requestData.inputSettings.file, undefined, 'does not send single file setting on slideshow');
+    assert.deepEqual(
+      slideshowCall.requestData.inputSettings.files,
+      [{ value: '/img/slideshow-new.png', hidden: false, selected: false }],
+      'sends slideshow file-list setting'
+    );
+    console.log('  ✓ set file on slideshow sends file-list setting (#12)');
+
+    // AC 3: After a reload, a PiP'd source shows its Transform Pad as active
+    await page12.evaluate(() => {
+      Deck.cfg.pages[0].pads[2] = {
+        type: 'transform',
+        sceneName: 'Main Cam',
+        sourceName: 'Webcam',
+        preset: 'toggle_pip',
+        label: 'Cam PiP',
+      };
+      Deck.saveCfg();
+    });
+    obs12.state.itemTransforms['Main Cam:1'] = {
+      positionX: 1350,
+      positionY: 746,
+      scaleX: 0.28,
+      scaleY: 0.28,
+      sourceWidth: 1920,
+      sourceHeight: 1080,
+      alignment: 5,
+    };
+    await page12.reload();
+    await page12.waitForSelector('#grid .pad');
+    await page12.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await page12.waitForFunction(() => document.querySelectorAll('#grid .pad')[2].className.includes('active'), null, { timeout: 3000 });
+
+    // Reset source transform to full scale in OBS and reload; pad must be inactive
+    obs12.state.itemTransforms['Main Cam:1'] = {
+      positionX: 0,
+      positionY: 0,
+      scaleX: 1,
+      scaleY: 1,
+      sourceWidth: 1920,
+      sourceHeight: 1080,
+      alignment: 5,
+    };
+    await page12.reload();
+    await page12.waitForSelector('#grid .pad');
+    await page12.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await page12.waitForFunction(() => !document.querySelectorAll('#grid .pad')[2].className.includes('active'), null, { timeout: 3000 });
+
+    await ctx12.close();
+    console.log('  ✓ PiP source shows Transform Pad as active after reload (#12)');
+  } finally {
+    obs12.wss.close();
+  }
+
+  // 19. Snapshots in IndexedDB (#14)
+  const snapCtx = await browser.newContext();
+  const pageSnap = await snapCtx.newPage();
+  pageSnap.on('pageerror', (e) => pageErrors.push(e.message));
+  pageSnap.on('dialog', (d) => d.accept());
+  await pageSnap.goto(DECK_URL);
+  await pageSnap.waitForSelector('#grid .pad');
+
+  // Verify feature is available and #btn-snapshots exists
+  assert.equal(await pageSnap.locator('#btn-snapshots').isVisible(), true, '#btn-snapshots is visible when IndexedDB is supported');
+
+  // Ensure password is set in Deck.cfg
+  await pageSnap.evaluate(() => {
+    Deck.cfg.ws.password = 'my-secret-obs-password';
+    Deck.saveCfg();
+  });
+
+  // AC: No Snapshot contains the password
+  await pageSnap.evaluate(async () => {
+    await Deck.createSnapshot('Initial Layout');
+  });
+  let snaps = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.ok(snaps.length >= 1, 'at least 1 snapshot recorded');
+  for (const s of snaps) {
+    assert.equal(s.password, undefined, 'no password field on snapshot root');
+    assert.equal(s.ws?.password, undefined, 'no password in snapshot ws object');
+    assert.equal(JSON.stringify(s).includes('my-secret-obs-password'), false, 'password never appears anywhere in snapshot');
+  }
+
+  // Set up Page 1 with a custom pad and Pad Graphic
+  const testGraphic = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  await pageSnap.evaluate(([img]) => {
+    Deck.cfg.pages[0].pads[0] = Deck.normalizePad({
+      type: 'scene',
+      sceneName: 'Main Cam',
+      label: 'Main Cam Graphic',
+      image: img,
+      imageFit: 'fill',
+    });
+    Deck.saveCfg();
+    Deck.renderGrid();
+  }, [testGraphic]);
+
+  // Add Page 2
+  await pageSnap.click('#btn-deck-add');
+  await pageSnap.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 2);
+
+  // Hook 1: Delete Page creates a Snapshot first
+  const countBeforeDel = (await pageSnap.evaluate(async () => Deck.listSnapshots())).length;
+  await pageSnap.click('#btn-deck-cfg');
+  await pageSnap.waitForSelector('#deck-dlg[open]');
+  await pageSnap.click('#btn-deck-del');
+  await pageSnap.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 1);
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeDel + 1);
+  const snapsAfterDel = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterDel.length, countBeforeDel + 1, 'delete Page created a snapshot first');
+  assert.equal(snapsAfterDel[0].pageCount, 2, 'snapshot before delete Page captured both pages');
+
+  // Hook 2: Reset Deck creates a Snapshot first
+  const countBeforeReset = snapsAfterDel.length;
+  await pageSnap.click('#btn-conn-toggle');
+  await pageSnap.waitForSelector('#conn-bar');
+  await pageSnap.click('#btn-reset-layout');
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeReset + 1);
+  const snapsAfterReset = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterReset.length, countBeforeReset + 1, 'reset Deck created a snapshot first');
+
+  // Hook 3: Import creates a Snapshot first
+  const countBeforeImport = snapsAfterReset.length;
+  await pageSnap.evaluate(async () => {
+    const fakeJson = JSON.stringify({
+      version: 2,
+      pages: [{ id: 'page-imported', name: 'Imported', cols: 4, rows: 3, pads: [] }],
+    });
+    const dt = new DataTransfer();
+    const file = new File([fakeJson], 'imported-layout.json', { type: 'application/json' });
+    dt.items.add(file);
+    const input = document.getElementById('file-import');
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await pageSnap.waitForFunction(() => Deck.cfg.pages[0].name === 'Imported');
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeImport + 1);
+  const snapsAfterImport = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterImport.length, countBeforeImport + 1, 'import created a snapshot first');
+
+  // Hook 4: Auto-Import replace creates a Snapshot first
+  await pageSnap.evaluate(() => {
+    Deck.cfg.pages = Deck.defaultPages();
+    Deck.cfg.activePageId = Deck.cfg.pages[0].id;
+    Deck.saveCfg();
+    Deck.renderGrid();
+  });
+  assert.equal(await pageSnap.evaluate(() => Deck.isStarterDeck()), true, 'deck is starter deck');
+  const countBeforeAutoImport = (await pageSnap.evaluate(async () => Deck.listSnapshots())).length;
+  await pageSnap.evaluate(() => {
+    const dummyPages = [{
+      id: 'page-auto',
+      name: 'Auto Scenes',
+      cols: 4,
+      rows: 3,
+      pads: [{ type: 'scene', sceneName: 'Main Cam', label: 'Cam' }],
+    }];
+    Deck.applyAutoImport(dummyPages, { replaceEmptyStarter: true });
+  });
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeAutoImport + 1);
+  const snapsAfterAutoImport = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterAutoImport.length, countBeforeAutoImport + 1, 'Auto-Import replace created a snapshot first');
+
+  // AC: Restoring brings back earlier Pages and Pad Graphics, while keeping password
+  const snapWithGraphic = snapsAfterAutoImport.find((s) => s.pageCount === 2 && s.pages?.some((p) => p.pads?.some((pad) => pad?.image === testGraphic)));
+  assert.ok(snapWithGraphic, 'found snapshot containing the Pad Graphic and 2 pages');
+  const currentPassword = await pageSnap.evaluate(() => Deck.cfg.ws.password);
+  assert.equal(currentPassword, 'my-secret-obs-password');
+
+  // Restore the snapshot
+  await pageSnap.evaluate(async (snapId) => {
+    await Deck.restoreSnapshot(snapId);
+  }, snapWithGraphic.timestamp);
+
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.pages.length), 2, 'restored 2 pages');
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.pages[0].pads[0].label), 'Main Cam Graphic', 'restored pad label');
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.pages[0].pads[0].image), testGraphic, 'restored Pad Graphic image');
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.ws.password), 'my-secret-obs-password', 'password preserved across restore');
+
+  // Verify that restoring a snapshot took a snapshot of the current layout first
+  const snapsAfterRestore = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterRestore[0].description, 'Before Restore', 'restoring took a snapshot of current layout first');
+
+  // AC: Only the newest 20 are kept (pruning)
+  await pageSnap.evaluate(async () => {
+    for (let i = 0; i < 25; i++) {
+      await Deck.createSnapshot(`Batch Snap ${i}`);
+    }
+  });
+  const snapsPruned = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsPruned.length, 20, 'only the newest 20 snapshots are kept');
+
+  // Snapshots dialog UI: opens, lists snapshots with time and Page count, restores via UI
+  await pageSnap.click('#btn-snapshots');
+  await pageSnap.waitForSelector('#snapshots-dlg[open]');
+  assert.equal(await pageSnap.locator('#snapshots-list .snapshot-item').count(), 20, 'dialog lists 20 snapshot items');
+  const firstItemText = await pageSnap.locator('#snapshots-list .snapshot-item').first().textContent();
+  assert.ok(/Page|Pages/.test(firstItemText), 'snapshot row displays Page count');
+  await pageSnap.click('#snapshots-close');
+  await pageSnap.waitForFunction(() => !document.getElementById('snapshots-dlg').open);
+
+  // If IndexedDB is unavailable, feature hides itself
+  await pageSnap.evaluate(() => {
+    Deck.setSnapshotsAvailable(false);
+  });
+  assert.equal(await pageSnap.locator('#btn-snapshots').isVisible(), false, '#btn-snapshots is hidden when snapshots are unavailable');
+
+  await snapCtx.close();
+  console.log('  ✓ automatic layout Snapshots in IndexedDB (#14)');
 
   // 17. Ticket #9: Redraw only the Pads that changed
   const burstObs = createFakeObs(false);
@@ -1925,6 +2192,302 @@ try {
     console.log('  ✓ ticket #18: live readout polling, in-place updates, format, paused, clear on stop/disconnect & bottom strip');
   } finally {
     readoutObs.wss.close();
+  }
+
+  // 20. Starter layouts (#16)
+  const starterObs = createFakeObs(false);
+  await new Promise((r) => starterObs.wss.once('listening', r));
+  const starterPort = starterObs.wss.address().port;
+  try {
+    const ctxStarter = await browser.newContext();
+    const pageStarter = await ctxStarter.newPage();
+    pageStarter.on('pageerror', (e) => pageErrors.push(e.message));
+    pageStarter.on('dialog', (d) => d.accept());
+
+    // Connect to fake OBS
+    await pageStarter.goto(`${DECK_URL}?port=${starterPort}`);
+    await pageStarter.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageStarter.waitForFunction(() => Deck.obs.scenes.length >= 3);
+
+    const templates = ['Solo Streamer', 'Talk + Slides', 'Podcast/Interview'];
+
+    // 1. Each template applies while connected with slots filled from fake OBS
+    // Test Solo Streamer replaces initial empty starter deck
+    const callsBefore = starterObs.state.calls.length;
+    const snapsBefore = (await pageStarter.evaluate(async () => Deck.listSnapshots?.() || [])).length;
+
+    await pageStarter.waitForSelector('#import-wiz-dlg[open]');
+    await pageStarter.click('#wiz-mode-starter');
+    await pageStarter.selectOption('#wiz-starter-layout', 'Solo Streamer');
+    await pageStarter.click('#btn-wiz-apply');
+    await pageStarter.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+    // Solo Streamer verification
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages.length), 1, 'Starter deck replaced on first apply');
+    assert.equal(await pageStarter.evaluate(() => Deck.getActivePage().name), 'Solo Streamer', 'Active page renamed to Solo Streamer');
+    const soloPads = await pageStarter.evaluate(() => Deck.getActivePads());
+
+    // Fixed pads: Stream, Record, Chapter, Stats (Telemetry Pad), PANIC
+    assert.ok(soloPads.some((p) => p.type === 'output' && p.target === 'stream'), 'Solo Streamer has Stream pad');
+    assert.ok(soloPads.some((p) => p.type === 'output' && p.target === 'record'), 'Solo Streamer has Record pad');
+    assert.ok(soloPads.some((p) => p.type === 'chapter'), 'Solo Streamer has Chapter pad');
+    assert.ok(soloPads.some((p) => p.type === 'stats'), 'Solo Streamer has Telemetry Pad (stats)');
+    assert.ok(soloPads.some((p) => p.type === 'panic'), 'Solo Streamer has PANIC pad');
+
+    // Filled slots from fake OBS
+    const soloScenes = soloPads.filter((p) => p.type === 'scene' && p.mode === 'named').map((p) => p.sceneName);
+    assert.ok(soloScenes.includes('Main Cam'), 'Main Cam scene slot filled');
+    assert.ok(soloScenes.includes('Slides'), 'Slides scene slot filled');
+    assert.ok(soloScenes.includes('BRB'), 'BRB scene slot filled');
+
+    const soloMutes = soloPads.filter((p) => p.type === 'mute').map((p) => p.inputName);
+    assert.ok(soloMutes.includes('Mic/Aux'), 'Mic/Aux mute slot filled');
+    assert.ok(soloMutes.includes('Desktop Audio'), 'Desktop Audio mute slot filled');
+
+    const soloSources = soloPads.filter((p) => p.type === 'source').map((p) => p.sourceName);
+    assert.ok(soloSources.includes('Webcam'), 'Webcam source slot filled');
+
+    // Snapshot was taken first
+    const snapsAfterFirst = (await pageStarter.evaluate(async () => Deck.listSnapshots?.() || [])).length;
+    assert.ok(snapsAfterFirst > snapsBefore, 'Snapshot taken before applying starter layout');
+
+    // 2. An existing layout is never overwritten (append-vs-replace rule)
+    // Apply "Talk + Slides" when deck already has a page
+    await pageStarter.click('#btn-auto-import');
+    await pageStarter.waitForSelector('#import-wiz-dlg[open]');
+    await pageStarter.click('#wiz-mode-starter');
+    await pageStarter.selectOption('#wiz-starter-layout', 'Talk + Slides');
+    assert.equal(await pageStarter.evaluate(() => document.getElementById('wiz-replace').disabled), true, 'Replace disabled for existing layout');
+    await pageStarter.click('#btn-wiz-apply');
+    await pageStarter.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages.length), 2, 'Talk + Slides appended as new page, existing layout preserved');
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages[0].name), 'Solo Streamer', 'Existing Solo Streamer page preserved');
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages[1].name), 'Talk + Slides', 'New Talk + Slides page appended');
+
+    const talkPads = await pageStarter.evaluate(() => Deck.cfg.pages[1].pads);
+    assert.ok(talkPads.some((p) => p.type === 'output' && p.target === 'stream'), 'Talk + Slides has Stream pad');
+    assert.ok(talkPads.some((p) => p.type === 'output' && p.target === 'record'), 'Talk + Slides has Record pad');
+    assert.ok(talkPads.some((p) => p.type === 'chapter'), 'Talk + Slides has Chapter pad');
+    assert.ok(talkPads.some((p) => p.type === 'stats'), 'Talk + Slides has Telemetry Pad');
+    assert.ok(talkPads.some((p) => p.type === 'panic'), 'Talk + Slides has PANIC pad');
+
+    const talkScenes = talkPads.filter((p) => p.type === 'scene' && p.mode === 'named').map((p) => p.sceneName);
+    assert.ok(talkScenes.includes('Main Cam') && talkScenes.includes('Slides'), 'Talk + Slides scenes filled');
+
+    // Apply "Podcast/Interview"
+    await pageStarter.click('#btn-auto-import');
+    await pageStarter.waitForSelector('#import-wiz-dlg[open]');
+    await pageStarter.click('#wiz-mode-starter');
+    await pageStarter.selectOption('#wiz-starter-layout', 'Podcast/Interview');
+    await pageStarter.click('#btn-wiz-apply');
+    await pageStarter.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages.length), 3, 'Podcast/Interview appended as 3rd page');
+    const podcastPads = await pageStarter.evaluate(() => Deck.cfg.pages[2].pads);
+    assert.ok(podcastPads.some((p) => p.type === 'output' && p.target === 'stream'), 'Podcast has Stream pad');
+    assert.ok(podcastPads.some((p) => p.type === 'output' && p.target === 'record'), 'Podcast has Record pad');
+    assert.ok(podcastPads.some((p) => p.type === 'chapter'), 'Podcast has Chapter pad');
+    assert.ok(podcastPads.some((p) => p.type === 'stats'), 'Podcast has Telemetry Pad');
+    assert.ok(podcastPads.some((p) => p.type === 'panic'), 'Podcast has PANIC pad');
+    assert.ok(podcastPads.some((p) => p.type === 'media' && p.inputName === 'Intro Video'), 'Podcast has Intro Video media slot filled');
+
+    // 3. No OBS write requests were sent
+    const mutatingCalls = starterObs.state.calls.slice(callsBefore).filter((c) => /^(Create|Set|Remove|Press|Trigger)/.test(c.requestType));
+    assert.equal(mutatingCalls.length, 0, 'Starter layouts sent 0 OBS write requests');
+
+    await ctxStarter.close();
+
+    // 4. Each template applies while disconnected with slots marked
+    const ctxOffline = await browser.newContext();
+    const pageOffline = await ctxOffline.newPage();
+    pageOffline.on('pageerror', (e) => pageErrors.push(e.message));
+    pageOffline.on('dialog', (d) => d.accept());
+
+    await pageOffline.goto(DECK_URL);
+    await pageOffline.waitForSelector('#grid .pad');
+    assert.notEqual(await pageOffline.evaluate(() => Deck.obs.status), 'ok', 'Deck is disconnected');
+
+    for (const tplName of templates) {
+      await pageOffline.click('#btn-auto-import');
+      await pageOffline.waitForSelector('#import-wiz-dlg[open]');
+      await pageOffline.click('#wiz-mode-starter');
+      await pageOffline.selectOption('#wiz-starter-layout', tplName);
+      assert.equal(await pageOffline.isEnabled('#btn-wiz-apply'), true, 'Create button enabled when disconnected in Starter mode');
+      await pageOffline.click('#btn-wiz-apply');
+      await pageOffline.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+      const page = await pageOffline.evaluate((name) => Deck.cfg.pages.find((p) => p.name === name), tplName);
+      assert.ok(page, `Disconnected template "${tplName}" created page`);
+
+      // Fixed pads are still configured
+      assert.ok(page.pads.some((p) => p.type === 'output' && p.target === 'stream'), `${tplName} has Stream pad while disconnected`);
+      assert.ok(page.pads.some((p) => p.type === 'output' && p.target === 'record'), `${tplName} has Record pad while disconnected`);
+      assert.ok(page.pads.some((p) => p.type === 'chapter'), `${tplName} has Chapter pad while disconnected`);
+      assert.ok(page.pads.some((p) => p.type === 'stats'), `${tplName} has Telemetry Pad while disconnected`);
+      assert.ok(page.pads.some((p) => p.type === 'panic'), `${tplName} has PANIC pad while disconnected`);
+
+      // Unfilled slots are marked empty pads (type: 'none', non-empty label and icon)
+      const markedEmptyPads = page.pads.filter((p) => p.type === 'none' && p.label && p.label.length > 0);
+      assert.ok(markedEmptyPads.length >= 5, `${tplName} has marked empty slot pads while disconnected (found ${markedEmptyPads.length})`);
+      for (const p of markedEmptyPads) {
+        assert.ok(p.icon, `Marked slot "${p.label}" has an icon`);
+      }
+    }
+
+    await ctxOffline.close();
+
+    // 5. Glossary gains Starter Layout
+    const glossaryText = fs.readFileSync(join(__dirname, 'GLOSSARY.md'), 'utf8');
+    assert.ok(glossaryText.includes('**Starter Layout**:'), 'GLOSSARY.md contains Starter Layout');
+
+    console.log('  ✓ starter layout templates as data + auto-import wizard choice (#16)');
+  } finally {
+    starterObs.wss.close();
+  }
+
+  // 18. Scene-Linked Page (#20)
+  const sceneObs = createFakeObs(false);
+  await new Promise((r) => sceneObs.wss.once('listening', r));
+  const scenePort = sceneObs.wss.address().port;
+  try {
+    const ctxScene = await browser.newContext();
+    const pageScene = await ctxScene.newPage();
+    pageScene.on('pageerror', (e) => pageErrors.push(e.message));
+    pageScene.on('dialog', (dlg) => dlg.accept());
+    await pageScene.goto(`${DECK_URL}?port=${scenePort}`);
+    await pageScene.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageScene.waitForTimeout(100);
+    if (await pageScene.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageScene.click('#btn-wiz-cancel');
+    }
+
+    // 1. Link active page ("Main") to "Main Cam" via Page Dialog
+    await pageScene.click('#btn-deck-cfg');
+    await pageScene.waitForSelector('#deck-dlg[open]');
+    const dScene = pageScene.locator('#d-scene');
+    assert.equal(await dScene.count(), 1, '#d-scene select exists in Page dialog');
+    await dScene.selectOption('Main Cam');
+    await pageScene.click('#deck-form button[type="submit"]');
+    await pageScene.waitForFunction(() => !document.getElementById('deck-dlg').open);
+
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().sceneName), 'Main Cam', 'Page 1 linked to Main Cam');
+    const tab0 = pageScene.locator('#deck-tabs .page-tab').nth(0);
+    const tab0Text = await tab0.textContent();
+    assert.ok(tab0Text.includes('Main Cam'), 'Page tab displays linked scene');
+
+    // 2. Add second page ("Slides Page") and test duplicate scene link warning
+    await pageScene.click('#btn-deck-add');
+    await pageScene.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 2);
+    await pageScene.click('#btn-deck-cfg');
+    await pageScene.waitForSelector('#deck-dlg[open]');
+    await pageScene.fill('#d-name', 'Slides Page');
+
+    // Attempting to select "Main Cam" should show warning naming the first Page ("Main") and disable submit
+    await dScene.selectOption('Main Cam');
+    const warnEl = pageScene.locator('#d-scene-warn');
+    assert.equal(await warnEl.isVisible(), true, 'Warning displayed for duplicate scene link');
+    const warnText = await warnEl.textContent();
+    assert.ok(warnText.includes('Main'), `Warning names the first Page ("Main"): "${warnText}"`);
+    assert.ok(warnText.includes('Main Cam'), `Warning names the colliding scene: "${warnText}"`);
+    const applyBtn = pageScene.locator('#deck-form button[type="submit"]');
+    assert.equal(await applyBtn.isDisabled(), true, 'Apply button disabled when duplicate scene linked');
+
+    // Select valid scene "Slides"
+    await dScene.selectOption('Slides');
+    assert.equal(await warnEl.isVisible(), false, 'Warning hidden when valid unlinked scene selected');
+    assert.equal(await applyBtn.isDisabled(), false, 'Apply button enabled for valid unlinked scene');
+    await applyBtn.click();
+    await pageScene.waitForFunction(() => !document.getElementById('deck-dlg').open);
+
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page');
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().sceneName), 'Slides', 'Slides Page linked to Slides');
+    const tab1 = pageScene.locator('#deck-tabs .page-tab').nth(1);
+    assert.ok((await tab1.textContent()).includes('Slides'), 'Slides Page tab displays linked scene');
+
+    // 3. Program change brings up linked Page; preview change does not
+    // Currently on Slides Page (page index 1).
+    // Preview scene change to 'Main Cam' -> active page should still be Slides Page (page-2)
+    sceneObs.broadcast('CurrentPreviewSceneChanged', { sceneName: 'Main Cam' });
+    await pageScene.waitForTimeout(60);
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page', 'Preview scene change ignored');
+
+    // Program scene change to 'Main Cam' -> switches to Page 1 ('Main')
+    sceneObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Main Cam' });
+    await pageScene.waitForFunction(() => Deck.getActivePage().name === 'Main');
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Main', 'Program scene change brought up linked Page');
+
+    // 4. Manual switch holds until next scene change
+    // User clicks Slides Page tab manually
+    await tab1.click();
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page', 'Manual switch to Slides Page succeeded');
+    await pageScene.waitForTimeout(100);
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page', 'Manual switch holds while scene unchanged');
+
+    // Next program scene change switches to the new scene's linked page
+    sceneObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Slides' });
+    await pageScene.waitForFunction(() => Deck.getActivePage().name === 'Slides Page');
+
+    sceneObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Main Cam' });
+    await pageScene.waitForFunction(() => Deck.getActivePage().name === 'Main');
+
+    // 5. Edit Mode blocks automatic switching
+    await pageScene.click('#btn-edit');
+    assert.ok(await pageScene.evaluate(() => Deck.editMode), 'Edit Mode on');
+    sceneObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Slides' });
+    await pageScene.waitForTimeout(100);
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Main', 'Edit Mode blocks automatic Page switching');
+    await pageScene.click('#btn-edit');
+    assert.ok(!await pageScene.evaluate(() => Deck.editMode), 'Edit Mode off');
+
+    // 6. Rename follows; removal clears with a message
+    // Rename 'Slides' -> 'Slide Deck' in OBS
+    sceneObs.broadcast('SceneNameChanged', { oldSceneName: 'Slides', sceneName: 'Slide Deck' });
+    await pageScene.waitForFunction(() => {
+      const p = Deck.cfg.pages.find((x) => x.name === 'Slides Page');
+      return p && p.sceneName === 'Slide Deck';
+    });
+    assert.ok((await tab1.textContent()).includes('Slide Deck'), 'Tab reflects renamed scene');
+
+    // Scene removal clears the link and displays a message
+    sceneObs.broadcast('SceneRemoved', { sceneName: 'Slide Deck' });
+    await pageScene.waitForFunction(() => {
+      const p = Deck.cfg.pages.find((x) => x.name === 'Slides Page');
+      return p && !p.sceneName;
+    });
+    const msgText = await pageScene.locator('#msg-info').textContent();
+    assert.ok(msgText.toLowerCase().includes('cleared') && msgText.includes('Slides Page'), `Message reports link cleared: "${msgText}"`);
+    assert.ok(!(await tab1.textContent()).includes('Slide Deck'), 'Tab no longer displays removed scene');
+
+    // 7. Connecting while the linked scene is live opens that Page
+    // Configure layout so second page is linked to 'BRB'
+    await pageScene.evaluate(() => {
+      Deck.cfg.pages[1].sceneName = 'BRB';
+      Deck.cfg.activePageId = Deck.cfg.pages[0].id;
+      Deck.saveCfg();
+    });
+    // Set program scene on fake OBS to 'BRB'
+    sceneObs.state.programScene = 'BRB';
+    // Reload page to reconnect fresh
+    await pageScene.reload();
+    await pageScene.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageScene.waitForFunction(() => Deck.getActivePage().id === Deck.cfg.pages[1].id);
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page', 'Connect opened Page linked to live scene');
+
+    // 8. Links survive export/import
+    const exported = await pageScene.evaluate(() => Deck.exportConfig());
+    assert.equal(exported.pages[1].sceneName, 'BRB', 'Exported layout contains sceneName');
+
+    const imported = await pageScene.evaluate((data) => {
+      const res = Deck.migrateConfig(data);
+      return res.pages[1].sceneName;
+    }, exported);
+    assert.equal(imported, 'BRB', 'Migrate config preserved sceneName');
+
+    await ctxScene.close();
+    console.log('  ✓ Scene-Linked Page (#20)');
+  } finally {
+    sceneObs.wss.close();
   }
 
   console.log('\nPASS: all deck edge E2E checks succeeded.');
