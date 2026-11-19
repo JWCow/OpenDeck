@@ -628,6 +628,184 @@ try {
     seamObs.wss.close();
   }
 
+  // 16. Ticket #8: Pads follow scene and input renames
+  const ctxRenames = await browser.newContext();
+  const pageRenames = await ctxRenames.newPage();
+  pageRenames.on('pageerror', (e) => pageErrors.push(e.message));
+  try {
+    await pageRenames.goto(`${DECK_URL}?port=${port}`);
+    await pageRenames.waitForFunction(() => document.getElementById('conn-text')?.textContent === 'Connected');
+    if (await pageRenames.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageRenames.click('#btn-wiz-cancel');
+    }
+
+    // 16a. Scene renames update Scene, Source, Transform, Studio preview, Macro and PANIC steps + label preservation
+    await pageRenames.evaluate(() => {
+      const p = Deck.getActivePads();
+      p[0] = { type: 'scene', mode: 'named', sceneName: 'Slides', label: 'Slides', color: '#1e3a8a' };
+      p[1] = { type: 'scene', mode: 'named', sceneName: 'Slides', label: 'My Presentation', color: '#1e3a8a' };
+      p[2] = { type: 'source', sceneName: 'Slides', sourceName: 'Deck Slides', mode: 'toggle', label: 'Deck Slides', color: '#222733' };
+      p[3] = { type: 'transform', sceneName: 'Slides', sourceName: 'Deck Slides', preset: 'toggle_pip', label: 'Slides', color: '#222733' };
+      p[4] = { type: 'studio', action: 'preview', sceneName: 'Slides', label: 'Preview Slides', color: '#222733' };
+      p[5] = {
+        type: 'macro',
+        label: 'Macro 1',
+        color: '#222733',
+        steps: [
+          { type: 'scene', mode: 'named', sceneName: 'Slides' },
+          { type: 'transform', sceneName: 'Slides', sourceName: 'Deck Slides', preset: 'toggle_pip' },
+        ],
+      };
+      Deck.cfg.panicSteps = [
+        { type: 'scene', mode: 'named', sceneName: 'Slides' },
+      ];
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="0"] .lbl').textContent(), 'Slides');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="1"] .lbl').textContent(), 'My Presentation');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="2"] .ctx').textContent(), 'Slides');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="3"] .lbl').textContent(), 'Slides');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="4"] .lbl').textContent(), 'Preview Slides');
+
+    broadcast('SceneNameChanged', { oldSceneName: 'Slides', sceneName: 'Slide Deck' });
+
+    await pageRenames.waitForFunction(
+      () => document.querySelector('#grid .pad[data-idx="0"] .lbl')?.textContent === 'Slide Deck',
+      null,
+      { timeout: 3000 }
+    );
+
+    // Verify Pad properties and labels
+    const pAfter = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pAfter[0].sceneName, 'Slide Deck', 'scene pad sceneName updated');
+    assert.equal(pAfter[0].label, 'Slide Deck', 'scene pad auto-label updated');
+    assert.equal(pAfter[1].sceneName, 'Slide Deck', 'custom-labeled scene pad sceneName updated');
+    assert.equal(pAfter[1].label, 'My Presentation', 'custom label preserved');
+    assert.equal(pAfter[2].sceneName, 'Slide Deck', 'source pad sceneName updated');
+    assert.equal(pAfter[2].label, 'Deck Slides', 'source pad custom label preserved');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="2"] .ctx').textContent(), 'Slide Deck', 'source pad context subtitle updated');
+    assert.equal(pAfter[3].sceneName, 'Slide Deck', 'transform pad sceneName updated');
+    assert.equal(pAfter[3].label, 'Slide Deck', 'transform pad matching label updated');
+    assert.equal(pAfter[4].sceneName, 'Slide Deck', 'studio preview pad sceneName updated');
+    assert.equal(pAfter[4].label, 'Preview Slides', 'studio preview custom label preserved');
+    assert.equal(pAfter[5].steps[0].sceneName, 'Slide Deck', 'macro step 0 sceneName updated');
+    assert.equal(pAfter[5].steps[1].sceneName, 'Slide Deck', 'macro step 1 sceneName updated');
+
+    const panicAfter = await pageRenames.evaluate(() => Deck.cfg.panicSteps);
+    assert.equal(panicAfter[0].sceneName, 'Slide Deck', 'panic step sceneName updated');
+
+    // Changes survive a reload
+    await pageRenames.reload();
+    await pageRenames.waitForSelector('#grid .pad');
+    const pReloaded = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pReloaded[0].sceneName, 'Slide Deck', 'reloaded sceneName preserved');
+    assert.equal(pReloaded[0].label, 'Slide Deck', 'reloaded auto-label preserved');
+    assert.equal(pReloaded[1].label, 'My Presentation', 'reloaded custom label preserved');
+    assert.equal(pReloaded[2].sceneName, 'Slide Deck', 'reloaded source sceneName preserved');
+    assert.equal(pReloaded[5].steps[0].sceneName, 'Slide Deck', 'reloaded macro step preserved');
+    assert.equal((await pageRenames.evaluate(() => Deck.cfg.panicSteps))[0].sceneName, 'Slide Deck', 'reloaded panic step preserved');
+    console.log('  ✓ scene renames update Scene, Source, Transform, Studio, Macro & PANIC steps with label preservation');
+
+    // 16b. Input renames update all input/source target types (source, filter, mute, volume, monitor, media, image, browser, screenshot, transform)
+    await pageRenames.evaluate(() => {
+      const p = Deck.getActivePads();
+      p[0] = { type: 'source', sceneName: 'Slide Deck', sourceName: 'Webcam', mode: 'toggle', label: 'Webcam' };
+      p[1] = { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'toggle', label: 'Webcam' };
+      p[2] = { type: 'screenshot', sourceName: 'Webcam', label: 'Webcam' };
+      p[3] = { type: 'transform', sceneName: 'Slide Deck', sourceName: 'Webcam', preset: 'toggle_pip', label: 'Webcam' };
+      p[4] = { type: 'mute', inputName: 'Webcam', mode: 'toggle', label: 'Webcam' };
+      p[5] = { type: 'volume', inputName: 'Webcam', mode: 'step', volumeDb: -3, label: 'Webcam' };
+      p[6] = { type: 'monitor', inputName: 'Webcam', monitorType: 'cycle', label: 'Webcam' };
+      p[7] = { type: 'media', inputName: 'Webcam', mediaAction: 'play_pause', label: 'Webcam' };
+      p[8] = { type: 'image', inputName: 'Webcam', mode: 'set_file', filePath: '/img/cam.png', label: 'Webcam' };
+      p[9] = { type: 'browser', inputName: 'Webcam', mode: 'refresh', label: 'Webcam' };
+      p[10] = { type: 'mute', inputName: 'Webcam', mode: 'toggle', label: 'My Custom Mic' };
+      p[11] = {
+        type: 'macro',
+        label: 'Macro 2',
+        steps: [
+          { type: 'mute', inputName: 'Webcam', mode: 'toggle' },
+          { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'disable' },
+        ],
+      };
+      Deck.cfg.panicSteps = [
+        { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'disable' },
+        { type: 'mute', inputName: 'Webcam', mode: 'mute' },
+      ];
+      // Also add a second page to verify cross-page rename updates
+      Deck.addPage({ name: 'Page 2', switchTo: false });
+      const p2 = Deck.cfg.pages.find((pg) => pg.name === 'Page 2').pads;
+      p2[0] = { type: 'mute', inputName: 'Webcam', mode: 'toggle', label: 'Webcam' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+
+    broadcast('InputNameChanged', { oldInputName: 'Webcam', inputName: 'Studio Camera' });
+
+    await pageRenames.waitForFunction(
+      () => document.querySelector('#grid .pad[data-idx="0"] .lbl')?.textContent === 'Studio Camera',
+      null,
+      { timeout: 3000 }
+    );
+
+    const pInputsAfter = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pInputsAfter[0].sourceName, 'Studio Camera', 'source pad sourceName updated');
+    assert.equal(pInputsAfter[0].label, 'Studio Camera', 'source pad label updated');
+    assert.equal(pInputsAfter[1].sourceName, 'Studio Camera', 'filter pad sourceName (filter owner) updated');
+    assert.equal(pInputsAfter[1].label, 'Studio Camera', 'filter pad label updated');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="1"] .ctx').textContent(), 'Studio Camera', 'filter pad context subtitle updated');
+    assert.equal(pInputsAfter[2].sourceName, 'Studio Camera', 'screenshot pad sourceName updated');
+    assert.equal(pInputsAfter[2].label, 'Studio Camera', 'screenshot pad label updated');
+    assert.equal(pInputsAfter[3].sourceName, 'Studio Camera', 'transform pad sourceName updated');
+    assert.equal(pInputsAfter[3].label, 'Studio Camera', 'transform pad label updated');
+    assert.equal(pInputsAfter[4].inputName, 'Studio Camera', 'mute pad inputName updated');
+    assert.equal(pInputsAfter[4].label, 'Studio Camera', 'mute pad label updated');
+    assert.equal(pInputsAfter[5].inputName, 'Studio Camera', 'volume pad inputName updated');
+    assert.equal(pInputsAfter[5].label, 'Studio Camera', 'volume pad label updated');
+    assert.equal(pInputsAfter[6].inputName, 'Studio Camera', 'monitor pad inputName updated');
+    assert.equal(pInputsAfter[6].label, 'Studio Camera', 'monitor pad label updated');
+    assert.equal(pInputsAfter[7].inputName, 'Studio Camera', 'media pad inputName updated');
+    assert.equal(pInputsAfter[7].label, 'Studio Camera', 'media pad label updated');
+    assert.equal(pInputsAfter[8].inputName, 'Studio Camera', 'image pad inputName updated');
+    assert.equal(pInputsAfter[8].label, 'Studio Camera', 'image pad label updated');
+    assert.equal(pInputsAfter[9].inputName, 'Studio Camera', 'browser pad inputName updated');
+    assert.equal(pInputsAfter[9].label, 'Studio Camera', 'browser pad label updated');
+    assert.equal(pInputsAfter[10].inputName, 'Studio Camera', 'custom-labeled mute pad inputName updated');
+    assert.equal(pInputsAfter[10].label, 'My Custom Mic', 'custom label preserved');
+    assert.equal(pInputsAfter[11].steps[0].inputName, 'Studio Camera', 'macro mute step updated');
+    assert.equal(pInputsAfter[11].steps[1].sourceName, 'Studio Camera', 'macro filter step updated');
+    assert.equal(pInputsAfter[11].label, 'Macro 2', 'macro custom label preserved');
+
+    const panicInputsAfter = await pageRenames.evaluate(() => Deck.cfg.panicSteps);
+    assert.equal(panicInputsAfter[0].sourceName, 'Studio Camera', 'panic filter step sourceName updated');
+    assert.equal(panicInputsAfter[1].inputName, 'Studio Camera', 'panic mute step inputName updated');
+
+    const page2PadAfter = await pageRenames.evaluate(() => Deck.cfg.pages.find((pg) => pg.name === 'Page 2')?.pads[0]);
+    assert.equal(page2PadAfter.inputName, 'Studio Camera', 'cross-page pad inputName updated on non-active page');
+    assert.equal(page2PadAfter.label, 'Studio Camera', 'cross-page pad label updated on non-active page');
+
+    // Changes survive reload
+    await pageRenames.reload();
+    await pageRenames.waitForSelector('#grid .pad');
+    const pInputsReloaded = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pInputsReloaded[0].sourceName, 'Studio Camera', 'reloaded source sourceName preserved');
+    assert.equal(pInputsReloaded[1].sourceName, 'Studio Camera', 'reloaded filter sourceName preserved');
+    assert.equal(pInputsReloaded[4].inputName, 'Studio Camera', 'reloaded mute inputName preserved');
+    assert.equal(pInputsReloaded[10].label, 'My Custom Mic', 'reloaded custom label preserved');
+    assert.equal(pInputsReloaded[11].steps[0].inputName, 'Studio Camera', 'reloaded macro step inputName preserved');
+    const panicInputsReloaded = await pageRenames.evaluate(() => Deck.cfg.panicSteps);
+    assert.equal(panicInputsReloaded[0].sourceName, 'Studio Camera', 'reloaded panic filter step preserved');
+    assert.equal(panicInputsReloaded[1].inputName, 'Studio Camera', 'reloaded panic mute step preserved');
+
+    const page2PadReloaded = await pageRenames.evaluate(() => Deck.cfg.pages.find((pg) => pg.name === 'Page 2')?.pads[0]);
+    assert.equal(page2PadReloaded.inputName, 'Studio Camera', 'reloaded cross-page pad inputName preserved');
+    console.log('  ✓ input renames update all 10 input/source target types, Macro & PANIC steps with label preservation across pages');
+  } finally {
+    await ctxRenames.close();
+  }
+
   console.log('\nPASS: all deck edge E2E checks succeeded.');
 } finally {
   if (browser) await browser.close();
