@@ -628,6 +628,72 @@ try {
     seamObs.wss.close();
   }
 
+  // 16. Single-flight OBS sync with parallel scene loading (ticket #10)
+  const syncObs = createFakeObs(false);
+  await new Promise((r) => syncObs.wss.once('listening', r));
+  const syncPort = syncObs.wss.address().port;
+  try {
+    syncObs.state.sceneItemListDelayMs = 25;
+    const ctxSync = await browser.newContext();
+    const pageSync = await ctxSync.newPage();
+    pageSync.on('pageerror', (e) => pageErrors.push(e.message));
+
+    // Connect to fake OBS with delayed scene item loading to measure parallel requests
+    await pageSync.goto(`${DECK_URL}?port=${syncPort}`);
+    await pageSync.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageSync.waitForFunction(() => Deck.obs.scenes.length >= 4);
+
+    // Assert criterion 3: scene item requests were sent in parallel (concurrently in-flight)
+    assert.ok(
+      syncObs.state.maxConcurrentSceneItemRequests > 1,
+      `expected parallel scene item requests (> 1 concurrent), got ${syncObs.state.maxConcurrentSceneItemRequests}`
+    );
+
+    // Reset request tracking for burst test
+    syncObs.state.calls.length = 0;
+    syncObs.state.maxConcurrentSceneItemRequests = 0;
+
+    // Mutate state in fake OBS: add a new scene with scene items
+    syncObs.state.scenes.push('Burst Scene');
+    syncObs.state.sceneItems['Burst Scene'] = [
+      { sceneItemId: 99, sourceName: 'Burst Mic', sceneItemEnabled: true, isGroup: false },
+    ];
+
+    // Emit a burst of 5 SceneListChanged events in rapid succession
+    for (let i = 0; i < 5; i++) {
+      syncObs.broadcast('SceneListChanged');
+    }
+
+    // Wait until the Deck reflects the new scene and sync is complete
+    await pageSync.waitForFunction(() => Deck.obs.scenes.includes('Burst Scene'));
+    // Wait briefly for any queued sync to finish settling
+    await pageSync.waitForTimeout(100);
+
+    // Assert criterion 1: A burst of scene-list changes produces at most two full syncs
+    const getSceneListCalls = syncObs.state.calls.filter((c) => c.requestType === 'GetSceneList');
+    assert.ok(
+      getSceneListCalls.length >= 1 && getSceneListCalls.length <= 2,
+      `burst produced ${getSceneListCalls.length} full syncs (expected at most 2)`
+    );
+
+    // Assert criterion 2: After the burst, the Deck's scenes and sources match the fake OBS
+    const deckScenes = await pageSync.evaluate(() => Deck.obs.scenes);
+    const expectedScenes = [...syncObs.state.scenes].reverse();
+    assert.deepEqual(deckScenes, expectedScenes, "Deck's scenes match fake OBS after burst");
+
+    const burstItems = await pageSync.evaluate(() => Deck.obs.itemsByScene['Burst Scene']);
+    assert.deepEqual(
+      burstItems,
+      [{ sceneItemId: 99, sourceName: 'Burst Mic', sceneItemEnabled: true, isGroup: false }],
+      "Deck's scene items match fake OBS after burst"
+    );
+
+    await ctxSync.close();
+    console.log('  ✓ single-flight OBS sync (burst produces <= 2 syncs) & parallel scene item loading');
+  } finally {
+    syncObs.wss.close();
+  }
+
   // 16. Auto-Import past 63 items (100 sources -> 2 Sources Pages holding all 100, footer reports Pad and Page counts, read-only)
   const bigObs = createFakeObs(false);
   const hundredSources = Array.from({ length: 100 }, (_, i) => `Source ${String(i + 1).padStart(3, '0')}`);
