@@ -35,6 +35,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "  Copy-Item -LiteralPath (Join-Path $src 'deck.html') -Destination $dest -Force; " ^
   "  Get-ChildItem -LiteralPath (Join-Path $src 'deck') | Copy-Item -Destination (Join-Path $dest 'deck') -Recurse -Force; " ^
   "  if (Test-Path -LiteralPath (Join-Path $src 'README.md')) { Copy-Item -LiteralPath (Join-Path $src 'README.md') -Destination $dest -Force }; " ^
+  "  if (Test-Path -LiteralPath (Join-Path $src 'Phone Helper.bat')) { Copy-Item -LiteralPath (Join-Path $src 'Phone Helper.bat') -Destination $dest -Force }; " ^
   "  if (Test-Path -LiteralPath (Join-Path $src 'scripts')) { " ^
   "    New-Item -ItemType Directory -Force -Path (Join-Path $dest 'scripts') | Out-Null; " ^
   "    Get-ChildItem -LiteralPath (Join-Path $src 'scripts') | Copy-Item -Destination (Join-Path $dest 'scripts') -Recurse -Force; " ^
@@ -114,7 +115,8 @@ if /i "%WS_FOUND%"=="True" (
 )
 echo.
 echo Phone Deck (LAN Control):
-echo   To control OBS from your phone or tablet on Wi-Fi:
+echo   To control OBS from your phone or tablet on Wi-Fi, double-click "Phone Helper.bat" in %DEST%,
+echo   or run:
 echo   node "%DEST%\scripts\lan-helper.mjs" --obs-port=%WS_PORT%
 where node >nul 2>&1
 if not errorlevel 1 (

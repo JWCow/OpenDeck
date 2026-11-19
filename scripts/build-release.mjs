@@ -139,6 +139,8 @@ function main() {
     'deck.html',
     'deck/snapshots.js',
     'scripts/lan-helper.mjs',
+    'scripts/vendor/qrcode-terminal.cjs',
+    'Phone Helper.bat',
     'README.md',
     'installers/Install-Windows.bat',
     'installers/Install-Mac.command',
@@ -192,6 +194,18 @@ function main() {
   entries.push({
     zipPath: 'obs-virtual-deck/scripts/lan-helper.mjs',
     data: fs.readFileSync(path.join(ROOT, 'scripts/lan-helper.mjs')),
+    executable: false,
+  });
+
+  // QR code library (optional at runtime, but ship it so the helper prints a QR)
+  collectDir(path.join(ROOT, 'scripts/vendor'), 'obs-virtual-deck/scripts/vendor', entries);
+
+  const phoneBat = fs
+    .readFileSync(path.join(ROOT, 'Phone Helper.bat'), 'utf8')
+    .replace(/\r?\n/g, '\r\n');
+  entries.push({
+    zipPath: 'obs-virtual-deck/Phone Helper.bat',
+    data: Buffer.from(phoneBat, 'utf8'),
     executable: false,
   });
 
