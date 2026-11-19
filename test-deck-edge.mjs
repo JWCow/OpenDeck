@@ -1546,6 +1546,150 @@ try {
     undoObs.wss.close();
   }
 
+  // 18. Scene-Linked Page (#20)
+  const sceneObs = createFakeObs(false);
+  await new Promise((r) => sceneObs.wss.once('listening', r));
+  const scenePort = sceneObs.wss.address().port;
+  try {
+    const ctxScene = await browser.newContext();
+    const pageScene = await ctxScene.newPage();
+    pageScene.on('pageerror', (e) => pageErrors.push(e.message));
+    pageScene.on('dialog', (dlg) => dlg.accept());
+    await pageScene.goto(`${DECK_URL}?port=${scenePort}`);
+    await pageScene.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageScene.waitForTimeout(100);
+    if (await pageScene.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageScene.click('#btn-wiz-cancel');
+    }
+
+    // 1. Link active page ("Main") to "Main Cam" via Page Dialog
+    await pageScene.click('#btn-deck-cfg');
+    await pageScene.waitForSelector('#deck-dlg[open]');
+    const dScene = pageScene.locator('#d-scene');
+    assert.equal(await dScene.count(), 1, '#d-scene select exists in Page dialog');
+    await dScene.selectOption('Main Cam');
+    await pageScene.click('#deck-form button[type="submit"]');
+    await pageScene.waitForFunction(() => !document.getElementById('deck-dlg').open);
+
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().sceneName), 'Main Cam', 'Page 1 linked to Main Cam');
+    const tab0 = pageScene.locator('#deck-tabs .page-tab').nth(0);
+    const tab0Text = await tab0.textContent();
+    assert.ok(tab0Text.includes('Main Cam'), 'Page tab displays linked scene');
+
+    // 2. Add second page ("Slides Page") and test duplicate scene link warning
+    await pageScene.click('#btn-deck-add');
+    await pageScene.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 2);
+    await pageScene.click('#btn-deck-cfg');
+    await pageScene.waitForSelector('#deck-dlg[open]');
+    await pageScene.fill('#d-name', 'Slides Page');
+
+    // Attempting to select "Main Cam" should show warning naming the first Page ("Main") and disable submit
+    await dScene.selectOption('Main Cam');
+    const warnEl = pageScene.locator('#d-scene-warn');
+    assert.equal(await warnEl.isVisible(), true, 'Warning displayed for duplicate scene link');
+    const warnText = await warnEl.textContent();
+    assert.ok(warnText.includes('Main'), `Warning names the first Page ("Main"): "${warnText}"`);
+    assert.ok(warnText.includes('Main Cam'), `Warning names the colliding scene: "${warnText}"`);
+    const applyBtn = pageScene.locator('#deck-form button[type="submit"]');
+    assert.equal(await applyBtn.isDisabled(), true, 'Apply button disabled when duplicate scene linked');
+
+    // Select valid scene "Slides"
+    await dScene.selectOption('Slides');
+    assert.equal(await warnEl.isVisible(), false, 'Warning hidden when valid unlinked scene selected');
+    assert.equal(await applyBtn.isDisabled(), false, 'Apply button enabled for valid unlinked scene');
+    await applyBtn.click();
+    await pageScene.waitForFunction(() => !document.getElementById('deck-dlg').open);
+
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page');
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().sceneName), 'Slides', 'Slides Page linked to Slides');
+    const tab1 = pageScene.locator('#deck-tabs .page-tab').nth(1);
+    assert.ok((await tab1.textContent()).includes('Slides'), 'Slides Page tab displays linked scene');
+
+    // 3. Program change brings up linked Page; preview change does not
+    // Currently on Slides Page (page index 1).
+    // Preview scene change to 'Main Cam' -> active page should still be Slides Page (page-2)
+    sceneObs.broadcast('CurrentPreviewSceneChanged', { sceneName: 'Main Cam' });
+    await pageScene.waitForTimeout(60);
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page', 'Preview scene change ignored');
+
+    // Program scene change to 'Main Cam' -> switches to Page 1 ('Main')
+    sceneObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Main Cam' });
+    await pageScene.waitForFunction(() => Deck.getActivePage().name === 'Main');
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Main', 'Program scene change brought up linked Page');
+
+    // 4. Manual switch holds until next scene change
+    // User clicks Slides Page tab manually
+    await tab1.click();
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page', 'Manual switch to Slides Page succeeded');
+    await pageScene.waitForTimeout(100);
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page', 'Manual switch holds while scene unchanged');
+
+    // Next program scene change switches to the new scene's linked page
+    sceneObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Slides' });
+    await pageScene.waitForFunction(() => Deck.getActivePage().name === 'Slides Page');
+
+    sceneObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Main Cam' });
+    await pageScene.waitForFunction(() => Deck.getActivePage().name === 'Main');
+
+    // 5. Edit Mode blocks automatic switching
+    await pageScene.click('#btn-edit');
+    assert.ok(await pageScene.evaluate(() => Deck.editMode), 'Edit Mode on');
+    sceneObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Slides' });
+    await pageScene.waitForTimeout(100);
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Main', 'Edit Mode blocks automatic Page switching');
+    await pageScene.click('#btn-edit');
+    assert.ok(!await pageScene.evaluate(() => Deck.editMode), 'Edit Mode off');
+
+    // 6. Rename follows; removal clears with a message
+    // Rename 'Slides' -> 'Slide Deck' in OBS
+    sceneObs.broadcast('SceneNameChanged', { oldSceneName: 'Slides', sceneName: 'Slide Deck' });
+    await pageScene.waitForFunction(() => {
+      const p = Deck.cfg.pages.find((x) => x.name === 'Slides Page');
+      return p && p.sceneName === 'Slide Deck';
+    });
+    assert.ok((await tab1.textContent()).includes('Slide Deck'), 'Tab reflects renamed scene');
+
+    // Scene removal clears the link and displays a message
+    sceneObs.broadcast('SceneRemoved', { sceneName: 'Slide Deck' });
+    await pageScene.waitForFunction(() => {
+      const p = Deck.cfg.pages.find((x) => x.name === 'Slides Page');
+      return p && !p.sceneName;
+    });
+    const msgText = await pageScene.locator('#msg-info').textContent();
+    assert.ok(msgText.toLowerCase().includes('cleared') && msgText.includes('Slides Page'), `Message reports link cleared: "${msgText}"`);
+    assert.ok(!(await tab1.textContent()).includes('Slide Deck'), 'Tab no longer displays removed scene');
+
+    // 7. Connecting while the linked scene is live opens that Page
+    // Configure layout so second page is linked to 'BRB'
+    await pageScene.evaluate(() => {
+      Deck.cfg.pages[1].sceneName = 'BRB';
+      Deck.cfg.activePageId = Deck.cfg.pages[0].id;
+      Deck.saveCfg();
+    });
+    // Set program scene on fake OBS to 'BRB'
+    sceneObs.state.programScene = 'BRB';
+    // Reload page to reconnect fresh
+    await pageScene.reload();
+    await pageScene.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageScene.waitForFunction(() => Deck.getActivePage().id === Deck.cfg.pages[1].id);
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page', 'Connect opened Page linked to live scene');
+
+    // 8. Links survive export/import
+    const exported = await pageScene.evaluate(() => Deck.exportConfig());
+    assert.equal(exported.pages[1].sceneName, 'BRB', 'Exported layout contains sceneName');
+
+    const imported = await pageScene.evaluate((data) => {
+      const res = Deck.migrateConfig(data);
+      return res.pages[1].sceneName;
+    }, exported);
+    assert.equal(imported, 'BRB', 'Migrate config preserved sceneName');
+
+    await ctxScene.close();
+    console.log('  ✓ Scene-Linked Page (#20)');
+  } finally {
+    sceneObs.wss.close();
+  }
+
   console.log('\nPASS: all deck edge E2E checks succeeded.');
 } finally {
   if (browser) await browser.close();
