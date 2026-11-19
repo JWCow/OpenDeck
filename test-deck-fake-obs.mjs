@@ -86,6 +86,15 @@ export function createFakeObs(requireAuth = true) {
       vcam: false,
       replay: false,
     },
+    streamTimecode: null,
+    streamDuration: null,
+    streamStatus: null,
+    recordTimecode: null,
+    recordDuration: null,
+    recordStatus: null,
+    mediaDurations: {},
+    mediaCursors: {},
+    mediaStatus: {},
     profiles: ['Default', 'Streaming 1080p'],
     currentProfile: 'Default',
     collections: ['Main Show', 'Podcast'],
@@ -302,7 +311,12 @@ export function createFakeObs(requireAuth = true) {
           broadcast('CurrentProgramSceneChanged', { sceneName: state.programScene });
         }
       } else if (requestType === 'GetStreamStatus') {
-        responseData = { outputActive: !!state.outputs.stream };
+        responseData = {
+          outputActive: !!state.outputs.stream,
+          outputDuration: state.streamDuration ?? (state.outputs.stream ? 65000 : 0),
+          outputTimecode: state.streamTimecode ?? (state.outputs.stream ? '00:01:05' : '00:00:00'),
+          ...(state.streamStatus || {}),
+        };
       } else if (requestType === 'StartStream') {
         state.outputs.stream = true;
         broadcast('StreamStateChanged', { outputActive: true, outputState: 'OBS_WEBSOCKET_OUTPUT_STARTED' });
@@ -317,7 +331,13 @@ export function createFakeObs(requireAuth = true) {
           outputState: state.outputs.stream ? 'OBS_WEBSOCKET_OUTPUT_STARTED' : 'OBS_WEBSOCKET_OUTPUT_STOPPED',
         });
       } else if (requestType === 'GetRecordStatus') {
-        responseData = { outputActive: !!state.outputs.record, outputPaused: !!state.outputs.recordPaused };
+        responseData = {
+          outputActive: !!state.outputs.record,
+          outputPaused: !!state.outputs.recordPaused,
+          outputDuration: state.recordDuration ?? (state.outputs.record ? 83000 : 0),
+          outputTimecode: state.recordTimecode ?? (state.outputs.record ? '00:01:23' : '00:00:00'),
+          ...(state.recordStatus || {}),
+        };
       } else if (requestType === 'StartRecord') {
         state.outputs.record = true;
         state.outputs.recordPaused = false;
@@ -381,7 +401,14 @@ export function createFakeObs(requireAuth = true) {
         state.lastSavedReplay = '/tmp/Replay-2026.mkv';
         broadcast('ReplayBufferSaved', { savedReplayPath: state.lastSavedReplay });
       } else if (requestType === 'GetMediaInputStatus') {
-        responseData = { mediaState: state.mediaStates[requestData.inputName] || 'OBS_MEDIA_STATE_STOPPED' };
+        const inputName = requestData?.inputName;
+        const custom = state.mediaStatus?.[inputName] || {};
+        responseData = {
+          mediaState: state.mediaStates[inputName] || 'OBS_MEDIA_STATE_STOPPED',
+          mediaDuration: state.mediaDurations?.[inputName] ?? 120000,
+          mediaCursor: state.mediaCursors?.[inputName] ?? 45000,
+          ...custom,
+        };
       } else if (requestType === 'TriggerMediaInputAction') {
         const name = requestData.inputName;
         const ma = requestData.mediaAction;

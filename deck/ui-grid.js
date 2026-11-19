@@ -143,14 +143,35 @@
     grid.querySelectorAll('.pad:not(.stats-pad)').forEach((btn) => {
       const idx = Number(btn.dataset.idx);
       if (!activeIndices.has(idx)) {
-        const sub = btn.querySelector('.sub');
-        if (sub) sub.remove();
-        const ctx = btn.querySelector('.ctx');
-        if (ctx) ctx.style.display = '';
         btn.classList.remove('running');
+        const p = Deck.getActivePage()?.pads?.[idx];
+        const readoutTxt = p && isReadoutPad(p) && typeof Deck.getPadReadoutText === 'function' ? Deck.getPadReadoutText(p) : '';
+        const sub = btn.querySelector('.sub');
+        if (readoutTxt) {
+          if (sub) {
+            sub.textContent = readoutTxt;
+            sub.style.display = '';
+            if (readoutTxt === 'PAUSED') sub.classList.add('paused');
+            else sub.classList.remove('paused');
+          }
+          const ctx = btn.querySelector('.ctx');
+          if (ctx) ctx.style.display = 'none';
+        } else {
+          if (sub) sub.remove();
+          const ctx = btn.querySelector('.ctx');
+          if (ctx && (!p || !p.hideLabel)) ctx.style.display = '';
+        }
       }
     });
   };
+
+  function isReadoutPad(p) {
+    if (typeof Deck.isReadoutPad === 'function') return Deck.isReadoutPad(p);
+    if (!p) return false;
+    if (p.type === 'volume' || p.type === 'media') return true;
+    if (p.type === 'output' && (p.target === 'stream' || p.target === 'record' || p.target === 'recordPause')) return true;
+    return false;
+  }
 
   Deck.updateStatsPads = () => {
     const grid = $('grid');
@@ -168,6 +189,57 @@
         btn.appendChild(sub);
       }
       sub.textContent = txt;
+    });
+  };
+
+  Deck.updateReadoutPads = () => {
+    const grid = $('grid');
+    const page = Deck.getActivePage();
+    if (!grid || !page) return;
+    const activeTicks = new Set((Deck.getActivePageTicks ? Deck.getActivePageTicks() : []).map((t) => t.idx));
+    page.pads.forEach((p, i) => {
+      if (!p || !isReadoutPad(p)) return;
+      if (activeTicks.has(i)) return;
+      const btn = grid.querySelector(`.pad[data-idx="${i}"]`);
+      if (!btn) return;
+      let sub = btn.querySelector('.sub');
+      const txt = typeof Deck.getPadReadoutText === 'function' ? Deck.getPadReadoutText(p) : '';
+      if (!txt) {
+        if (sub && !btn.classList.contains('running')) {
+          sub.remove();
+          const ctx = btn.querySelector('.ctx');
+          if (ctx && !p.hideLabel) ctx.style.display = '';
+        }
+        return;
+      }
+      if (!sub) {
+        sub = document.createElement('span');
+        sub.className = 'sub';
+        btn.appendChild(sub);
+      }
+      sub.textContent = txt;
+      sub.style.display = '';
+      if (txt === 'PAUSED') sub.classList.add('paused');
+      else sub.classList.remove('paused');
+      const ctx = btn.querySelector('.ctx');
+      if (ctx) ctx.style.display = 'none';
+    });
+  };
+
+  Deck.clearReadoutPads = () => {
+    const grid = $('grid');
+    const page = Deck.getActivePage();
+    if (!grid || !page) return;
+    page.pads.forEach((p, i) => {
+      if (!p || !isReadoutPad(p)) return;
+      const btn = grid.querySelector(`.pad[data-idx="${i}"]`);
+      if (!btn) return;
+      const sub = btn.querySelector('.sub');
+      if (sub && !btn.classList.contains('running')) {
+        sub.remove();
+        const ctx = btn.querySelector('.ctx');
+        if (ctx && !p.hideLabel) ctx.style.display = '';
+      }
     });
   };
 
@@ -322,11 +394,47 @@
     const isDragOver = el.classList.contains('drag-over');
     const isDraggingEl = el.classList.contains('dragging');
     const selectedPads = Deck.getSelectedPads();
+    const isSelected = selectedPads.has(i);
+
+    const subText = isRunning
+      ? tickText(rt)
+      : (p.type === 'stats'
+        ? Deck.formatStatsText(p.mode || 'all')
+        : (isReadoutPad(p) && typeof Deck.getPadReadoutText === 'function' ? Deck.getPadReadoutText(p) : ''));
+    const ctxText = (typeof Deck.getPadContextSubtitle === 'function') ? Deck.getPadContextSubtitle(p) : '';
+    const lbl = p.label || padFallbackLabel(p, i, page.cols);
+
+    const sig = [
+      page.id,
+      page.cols,
+      i,
+      p.type,
+      active ? 1 : 0,
+      isRunning ? 1 : 0,
+      isArmed ? 1 : 0,
+      isFullFace ? 1 : 0,
+      isDragOver ? 1 : 0,
+      isDraggingEl ? 1 : 0,
+      isSelected ? 1 : 0,
+      Deck.editMode ? 1 : 0,
+      p.color && p.type !== 'none' ? p.color : '',
+      p.hideLabel ? 1 : 0,
+      lbl,
+      ctxText,
+      p.image || '',
+      p.imageFit || '',
+      p.icon || '',
+      p.type === 'stats' ? (p.mode || 'all') : '',
+    ].join('\x1f');
+
+    if (el._padSig === sig) return;
+    el._padSig = sig;
+
     el.className = 'pad'
       + (p.type === 'none' ? ' empty' : '')
       + (p.type === 'stats' ? ' stats-pad' : '')
       + (Deck.editMode ? ' edit-mode' : '')
-      + (selectedPads.has(i) ? ' selected' : '')
+      + (isSelected ? ' selected' : '')
       + (active ? ' active' : '')
       + (isRunning ? ' running' : '')
       + (isArmed ? ' armed' : '')
@@ -346,12 +454,9 @@
       el.style.background = p.color && p.type !== 'none' ? p.color : '';
     }
     el.draggable = Deck.editMode && p.type !== 'none';
-    const subText = p.type === 'stats' ? Deck.formatStatsText(p.mode || 'all') : tickText(rt);
-    const ctxText = (typeof Deck.getPadContextSubtitle === 'function') ? Deck.getPadContextSubtitle(p) : '';
-    const lbl = p.label || padFallbackLabel(p, i, page.cols);
     const tipParts = [lbl || `Pad ${i + 1}`];
     if (ctxText) tipParts.push(`[${ctxText}]`);
-    if (p.type === 'stats' && subText) tipParts.push(`(${subText})`);
+    if ((p.type === 'stats' || isReadoutPad(p)) && subText) tipParts.push(`(${subText})`);
     if (TAGS[p.type]) tipParts.push(`[${TAGS[p.type]}]`);
     el.title = tipParts.join(' ');
 
@@ -363,20 +468,29 @@
     }
 
     const lblHtml = `<span class="lbl"${p.hideLabel ? ' style="display:none"' : ''}>${esc(lbl)}</span>`;
-    const ctxHtml = ctxText ? `<span class="ctx"${(isRunning || p.hideLabel) ? ' style="display:none"' : ''}>${esc(ctxText)}</span>` : '';
+    const ctxHtml = ctxText ? `<span class="ctx"${(isRunning || subText || p.hideLabel) ? ' style="display:none"' : ''}>${esc(ctxText)}</span>` : '';
 
     el.innerHTML = `<i class="led"></i>${TAGS[p.type] ? `<span class="tag">${TAGS[p.type]}</span>` : ''}`
       + iconHtml
       + lblHtml
       + ctxHtml
-      + `${subText ? `<span class="sub">${esc(subText)}</span>` : ''}`;
+      + `${subText ? `<span class="sub${subText === 'PAUSED' ? ' paused' : ''}">${esc(subText)}</span>` : ''}`;
   }
 
-  Deck.TAGS = TAGS;
-  Deck.padFallbackLabel = padFallbackLabel;
-  Deck.initGrid = initGrid;
-  Deck.renderPad = renderPad;
-  Deck.renderGrid = () => {
+  let renderFrame = null;
+  function scheduleRenderGrid() {
+    if (renderFrame !== null) return;
+    renderFrame = requestAnimationFrame(() => {
+      renderFrame = null;
+      Deck.renderGrid();
+    });
+  }
+
+  function renderGrid() {
+    if (renderFrame !== null) {
+      cancelAnimationFrame(renderFrame);
+      renderFrame = null;
+    }
     const page = Deck.getActivePage();
     Deck.renderPageBar();
     initGrid(page);
@@ -384,6 +498,14 @@
     page.pads.forEach((p, i) => {
       renderPad(p, i, btns[i], page);
     });
+    if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
     Deck.updateSelectionUi();
-  };
+  }
+
+  Deck.TAGS = TAGS;
+  Deck.padFallbackLabel = padFallbackLabel;
+  Deck.initGrid = initGrid;
+  Deck.renderPad = renderPad;
+  Deck.scheduleRenderGrid = scheduleRenderGrid;
+  Deck.renderGrid = renderGrid;
 })();

@@ -167,6 +167,86 @@
     };
   }
 
+  function deriveTransformPreset(cur, videoSettings) {
+    if (!cur) return 'full_reset';
+    const baseW = Number(videoSettings?.baseWidth) || 1920;
+    const baseH = Number(videoSettings?.baseHeight) || 1080;
+    const srcW = Number(cur?.sourceWidth) || baseW;
+    const srcH = Number(cur?.sourceHeight) || baseH;
+    const effW = Math.max(1, srcW - (Number(cur?.cropLeft) || 0) - (Number(cur?.cropRight) || 0));
+    const effH = Math.max(1, srcH - (Number(cur?.cropTop) || 0) - (Number(cur?.cropBottom) || 0));
+    const curScaleX = Number.isFinite(Number(cur?.scaleX)) && Number(cur?.scaleX) > 0 ? Number(cur?.scaleX) : 1;
+    const curScaleY = Number.isFinite(Number(cur?.scaleY)) && Number(cur?.scaleY) > 0 ? Number(cur?.scaleY) : 1;
+    const curW = effW * curScaleX;
+    const curH = effH * curScaleY;
+
+    if (curW >= baseW * 0.6) {
+      return 'full_reset';
+    }
+
+    const centerX = (baseW - curW) / 2;
+    const centerY = (baseH - curH) / 2;
+    if (Math.abs(Number(cur.positionX) - centerX) < 20 && Math.abs(Number(cur.positionY) - centerY) < 20) {
+      return 'center_half';
+    }
+
+    const isRight = Number(cur.positionX) > (baseW - curW) / 2;
+    const isBottom = Number(cur.positionY) > (baseH - curH) / 2;
+    if (isRight && isBottom) return 'pip_br';
+    if (isRight && !isBottom) return 'pip_tr';
+    if (!isRight && isBottom) return 'pip_bl';
+    return 'pip_tl';
+  }
+
+  async function fetchTransform(sceneName, sourceName) {
+    const { obs, obsCall } = Deck;
+    if (!sceneName || !sourceName) return '';
+    try {
+      const items = await getSceneItems(sceneName);
+      const item = (items || []).find((it) => it.sourceName === sourceName);
+      if (!item) return '';
+      const trRes = await obsCall('GetSceneItemTransform', {
+        sceneName,
+        sceneItemId: item.sceneItemId,
+      });
+      const cur = trRes.sceneItemTransform || trRes || {};
+      const derived = deriveTransformPreset(cur, obs.videoSettings);
+      obs.transforms[`${sceneName}\0${sourceName}`] = derived;
+      return derived;
+    } catch {}
+    return '';
+  }
+
+  async function syncTransforms() {
+    const { obs, cfg } = Deck;
+    if (!obs || !cfg) return;
+    const targets = new Set();
+    const collect = (st) => {
+      if (st?.type === 'transform' && st.sceneName && st.sourceName) {
+        targets.add(`${st.sceneName}\0${st.sourceName}`);
+      }
+    };
+    for (const d of (cfg.pages || [])) {
+      for (const p of (d.pads || [])) {
+        collect(p);
+        (p.steps || []).forEach(collect);
+      }
+    }
+    (cfg.panicSteps || []).forEach(collect);
+
+    await Promise.all([...targets].map(async (key) => {
+      const idx = key.indexOf('\0');
+      const sceneName = key.slice(0, idx);
+      const sourceName = key.slice(idx + 1);
+      try {
+        await fetchTransform(sceneName, sourceName);
+      } catch {}
+    }));
+    Deck.renderGrid();
+  }
+
+  Deck.syncTransforms = syncTransforms;
+
   async function execAction(a) {
     const { obs, obsCall, refreshFilters, cfg } = Deck;
     if (!a || a.type === 'none' || a.type === 'wait') return;
@@ -266,9 +346,21 @@
     } else if (a.type === 'image' && a.inputName) {
       const mode = a.mode || 'set_file';
       if (mode === 'set_file') {
+        let kind = obs.inputKinds?.[a.inputName];
+        if (!kind) {
+          try {
+            const s = await obsCall('GetInputSettings', { inputName: a.inputName });
+            kind = s?.inputKind || '';
+            if (kind) obs.inputKinds[a.inputName] = kind;
+          } catch {}
+        }
+        const isSlideshow = /slideshow/i.test(kind || '');
+        const inputSettings = isSlideshow
+          ? { files: a.filePath ? [{ value: a.filePath, hidden: false, selected: false }] : [] }
+          : { file: a.filePath || '' };
         await obsCall('SetInputSettings', {
           inputName: a.inputName,
-          inputSettings: { file: a.filePath || '' },
+          inputSettings,
           overlay: true,
         });
         obs.imageFiles[a.inputName] = a.filePath || '';

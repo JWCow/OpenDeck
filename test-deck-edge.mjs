@@ -617,6 +617,7 @@ try {
     'obs-virtual-deck/deck/ui-palette.js',
     'obs-virtual-deck/deck/ui-select.js',
     'obs-virtual-deck/deck/ui-dialogs.js',
+    'obs-virtual-deck/deck/snapshots.js',
     'obs-virtual-deck/deck/ui-boot.js',
     'obs-virtual-deck/README.md',
     'obs-virtual-deck/Install-Windows.bat',
@@ -720,11 +721,14 @@ try {
     await pageSeam.waitForFunction(() => Deck.obs.volumes['Host Mic'] === -18);
 
     // Close connection with chosen close code and reason
-    const closedEvent = pageSeam.evaluate(() => new Promise((resolve) => {
-      Deck.obs.ws.addEventListener('close', (ev) => resolve({ code: ev.code, reason: ev.reason }), { once: true });
-    }));
+    await pageSeam.waitForFunction(() => Deck.obs.ws && Deck.obs.ws.readyState === 1);
+    await pageSeam.evaluate(() => {
+      window.__seamClose = new Promise((resolve) => {
+        Deck.obs.ws.addEventListener('close', (ev) => resolve({ code: ev.code, reason: ev.reason }), { once: true });
+      });
+    });
     seamObs.closeAll(4009, 'Custom close reason');
-    const closeInfo = await closedEvent;
+    const closeInfo = await pageSeam.evaluate(() => window.__seamClose);
     assert.deepEqual(closeInfo, { code: 4009, reason: 'Custom close reason' }, 'closed with chosen code and reason');
     await pageSeam.waitForFunction(() => document.getElementById('conn-text').textContent === 'Auth Failed');
 
@@ -1372,6 +1376,416 @@ try {
     recObs.wss.close();
   }
 
+  // 16. Media, Image and Transform Pad state fixes (#12)
+  const obs12 = createFakeObs(false);
+  await new Promise((r) => obs12.wss.once('listening', r));
+  const port12 = obs12.wss.address().port;
+  try {
+    const ctx12 = await browser.newContext();
+    const page12 = await ctx12.newPage();
+    page12.on('pageerror', (e) => pageErrors.push(e.message));
+    await page12.goto(`${DECK_URL}?port=${port12}`);
+    await page12.waitForSelector('#grid .pad');
+    await page12.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await page12.waitForTimeout(100);
+    if (await page12.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await page12.click('#btn-wiz-cancel');
+    }
+
+    // AC 1: A media pause event from OBS turns the Media Pad off
+    await page12.evaluate(() => {
+      Deck.cfg.pages[0].pads[0] = {
+        type: 'media',
+        inputName: 'Intro Video',
+        mediaAction: 'play_pause',
+        label: 'Video',
+      };
+      Deck.obs.mediaStates['Intro Video'] = 'OBS_MEDIA_STATE_PLAYING';
+      Deck.renderGrid();
+    });
+    await page12.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+    obs12.broadcast('MediaInputActionTriggered', {
+      inputName: 'Intro Video',
+      mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE',
+    });
+    await page12.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'), null, { timeout: 3000 });
+    console.log('  ✓ media pause event from OBS turns Media Pad off (#12)');
+
+    // AC 2: Set file on a slideshow sends the slideshow file-list setting
+    obs12.state.calls.length = 0;
+    await page12.evaluate(async () => {
+      Deck.cfg.pages[0].pads[1] = {
+        type: 'image',
+        inputName: 'Photo Slideshow',
+        mode: 'set_file',
+        filePath: '/img/slideshow-new.png',
+        label: 'Slideshow File',
+      };
+      Deck.renderGrid();
+    });
+    await page12.locator('#grid .pad').nth(1).click();
+    await page12.waitForFunction(() => document.querySelectorAll('#grid .pad')[1].className.includes('active'));
+    const slideshowCall = obs12.state.calls.find(
+      (c) => c.requestType === 'SetInputSettings' && c.requestData?.inputName === 'Photo Slideshow'
+    );
+    assert.ok(slideshowCall, 'SetInputSettings called for Photo Slideshow');
+    assert.equal(slideshowCall.requestData.inputSettings.file, undefined, 'does not send single file setting on slideshow');
+    assert.deepEqual(
+      slideshowCall.requestData.inputSettings.files,
+      [{ value: '/img/slideshow-new.png', hidden: false, selected: false }],
+      'sends slideshow file-list setting'
+    );
+    console.log('  ✓ set file on slideshow sends file-list setting (#12)');
+
+    // AC 3: After a reload, a PiP'd source shows its Transform Pad as active
+    await page12.evaluate(() => {
+      Deck.cfg.pages[0].pads[2] = {
+        type: 'transform',
+        sceneName: 'Main Cam',
+        sourceName: 'Webcam',
+        preset: 'toggle_pip',
+        label: 'Cam PiP',
+      };
+      Deck.saveCfg();
+    });
+    obs12.state.itemTransforms['Main Cam:1'] = {
+      positionX: 1350,
+      positionY: 746,
+      scaleX: 0.28,
+      scaleY: 0.28,
+      sourceWidth: 1920,
+      sourceHeight: 1080,
+      alignment: 5,
+    };
+    await page12.reload();
+    await page12.waitForSelector('#grid .pad');
+    await page12.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await page12.waitForFunction(() => document.querySelectorAll('#grid .pad')[2].className.includes('active'), null, { timeout: 3000 });
+
+    // Reset source transform to full scale in OBS and reload; pad must be inactive
+    obs12.state.itemTransforms['Main Cam:1'] = {
+      positionX: 0,
+      positionY: 0,
+      scaleX: 1,
+      scaleY: 1,
+      sourceWidth: 1920,
+      sourceHeight: 1080,
+      alignment: 5,
+    };
+    await page12.reload();
+    await page12.waitForSelector('#grid .pad');
+    await page12.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await page12.waitForFunction(() => !document.querySelectorAll('#grid .pad')[2].className.includes('active'), null, { timeout: 3000 });
+
+    await ctx12.close();
+    console.log('  ✓ PiP source shows Transform Pad as active after reload (#12)');
+  } finally {
+    obs12.wss.close();
+  }
+
+  // 19. Snapshots in IndexedDB (#14)
+  const snapCtx = await browser.newContext();
+  const pageSnap = await snapCtx.newPage();
+  pageSnap.on('pageerror', (e) => pageErrors.push(e.message));
+  pageSnap.on('dialog', (d) => d.accept());
+  await pageSnap.goto(DECK_URL);
+  await pageSnap.waitForSelector('#grid .pad');
+
+  // Verify feature is available and #btn-snapshots exists
+  assert.equal(await pageSnap.locator('#btn-snapshots').isVisible(), true, '#btn-snapshots is visible when IndexedDB is supported');
+
+  // Ensure password is set in Deck.cfg
+  await pageSnap.evaluate(() => {
+    Deck.cfg.ws.password = 'my-secret-obs-password';
+    Deck.saveCfg();
+  });
+
+  // AC: No Snapshot contains the password
+  await pageSnap.evaluate(async () => {
+    await Deck.createSnapshot('Initial Layout');
+  });
+  let snaps = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.ok(snaps.length >= 1, 'at least 1 snapshot recorded');
+  for (const s of snaps) {
+    assert.equal(s.password, undefined, 'no password field on snapshot root');
+    assert.equal(s.ws?.password, undefined, 'no password in snapshot ws object');
+    assert.equal(JSON.stringify(s).includes('my-secret-obs-password'), false, 'password never appears anywhere in snapshot');
+  }
+
+  // Set up Page 1 with a custom pad and Pad Graphic
+  const testGraphic = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  await pageSnap.evaluate(([img]) => {
+    Deck.cfg.pages[0].pads[0] = Deck.normalizePad({
+      type: 'scene',
+      sceneName: 'Main Cam',
+      label: 'Main Cam Graphic',
+      image: img,
+      imageFit: 'fill',
+    });
+    Deck.saveCfg();
+    Deck.renderGrid();
+  }, [testGraphic]);
+
+  // Add Page 2
+  await pageSnap.click('#btn-deck-add');
+  await pageSnap.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 2);
+
+  // Hook 1: Delete Page creates a Snapshot first
+  const countBeforeDel = (await pageSnap.evaluate(async () => Deck.listSnapshots())).length;
+  await pageSnap.click('#btn-deck-cfg');
+  await pageSnap.waitForSelector('#deck-dlg[open]');
+  await pageSnap.click('#btn-deck-del');
+  await pageSnap.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 1);
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeDel + 1);
+  const snapsAfterDel = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterDel.length, countBeforeDel + 1, 'delete Page created a snapshot first');
+  assert.equal(snapsAfterDel[0].pageCount, 2, 'snapshot before delete Page captured both pages');
+
+  // Hook 2: Reset Deck creates a Snapshot first
+  const countBeforeReset = snapsAfterDel.length;
+  await pageSnap.click('#btn-conn-toggle');
+  await pageSnap.waitForSelector('#conn-bar');
+  await pageSnap.click('#btn-reset-layout');
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeReset + 1);
+  const snapsAfterReset = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterReset.length, countBeforeReset + 1, 'reset Deck created a snapshot first');
+
+  // Hook 3: Import creates a Snapshot first
+  const countBeforeImport = snapsAfterReset.length;
+  await pageSnap.evaluate(async () => {
+    const fakeJson = JSON.stringify({
+      version: 2,
+      pages: [{ id: 'page-imported', name: 'Imported', cols: 4, rows: 3, pads: [] }],
+    });
+    const dt = new DataTransfer();
+    const file = new File([fakeJson], 'imported-layout.json', { type: 'application/json' });
+    dt.items.add(file);
+    const input = document.getElementById('file-import');
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await pageSnap.waitForFunction(() => Deck.cfg.pages[0].name === 'Imported');
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeImport + 1);
+  const snapsAfterImport = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterImport.length, countBeforeImport + 1, 'import created a snapshot first');
+
+  // Hook 4: Auto-Import replace creates a Snapshot first
+  await pageSnap.evaluate(() => {
+    Deck.cfg.pages = Deck.defaultPages();
+    Deck.cfg.activePageId = Deck.cfg.pages[0].id;
+    Deck.saveCfg();
+    Deck.renderGrid();
+  });
+  assert.equal(await pageSnap.evaluate(() => Deck.isStarterDeck()), true, 'deck is starter deck');
+  const countBeforeAutoImport = (await pageSnap.evaluate(async () => Deck.listSnapshots())).length;
+  await pageSnap.evaluate(() => {
+    const dummyPages = [{
+      id: 'page-auto',
+      name: 'Auto Scenes',
+      cols: 4,
+      rows: 3,
+      pads: [{ type: 'scene', sceneName: 'Main Cam', label: 'Cam' }],
+    }];
+    Deck.applyAutoImport(dummyPages, { replaceEmptyStarter: true });
+  });
+  await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeAutoImport + 1);
+  const snapsAfterAutoImport = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterAutoImport.length, countBeforeAutoImport + 1, 'Auto-Import replace created a snapshot first');
+
+  // AC: Restoring brings back earlier Pages and Pad Graphics, while keeping password
+  const snapWithGraphic = snapsAfterAutoImport.find((s) => s.pageCount === 2 && s.pages?.some((p) => p.pads?.some((pad) => pad?.image === testGraphic)));
+  assert.ok(snapWithGraphic, 'found snapshot containing the Pad Graphic and 2 pages');
+  const currentPassword = await pageSnap.evaluate(() => Deck.cfg.ws.password);
+  assert.equal(currentPassword, 'my-secret-obs-password');
+
+  // Restore the snapshot
+  await pageSnap.evaluate(async (snapId) => {
+    await Deck.restoreSnapshot(snapId);
+  }, snapWithGraphic.timestamp);
+
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.pages.length), 2, 'restored 2 pages');
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.pages[0].pads[0].label), 'Main Cam Graphic', 'restored pad label');
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.pages[0].pads[0].image), testGraphic, 'restored Pad Graphic image');
+  assert.equal(await pageSnap.evaluate(() => Deck.cfg.ws.password), 'my-secret-obs-password', 'password preserved across restore');
+
+  // Verify that restoring a snapshot took a snapshot of the current layout first
+  const snapsAfterRestore = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsAfterRestore[0].description, 'Before Restore', 'restoring took a snapshot of current layout first');
+
+  // AC: Only the newest 20 are kept (pruning)
+  await pageSnap.evaluate(async () => {
+    for (let i = 0; i < 25; i++) {
+      await Deck.createSnapshot(`Batch Snap ${i}`);
+    }
+  });
+  const snapsPruned = await pageSnap.evaluate(async () => Deck.listSnapshots());
+  assert.equal(snapsPruned.length, 20, 'only the newest 20 snapshots are kept');
+
+  // Snapshots dialog UI: opens, lists snapshots with time and Page count, restores via UI
+  await pageSnap.click('#btn-snapshots');
+  await pageSnap.waitForSelector('#snapshots-dlg[open]');
+  assert.equal(await pageSnap.locator('#snapshots-list .snapshot-item').count(), 20, 'dialog lists 20 snapshot items');
+  const firstItemText = await pageSnap.locator('#snapshots-list .snapshot-item').first().textContent();
+  assert.ok(/Page|Pages/.test(firstItemText), 'snapshot row displays Page count');
+  await pageSnap.click('#snapshots-close');
+  await pageSnap.waitForFunction(() => !document.getElementById('snapshots-dlg').open);
+
+  // If IndexedDB is unavailable, feature hides itself
+  await pageSnap.evaluate(() => {
+    Deck.setSnapshotsAvailable(false);
+  });
+  assert.equal(await pageSnap.locator('#btn-snapshots').isVisible(), false, '#btn-snapshots is hidden when snapshots are unavailable');
+
+  await snapCtx.close();
+  console.log('  ✓ automatic layout Snapshots in IndexedDB (#14)');
+
+  // 17. Ticket #9: Redraw only the Pads that changed
+  const burstObs = createFakeObs(false);
+  await new Promise((r) => burstObs.wss.once('listening', r));
+  const burstPort = burstObs.wss.address().port;
+  try {
+    const ctxBurst = await browser.newContext();
+    const pageBurst = await ctxBurst.newPage();
+    pageBurst.on('pageerror', (e) => pageErrors.push(e.message));
+    await pageBurst.goto(`${DECK_URL}?port=${burstPort}`);
+    await pageBurst.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    if (await pageBurst.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageBurst.click('#btn-wiz-cancel');
+    }
+
+    const TEST_IMG_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    await pageBurst.evaluate((img) => {
+      const page = Deck.getActivePage();
+      page.pads[0] = {
+        type: 'scene',
+        mode: 'named',
+        sceneName: 'Main Cam',
+        label: 'Main Cam',
+        image: img,
+        imageFit: 'icon',
+      };
+      page.pads[1] = {
+        type: 'scene',
+        mode: 'named',
+        sceneName: 'Slides',
+        label: 'Slides',
+      };
+      page.pads[2] = {
+        type: 'macro',
+        label: 'Test Macro',
+        steps: [{ type: 'wait', delayMs: 4000 }],
+      };
+      page.pads[3] = {
+        type: 'filter',
+        sourceName: 'Webcam',
+        filterName: 'Blur',
+        mode: 'toggle',
+        autoOffMs: 4000,
+        label: 'Blur AutoOff',
+      };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    }, TEST_IMG_URL);
+
+    // Ensure Pad Graphic element exists on Pad 0
+    await pageBurst.waitForSelector('#grid .pad[data-idx="0"] img.pad-icon-img');
+
+    // Attach MutationObserver watching for removal/replacement of Pad Graphic elements
+    await pageBurst.evaluate(() => {
+      window.__removedPadGraphics = 0;
+      const initialImg = document.querySelector('#grid .pad[data-idx="0"] img.pad-icon-img');
+      window.__initialImg = initialImg;
+      const obs = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          for (const node of m.removedNodes) {
+            if (node === initialImg ||
+                (node.nodeType === 1 && (node.matches('img.pad-icon-img') || node.querySelector('img.pad-icon-img')))) {
+              window.__removedPadGraphics++;
+            }
+          }
+        }
+      });
+      obs.observe(document.getElementById('grid'), { childList: true, subtree: true });
+    });
+
+    // Acceptance criterion 1: A burst of 50 volume events replaces no Pad Graphic elements (mutation observer)
+    for (let i = 0; i < 50; i++) {
+      burstObs.broadcast('InputVolumeChanged', {
+        inputName: 'Desktop Audio',
+        inputVolumeDb: -10 - (i % 10),
+      });
+    }
+
+    // Give time for any events / frames to settle
+    await pageBurst.waitForTimeout(200);
+
+    const removedCount = await pageBurst.evaluate(() => window.__removedPadGraphics);
+    const stillSameElement = await pageBurst.evaluate(() => {
+      const currentImg = document.querySelector('#grid .pad[data-idx="0"] img.pad-icon-img');
+      return currentImg === window.__initialImg;
+    });
+
+    assert.equal(removedCount, 0, `burst of 50 volume events replaced ${removedCount} Pad Graphic elements (expected 0)`);
+    assert.equal(stillSameElement, true, 'Pad Graphic element remained identically in DOM without re-decoding');
+
+    // Acceptance criterion 2: Pad active states still update correctly after events
+    assert.ok((await pageBurst.locator('#grid .pad[data-idx="0"]').getAttribute('class')).includes('active'), 'Pad 0 active on Main Cam');
+    assert.ok(!(await pageBurst.locator('#grid .pad[data-idx="1"]').getAttribute('class')).includes('active'), 'Pad 1 inactive');
+
+    burstObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Slides' });
+    await pageBurst.waitForFunction(() => {
+      const p0 = document.querySelector('#grid .pad[data-idx="0"]');
+      const p1 = document.querySelector('#grid .pad[data-idx="1"]');
+      return p1?.classList.contains('active') && !p0?.classList.contains('active');
+    });
+
+    assert.ok((await pageBurst.locator('#grid .pad[data-idx="1"]').getAttribute('class')).includes('active'), 'Pad 1 active after scene event');
+    assert.ok(!(await pageBurst.locator('#grid .pad[data-idx="0"]').getAttribute('class')).includes('active'), 'Pad 0 inactive after scene event');
+
+    // Acceptance criterion 3: Timed Macro and Auto-Off countdown ticks still update in place
+    // 3a. Start Timed Macro on Pad 2
+    await pageBurst.locator('#grid .pad[data-idx="2"]').click();
+    await pageBurst.waitForFunction(() => document.querySelector('#grid .pad[data-idx="2"] .sub')?.textContent.includes('s'));
+
+    const macroSub1 = await pageBurst.locator('#grid .pad[data-idx="2"] .sub').textContent();
+    // Fire volume events while macro is ticking
+    for (let i = 0; i < 10; i++) {
+      burstObs.broadcast('InputVolumeChanged', { inputName: 'Desktop Audio', inputVolumeDb: -20 + i });
+    }
+    await pageBurst.waitForTimeout(300);
+    const macroSub2 = await pageBurst.locator('#grid .pad[data-idx="2"] .sub').textContent();
+    assert.ok(macroSub1.length > 0 && macroSub2.length > 0, 'Timed Macro tick text present');
+    assert.notEqual(macroSub1, macroSub2, 'Timed Macro tick updated in place while events fired');
+
+    // Cancel macro before starting next test
+    await pageBurst.locator('#grid .pad[data-idx="2"]').click();
+    await pageBurst.waitForFunction(() => !document.querySelector('#grid .pad[data-idx="2"]').classList.contains('running'));
+
+    // 3b. Start Auto-Off on Pad 3
+    await pageBurst.locator('#grid .pad[data-idx="3"]').click();
+    await pageBurst.waitForFunction(() => document.querySelector('#grid .pad[data-idx="3"] .sub')?.textContent.includes('s'));
+
+    const autoOffSub1 = await pageBurst.locator('#grid .pad[data-idx="3"] .sub').textContent();
+    // Fire volume events while auto-off is ticking
+    for (let i = 0; i < 10; i++) {
+      burstObs.broadcast('InputVolumeChanged', { inputName: 'Desktop Audio', inputVolumeDb: -15 + i });
+    }
+    await pageBurst.waitForTimeout(300);
+    const autoOffSub2 = await pageBurst.locator('#grid .pad[data-idx="3"] .sub').textContent();
+    assert.ok(autoOffSub1.length > 0 && autoOffSub2.length > 0, 'Auto-Off tick text present');
+    assert.notEqual(autoOffSub1, autoOffSub2, 'Auto-Off tick updated in place while events fired');
+
+    // Cancel auto-off
+    await pageBurst.locator('#grid .pad[data-idx="3"]').click();
+    await pageBurst.waitForFunction(() => !document.querySelector('#grid .pad[data-idx="3"] .sub'));
+
+    await ctxBurst.close();
+    console.log('  ✓ ticket #9: redraw only changed pads on events & non-destructive ticks (burst of 50 volume events replaced 0 graphics)');
+  } finally {
+    burstObs.wss.close();
+  }
+
   // 17. Undo and redo in Edit Mode (#15)
   const undoObs = createFakeObs(false);
   await new Promise((r) => undoObs.wss.once('listening', r));
@@ -1638,6 +2052,536 @@ try {
     console.log('  ✓ undo and redo in Edit Mode (#15)');
   } finally {
     undoObs.wss.close();
+  }
+
+  // 18. Ticket #18: Live Readout
+  const readoutObs = createFakeObs(false);
+  readoutObs.state.inputs.push('Host Mic');
+  readoutObs.state.volumes['Host Mic'] = -18;
+  readoutObs.state.streamTimecode = '00:01:05';
+  readoutObs.state.recordTimecode = '00:01:23';
+  readoutObs.state.mediaDurations['Intro Video'] = 120000;
+  readoutObs.state.mediaCursors['Intro Video'] = 45000;
+  await new Promise((r) => readoutObs.wss.once('listening', r));
+  const readoutPort = readoutObs.wss.address().port;
+  try {
+    const ctxReadout = await browser.newContext();
+    const pageReadout = await ctxReadout.newPage();
+    pageReadout.on('pageerror', (e) => pageErrors.push(e.message));
+    pageReadout.on('dialog', (dlg) => dlg.accept());
+    await pageReadout.goto(`${DECK_URL}?port=${readoutPort}`);
+    await pageReadout.waitForFunction(() => document.getElementById('conn-text')?.textContent === 'Connected');
+    if (await pageReadout.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageReadout.click('#btn-wiz-cancel');
+    }
+
+    // Set up Pages: Page 1 with Readout Pads, Page 2 with Scenes only
+    await pageReadout.evaluate(() => {
+      const p1 = Deck.getActivePage();
+      p1.cols = 4;
+      p1.rows = 2;
+      p1.pads = [
+        { type: 'output', target: 'stream', label: 'Stream' },
+        { type: 'output', target: 'record', label: 'Record' },
+        { type: 'volume', inputName: 'Host Mic', label: 'Host Vol' },
+        { type: 'media', inputName: 'Intro Video', label: 'Intro Video' },
+        { type: 'stats', mode: 'cpu', label: 'CPU' },
+        { type: 'output', target: 'stream', label: 'Stream Hide', hideLabel: true },
+        { type: 'output', target: 'record', label: 'Record Full', image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', imageFit: 'fill' },
+        { type: 'volume', inputName: 'Host Mic', label: 'Vol Icon', image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', imageFit: 'contain' },
+      ];
+      const p2 = Deck.addPage({ name: 'Scenes Only', cols: 4, rows: 2, switchTo: false });
+      p2.pads = [
+        { type: 'scene', sceneName: 'Main Cam', label: 'Main Cam' },
+        { type: 'scene', sceneName: 'Slides', label: 'Slides' },
+        { type: 'none' }, { type: 'none' },
+        { type: 'none' }, { type: 'none' }, { type: 'none' }, { type: 'none' },
+      ];
+      Deck.setActivePage(p1.id);
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+
+    // AC1: Volume Pad shows initial volume in dB (event-driven / initial sync)
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="2"] .sub');
+      return sub && sub.textContent.includes('-18 dB');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="2"] .sub').textContent(), '-18 dB', 'Volume pad shows level in dB');
+
+    // Volume update via InputVolumeChanged updates in place
+    readoutObs.broadcast('InputVolumeChanged', { inputName: 'Host Mic', inputVolumeDb: -12, inputVolumeMul: 0.25 });
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="2"] .sub');
+      return sub && sub.textContent.includes('-12 dB');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="2"] .sub').textContent(), '-12 dB', 'Volume pad updated in place on volume change');
+
+    // Stream Pad: start streaming -> shows elapsed time
+    readoutObs.state.outputs.stream = true;
+    readoutObs.broadcast('StreamStateChanged', { outputActive: true, outputState: 'OBS_WEBSOCKET_OUTPUT_STARTED' });
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="0"] .sub');
+      return sub && sub.textContent.includes('00:01:05');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="0"] .sub').textContent(), '00:01:05', 'Stream pad shows elapsed time');
+
+    // Record Pad: start recording -> shows elapsed time
+    readoutObs.state.outputs.record = true;
+    readoutObs.broadcast('RecordStateChanged', { outputActive: true, outputState: 'OBS_WEBSOCKET_OUTPUT_STARTED' });
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="1"] .sub');
+      return sub && sub.textContent.includes('00:01:23');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="1"] .sub').textContent(), '00:01:23', 'Record pad shows elapsed time');
+
+    // Media Pad: play media -> shows time left (120s - 45s = 75s -> 01:15)
+    readoutObs.state.mediaStates['Intro Video'] = 'OBS_MEDIA_STATE_PLAYING';
+    readoutObs.broadcast('MediaInputActionTriggered', { inputName: 'Intro Video', mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' });
+    readoutObs.broadcast('MediaInputPlaybackStarted', { inputName: 'Intro Video' });
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="3"] .sub');
+      return sub && sub.textContent.includes('01:15');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="3"] .sub').textContent(), '01:15', 'Media pad shows time left');
+
+    // AC2: Paused recording is shown
+    readoutObs.state.outputs.recordPaused = true;
+    readoutObs.broadcast('RecordStateChanged', { outputActive: true, outputState: 'OBS_WEBSOCKET_OUTPUT_PAUSED' });
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="1"] .sub');
+      return sub && sub.textContent.includes('PAUSED');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="1"] .sub').textContent(), 'PAUSED', 'Record pad shows PAUSED when paused');
+
+    // Resume recording -> elapsed time restores
+    readoutObs.state.outputs.recordPaused = false;
+    readoutObs.broadcast('RecordStateChanged', { outputActive: true, outputState: 'OBS_WEBSOCKET_OUTPUT_RESUMED' });
+    await pageReadout.waitForFunction(() => {
+      const sub = document.querySelector('#grid .pad[data-idx="1"] .sub');
+      return sub && sub.textContent.includes('00:01:23');
+    });
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="1"] .sub').textContent(), '00:01:23', 'Record pad restores elapsed time when resumed');
+
+    // AC6: Hidden-label pad (Pad 5) and Full Face pad (Pad 6) still show readouts as bottom strip
+    await pageReadout.waitForFunction(() => {
+      const sub5 = document.querySelector('#grid .pad[data-idx="5"] .sub');
+      const sub6 = document.querySelector('#grid .pad[data-idx="6"] .sub');
+      return sub5 && sub5.textContent.includes('00:01:05') && sub6 && sub6.textContent.includes('00:01:23');
+    });
+    const pad5Sub = pageReadout.locator('#grid .pad[data-idx="5"] .sub');
+    const pad6Sub = pageReadout.locator('#grid .pad[data-idx="6"] .sub');
+    assert.equal(await pad5Sub.textContent(), '00:01:05', 'Hide-label pad shows readout');
+    assert.equal(await pad6Sub.textContent(), '00:01:23', 'Full-face pad shows readout');
+    const pad5Pos = await pad5Sub.evaluate((el) => {
+      const st = window.getComputedStyle(el);
+      return { position: st.position, bottom: st.bottom, width: st.width };
+    });
+    assert.equal(pad5Pos.position, 'absolute', 'Hide-label readout is absolutely positioned bottom strip');
+
+    // AC5: Readout updates replace no Pad Graphic elements (mutation check on Pad 7)
+    await pageReadout.evaluate(() => {
+      const img = document.querySelector('#grid .pad[data-idx="7"] img.pad-icon-img');
+      window.__initialReadoutImg = img;
+      window.__removedReadoutGraphics = 0;
+      const observer = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          for (const node of m.removedNodes) {
+            if (node.tagName === 'IMG' && node.classList.contains('pad-icon-img')) {
+              window.__removedReadoutGraphics++;
+            }
+          }
+        }
+      });
+      observer.observe(document.getElementById('grid'), { childList: true, subtree: true });
+    });
+
+    // Fire 20 volume events while connected
+    for (let i = 0; i < 20; i++) {
+      readoutObs.broadcast('InputVolumeChanged', { inputName: 'Host Mic', inputVolumeDb: -20 + i, inputVolumeMul: 0.1 });
+    }
+    await pageReadout.waitForTimeout(200);
+    const removedGraphics = await pageReadout.evaluate(() => window.__removedReadoutGraphics);
+    const sameImg = await pageReadout.evaluate(() => {
+      const current = document.querySelector('#grid .pad[data-idx="7"] img.pad-icon-img');
+      return current === window.__initialReadoutImg;
+    });
+    assert.equal(removedGraphics, 0, 'No Pad Graphic elements replaced during readout updates');
+    assert.equal(sameImg, true, 'Pad Graphic element remained identically in DOM');
+
+    // AC3: Readouts clear on stop
+    // Stop stream -> Pad 0 and Pad 5 readouts clear
+    readoutObs.state.outputs.stream = false;
+    readoutObs.broadcast('StreamStateChanged', { outputActive: false, outputState: 'OBS_WEBSOCKET_OUTPUT_STOPPED' });
+    await pageReadout.waitForFunction(() => !document.querySelector('#grid .pad[data-idx="0"] .sub'));
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="0"] .sub').count(), 0, 'Stream pad readout cleared on stop');
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="5"] .sub').count(), 0, 'Stream hide-label pad readout cleared on stop');
+
+    // Stop record -> Pad 1 and Pad 6 readouts clear
+    readoutObs.state.outputs.record = false;
+    readoutObs.broadcast('RecordStateChanged', { outputActive: false, outputState: 'OBS_WEBSOCKET_OUTPUT_STOPPED' });
+    await pageReadout.waitForFunction(() => !document.querySelector('#grid .pad[data-idx="1"] .sub'));
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="1"] .sub').count(), 0, 'Record pad readout cleared on stop');
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="6"] .sub').count(), 0, 'Record full-face pad readout cleared on stop');
+
+    // Media ended -> Pad 3 readout clears
+    readoutObs.state.mediaStates['Intro Video'] = 'OBS_MEDIA_STATE_ENDED';
+    readoutObs.broadcast('MediaInputPlaybackEnded', { inputName: 'Intro Video' });
+    await pageReadout.waitForFunction(() => !document.querySelector('#grid .pad[data-idx="3"] .sub'));
+    assert.equal(await pageReadout.locator('#grid .pad[data-idx="3"] .sub').count(), 0, 'Media pad readout cleared on media ended');
+
+    // AC4: No status polling while no readout Pad is on the active Page
+    // Switch to 'Scenes Only' page
+    const scenesPageId = await pageReadout.evaluate(() => Deck.cfg.pages.find((p) => p.name === 'Scenes Only').id);
+    await pageReadout.evaluate((id) => Deck.setActivePage(id), scenesPageId);
+    await pageReadout.waitForTimeout(100);
+
+    // Clear fake OBS calls and wait 1.5s
+    readoutObs.state.calls = [];
+    await pageReadout.waitForTimeout(1500);
+    const polledCallsOnScenesPage = readoutObs.state.calls.filter((c) =>
+      ['GetStreamStatus', 'GetRecordStatus', 'GetMediaInputStatus'].includes(c.requestType)
+    );
+    assert.equal(polledCallsOnScenesPage.length, 0, `No status polling while no readout pad on active page (got ${polledCallsOnScenesPage.length})`);
+
+    // Switch back to Page 1
+    const p1Id = await pageReadout.evaluate(() => Deck.cfg.pages[0].id);
+    await pageReadout.evaluate((id) => Deck.setActivePage(id), p1Id);
+    await pageReadout.waitForTimeout(100);
+
+    // Clear calls and wait for polling -> status calls must occur now!
+    readoutObs.state.calls = [];
+    const pollStart = Date.now();
+    while (Date.now() - pollStart < 3000) {
+      if (readoutObs.state.calls.some((c) => ['GetStreamStatus', 'GetRecordStatus', 'GetMediaInputStatus'].includes(c.requestType))) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const polledCallsOnReadoutPage = readoutObs.state.calls.filter((c) =>
+      ['GetStreamStatus', 'GetRecordStatus', 'GetMediaInputStatus'].includes(c.requestType)
+    );
+    assert.ok(polledCallsOnReadoutPage.length > 0, 'Status polling resumes when page with readout pads is active');
+
+    // AC3 (part 2): Readouts clear on disconnect
+    // Re-activate stream and record and media
+    readoutObs.state.outputs.stream = true;
+    readoutObs.state.outputs.record = true;
+    readoutObs.state.mediaStates['Intro Video'] = 'OBS_MEDIA_STATE_PLAYING';
+    readoutObs.broadcast('StreamStateChanged', { outputActive: true, outputState: 'OBS_WEBSOCKET_OUTPUT_STARTED' });
+    readoutObs.broadcast('RecordStateChanged', { outputActive: true, outputState: 'OBS_WEBSOCKET_OUTPUT_STARTED' });
+    readoutObs.broadcast('MediaInputPlaybackStarted', { inputName: 'Intro Video' });
+    await pageReadout.waitForFunction(() => document.querySelector('#grid .pad[data-idx="0"] .sub')?.textContent.includes('00:01:05'));
+
+    // Close fake OBS connection
+    readoutObs.closeAll(1000, 'Normal Closure');
+    await pageReadout.waitForFunction(() => document.getElementById('conn-pill')?.classList.contains('bad'));
+
+    // Assert readouts cleared on disconnect
+    await pageReadout.waitForFunction(() => {
+      const subs = document.querySelectorAll('#grid .pad:not(.stats-pad) .sub');
+      return subs.length === 0;
+    });
+    assert.equal(await pageReadout.locator('#grid .pad:not(.stats-pad) .sub').count(), 0, 'All live readouts cleared on disconnect');
+
+    await ctxReadout.close();
+    console.log('  ✓ ticket #18: live readout polling, in-place updates, format, paused, clear on stop/disconnect & bottom strip');
+  } finally {
+    readoutObs.wss.close();
+  }
+
+  // 20. Starter layouts (#16)
+  const starterObs = createFakeObs(false);
+  await new Promise((r) => starterObs.wss.once('listening', r));
+  const starterPort = starterObs.wss.address().port;
+  try {
+    const ctxStarter = await browser.newContext();
+    const pageStarter = await ctxStarter.newPage();
+    pageStarter.on('pageerror', (e) => pageErrors.push(e.message));
+    pageStarter.on('dialog', (d) => d.accept());
+
+    // Connect to fake OBS
+    await pageStarter.goto(`${DECK_URL}?port=${starterPort}`);
+    await pageStarter.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageStarter.waitForFunction(() => Deck.obs.scenes.length >= 3);
+
+    const templates = ['Solo Streamer', 'Talk + Slides', 'Podcast/Interview'];
+
+    // 1. Each template applies while connected with slots filled from fake OBS
+    // Test Solo Streamer replaces initial empty starter deck
+    const callsBefore = starterObs.state.calls.length;
+    const snapsBefore = (await pageStarter.evaluate(async () => Deck.listSnapshots?.() || [])).length;
+
+    await pageStarter.waitForSelector('#import-wiz-dlg[open]');
+    await pageStarter.click('#wiz-mode-starter');
+    await pageStarter.selectOption('#wiz-starter-layout', 'Solo Streamer');
+    await pageStarter.click('#btn-wiz-apply');
+    await pageStarter.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+    // Solo Streamer verification
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages.length), 1, 'Starter deck replaced on first apply');
+    assert.equal(await pageStarter.evaluate(() => Deck.getActivePage().name), 'Solo Streamer', 'Active page renamed to Solo Streamer');
+    const soloPads = await pageStarter.evaluate(() => Deck.getActivePads());
+
+    // Fixed pads: Stream, Record, Chapter, Stats (Telemetry Pad), PANIC
+    assert.ok(soloPads.some((p) => p.type === 'output' && p.target === 'stream'), 'Solo Streamer has Stream pad');
+    assert.ok(soloPads.some((p) => p.type === 'output' && p.target === 'record'), 'Solo Streamer has Record pad');
+    assert.ok(soloPads.some((p) => p.type === 'chapter'), 'Solo Streamer has Chapter pad');
+    assert.ok(soloPads.some((p) => p.type === 'stats'), 'Solo Streamer has Telemetry Pad (stats)');
+    assert.ok(soloPads.some((p) => p.type === 'panic'), 'Solo Streamer has PANIC pad');
+
+    // Filled slots from fake OBS
+    const soloScenes = soloPads.filter((p) => p.type === 'scene' && p.mode === 'named').map((p) => p.sceneName);
+    assert.ok(soloScenes.includes('Main Cam'), 'Main Cam scene slot filled');
+    assert.ok(soloScenes.includes('Slides'), 'Slides scene slot filled');
+    assert.ok(soloScenes.includes('BRB'), 'BRB scene slot filled');
+
+    const soloMutes = soloPads.filter((p) => p.type === 'mute').map((p) => p.inputName);
+    assert.ok(soloMutes.includes('Mic/Aux'), 'Mic/Aux mute slot filled');
+    assert.ok(soloMutes.includes('Desktop Audio'), 'Desktop Audio mute slot filled');
+
+    const soloSources = soloPads.filter((p) => p.type === 'source').map((p) => p.sourceName);
+    assert.ok(soloSources.includes('Webcam'), 'Webcam source slot filled');
+
+    // Snapshot was taken first
+    const snapsAfterFirst = (await pageStarter.evaluate(async () => Deck.listSnapshots?.() || [])).length;
+    assert.ok(snapsAfterFirst > snapsBefore, 'Snapshot taken before applying starter layout');
+
+    // 2. An existing layout is never overwritten (append-vs-replace rule)
+    // Apply "Talk + Slides" when deck already has a page
+    await pageStarter.click('#btn-auto-import');
+    await pageStarter.waitForSelector('#import-wiz-dlg[open]');
+    await pageStarter.click('#wiz-mode-starter');
+    await pageStarter.selectOption('#wiz-starter-layout', 'Talk + Slides');
+    assert.equal(await pageStarter.evaluate(() => document.getElementById('wiz-replace').disabled), true, 'Replace disabled for existing layout');
+    await pageStarter.click('#btn-wiz-apply');
+    await pageStarter.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages.length), 2, 'Talk + Slides appended as new page, existing layout preserved');
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages[0].name), 'Solo Streamer', 'Existing Solo Streamer page preserved');
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages[1].name), 'Talk + Slides', 'New Talk + Slides page appended');
+
+    const talkPads = await pageStarter.evaluate(() => Deck.cfg.pages[1].pads);
+    assert.ok(talkPads.some((p) => p.type === 'output' && p.target === 'stream'), 'Talk + Slides has Stream pad');
+    assert.ok(talkPads.some((p) => p.type === 'output' && p.target === 'record'), 'Talk + Slides has Record pad');
+    assert.ok(talkPads.some((p) => p.type === 'chapter'), 'Talk + Slides has Chapter pad');
+    assert.ok(talkPads.some((p) => p.type === 'stats'), 'Talk + Slides has Telemetry Pad');
+    assert.ok(talkPads.some((p) => p.type === 'panic'), 'Talk + Slides has PANIC pad');
+
+    const talkScenes = talkPads.filter((p) => p.type === 'scene' && p.mode === 'named').map((p) => p.sceneName);
+    assert.ok(talkScenes.includes('Main Cam') && talkScenes.includes('Slides'), 'Talk + Slides scenes filled');
+
+    // Apply "Podcast/Interview"
+    await pageStarter.click('#btn-auto-import');
+    await pageStarter.waitForSelector('#import-wiz-dlg[open]');
+    await pageStarter.click('#wiz-mode-starter');
+    await pageStarter.selectOption('#wiz-starter-layout', 'Podcast/Interview');
+    await pageStarter.click('#btn-wiz-apply');
+    await pageStarter.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+    assert.equal(await pageStarter.evaluate(() => Deck.cfg.pages.length), 3, 'Podcast/Interview appended as 3rd page');
+    const podcastPads = await pageStarter.evaluate(() => Deck.cfg.pages[2].pads);
+    assert.ok(podcastPads.some((p) => p.type === 'output' && p.target === 'stream'), 'Podcast has Stream pad');
+    assert.ok(podcastPads.some((p) => p.type === 'output' && p.target === 'record'), 'Podcast has Record pad');
+    assert.ok(podcastPads.some((p) => p.type === 'chapter'), 'Podcast has Chapter pad');
+    assert.ok(podcastPads.some((p) => p.type === 'stats'), 'Podcast has Telemetry Pad');
+    assert.ok(podcastPads.some((p) => p.type === 'panic'), 'Podcast has PANIC pad');
+    assert.ok(podcastPads.some((p) => p.type === 'media' && p.inputName === 'Intro Video'), 'Podcast has Intro Video media slot filled');
+
+    // 3. No OBS write requests were sent
+    const mutatingCalls = starterObs.state.calls.slice(callsBefore).filter((c) => /^(Create|Set|Remove|Press|Trigger)/.test(c.requestType));
+    assert.equal(mutatingCalls.length, 0, 'Starter layouts sent 0 OBS write requests');
+
+    await ctxStarter.close();
+
+    // 4. Each template applies while disconnected with slots marked
+    const ctxOffline = await browser.newContext();
+    const pageOffline = await ctxOffline.newPage();
+    pageOffline.on('pageerror', (e) => pageErrors.push(e.message));
+    pageOffline.on('dialog', (d) => d.accept());
+
+    await pageOffline.goto(DECK_URL);
+    await pageOffline.waitForSelector('#grid .pad');
+    assert.notEqual(await pageOffline.evaluate(() => Deck.obs.status), 'ok', 'Deck is disconnected');
+
+    for (const tplName of templates) {
+      await pageOffline.click('#btn-auto-import');
+      await pageOffline.waitForSelector('#import-wiz-dlg[open]');
+      await pageOffline.click('#wiz-mode-starter');
+      await pageOffline.selectOption('#wiz-starter-layout', tplName);
+      assert.equal(await pageOffline.isEnabled('#btn-wiz-apply'), true, 'Create button enabled when disconnected in Starter mode');
+      await pageOffline.click('#btn-wiz-apply');
+      await pageOffline.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+      const page = await pageOffline.evaluate((name) => Deck.cfg.pages.find((p) => p.name === name), tplName);
+      assert.ok(page, `Disconnected template "${tplName}" created page`);
+
+      // Fixed pads are still configured
+      assert.ok(page.pads.some((p) => p.type === 'output' && p.target === 'stream'), `${tplName} has Stream pad while disconnected`);
+      assert.ok(page.pads.some((p) => p.type === 'output' && p.target === 'record'), `${tplName} has Record pad while disconnected`);
+      assert.ok(page.pads.some((p) => p.type === 'chapter'), `${tplName} has Chapter pad while disconnected`);
+      assert.ok(page.pads.some((p) => p.type === 'stats'), `${tplName} has Telemetry Pad while disconnected`);
+      assert.ok(page.pads.some((p) => p.type === 'panic'), `${tplName} has PANIC pad while disconnected`);
+
+      // Unfilled slots are marked empty pads (type: 'none', non-empty label and icon)
+      const markedEmptyPads = page.pads.filter((p) => p.type === 'none' && p.label && p.label.length > 0);
+      assert.ok(markedEmptyPads.length >= 5, `${tplName} has marked empty slot pads while disconnected (found ${markedEmptyPads.length})`);
+      for (const p of markedEmptyPads) {
+        assert.ok(p.icon, `Marked slot "${p.label}" has an icon`);
+      }
+    }
+
+    await ctxOffline.close();
+
+    // 5. Glossary gains Starter Layout
+    const glossaryText = fs.readFileSync(join(__dirname, 'GLOSSARY.md'), 'utf8');
+    assert.ok(glossaryText.includes('**Starter Layout**:'), 'GLOSSARY.md contains Starter Layout');
+
+    console.log('  ✓ starter layout templates as data + auto-import wizard choice (#16)');
+  } finally {
+    starterObs.wss.close();
+  }
+
+  // 18. Scene-Linked Page (#20)
+  const sceneObs = createFakeObs(false);
+  await new Promise((r) => sceneObs.wss.once('listening', r));
+  const scenePort = sceneObs.wss.address().port;
+  try {
+    const ctxScene = await browser.newContext();
+    const pageScene = await ctxScene.newPage();
+    pageScene.on('pageerror', (e) => pageErrors.push(e.message));
+    pageScene.on('dialog', (dlg) => dlg.accept());
+    await pageScene.goto(`${DECK_URL}?port=${scenePort}`);
+    await pageScene.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageScene.waitForTimeout(100);
+    if (await pageScene.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageScene.click('#btn-wiz-cancel');
+    }
+
+    // 1. Link active page ("Main") to "Main Cam" via Page Dialog
+    await pageScene.click('#btn-deck-cfg');
+    await pageScene.waitForSelector('#deck-dlg[open]');
+    const dScene = pageScene.locator('#d-scene');
+    assert.equal(await dScene.count(), 1, '#d-scene select exists in Page dialog');
+    await dScene.selectOption('Main Cam');
+    await pageScene.click('#deck-form button[type="submit"]');
+    await pageScene.waitForFunction(() => !document.getElementById('deck-dlg').open);
+
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().sceneName), 'Main Cam', 'Page 1 linked to Main Cam');
+    const tab0 = pageScene.locator('#deck-tabs .page-tab').nth(0);
+    const tab0Text = await tab0.textContent();
+    assert.ok(tab0Text.includes('Main Cam'), 'Page tab displays linked scene');
+
+    // 2. Add second page ("Slides Page") and test duplicate scene link warning
+    await pageScene.click('#btn-deck-add');
+    await pageScene.waitForFunction(() => document.querySelectorAll('#deck-tabs .page-tab').length === 2);
+    await pageScene.click('#btn-deck-cfg');
+    await pageScene.waitForSelector('#deck-dlg[open]');
+    await pageScene.fill('#d-name', 'Slides Page');
+
+    // Attempting to select "Main Cam" should show warning naming the first Page ("Main") and disable submit
+    await dScene.selectOption('Main Cam');
+    const warnEl = pageScene.locator('#d-scene-warn');
+    assert.equal(await warnEl.isVisible(), true, 'Warning displayed for duplicate scene link');
+    const warnText = await warnEl.textContent();
+    assert.ok(warnText.includes('Main'), `Warning names the first Page ("Main"): "${warnText}"`);
+    assert.ok(warnText.includes('Main Cam'), `Warning names the colliding scene: "${warnText}"`);
+    const applyBtn = pageScene.locator('#deck-form button[type="submit"]');
+    assert.equal(await applyBtn.isDisabled(), true, 'Apply button disabled when duplicate scene linked');
+
+    // Select valid scene "Slides"
+    await dScene.selectOption('Slides');
+    assert.equal(await warnEl.isVisible(), false, 'Warning hidden when valid unlinked scene selected');
+    assert.equal(await applyBtn.isDisabled(), false, 'Apply button enabled for valid unlinked scene');
+    await applyBtn.click();
+    await pageScene.waitForFunction(() => !document.getElementById('deck-dlg').open);
+
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page');
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().sceneName), 'Slides', 'Slides Page linked to Slides');
+    const tab1 = pageScene.locator('#deck-tabs .page-tab').nth(1);
+    assert.ok((await tab1.textContent()).includes('Slides'), 'Slides Page tab displays linked scene');
+
+    // 3. Program change brings up linked Page; preview change does not
+    // Currently on Slides Page (page index 1).
+    // Preview scene change to 'Main Cam' -> active page should still be Slides Page (page-2)
+    sceneObs.broadcast('CurrentPreviewSceneChanged', { sceneName: 'Main Cam' });
+    await pageScene.waitForTimeout(60);
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page', 'Preview scene change ignored');
+
+    // Program scene change to 'Main Cam' -> switches to Page 1 ('Main')
+    sceneObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Main Cam' });
+    await pageScene.waitForFunction(() => Deck.getActivePage().name === 'Main');
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Main', 'Program scene change brought up linked Page');
+
+    // 4. Manual switch holds until next scene change
+    // User clicks Slides Page tab manually
+    await tab1.click();
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page', 'Manual switch to Slides Page succeeded');
+    await pageScene.waitForTimeout(100);
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page', 'Manual switch holds while scene unchanged');
+
+    // Next program scene change switches to the new scene's linked page
+    sceneObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Slides' });
+    await pageScene.waitForFunction(() => Deck.getActivePage().name === 'Slides Page');
+
+    sceneObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Main Cam' });
+    await pageScene.waitForFunction(() => Deck.getActivePage().name === 'Main');
+
+    // 5. Edit Mode blocks automatic switching
+    await pageScene.click('#btn-edit');
+    assert.ok(await pageScene.evaluate(() => Deck.editMode), 'Edit Mode on');
+    sceneObs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Slides' });
+    await pageScene.waitForTimeout(100);
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Main', 'Edit Mode blocks automatic Page switching');
+    await pageScene.click('#btn-edit');
+    assert.ok(!await pageScene.evaluate(() => Deck.editMode), 'Edit Mode off');
+
+    // 6. Rename follows; removal clears with a message
+    // Rename 'Slides' -> 'Slide Deck' in OBS
+    sceneObs.broadcast('SceneNameChanged', { oldSceneName: 'Slides', sceneName: 'Slide Deck' });
+    await pageScene.waitForFunction(() => {
+      const p = Deck.cfg.pages.find((x) => x.name === 'Slides Page');
+      return p && p.sceneName === 'Slide Deck';
+    });
+    assert.ok((await tab1.textContent()).includes('Slide Deck'), 'Tab reflects renamed scene');
+
+    // Scene removal clears the link and displays a message
+    sceneObs.broadcast('SceneRemoved', { sceneName: 'Slide Deck' });
+    await pageScene.waitForFunction(() => {
+      const p = Deck.cfg.pages.find((x) => x.name === 'Slides Page');
+      return p && !p.sceneName;
+    });
+    const msgText = await pageScene.locator('#msg-info').textContent();
+    assert.ok(msgText.toLowerCase().includes('cleared') && msgText.includes('Slides Page'), `Message reports link cleared: "${msgText}"`);
+    assert.ok(!(await tab1.textContent()).includes('Slide Deck'), 'Tab no longer displays removed scene');
+
+    // 7. Connecting while the linked scene is live opens that Page
+    // Configure layout so second page is linked to 'BRB'
+    await pageScene.evaluate(() => {
+      Deck.cfg.pages[1].sceneName = 'BRB';
+      Deck.cfg.activePageId = Deck.cfg.pages[0].id;
+      Deck.saveCfg();
+    });
+    // Set program scene on fake OBS to 'BRB'
+    sceneObs.state.programScene = 'BRB';
+    // Reload page to reconnect fresh
+    await pageScene.reload();
+    await pageScene.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageScene.waitForFunction(() => Deck.getActivePage().id === Deck.cfg.pages[1].id);
+    assert.equal(await pageScene.evaluate(() => Deck.getActivePage().name), 'Slides Page', 'Connect opened Page linked to live scene');
+
+    // 8. Links survive export/import
+    const exported = await pageScene.evaluate(() => Deck.exportConfig());
+    assert.equal(exported.pages[1].sceneName, 'BRB', 'Exported layout contains sceneName');
+
+    const imported = await pageScene.evaluate((data) => {
+      const res = Deck.migrateConfig(data);
+      return res.pages[1].sceneName;
+    }, exported);
+    assert.equal(imported, 'BRB', 'Migrate config preserved sceneName');
+
+    await ctxScene.close();
+    console.log('  ✓ Scene-Linked Page (#20)');
+  } finally {
+    sceneObs.wss.close();
   }
 
   console.log('\nPASS: all deck edge E2E checks succeeded.');

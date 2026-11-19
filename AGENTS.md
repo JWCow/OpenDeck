@@ -24,6 +24,7 @@ Before changing terminology, onboarding, or connection behavior, read:
 - `deck/ui-palette.js` — Right-hand Command Palette (`renderPalette`, `isSelfContained`) with live search, categorized accordions, live OBS items, drag-and-drop onto pads, and Palette Splitter resizing (`initPaletteResizer`).
 - `deck/ui-select.js` — Edit-Mode multi-select manager (`selectedPads: Set<number>`, `clearSelection`, `updateSelectionUi`, `handleSelectionClick`) and `#select-bar` batch actions (Duplicate, Move, Color, Clear, Select All).
 - `deck/ui-dialogs.js` — Page & Grid Settings modal (`#deck-dlg`, `openPageDialog`), Auto-Import Wizard (`#import-wiz-dlg`, `openAutoImportWizard`, `onObsConnected`), and PANIC Reset Steps modal (`#panic-dlg`, `openPanicDialog`).
+- `deck/snapshots.js` — Automatic IndexedDB layout backups (`Deck.createSnapshot`, `Deck.listSnapshots`, `Deck.restoreSnapshot`, debounced edit auto-saving, pruning to newest 20) and Snapshots dialog.
 - `deck/ui-boot.js` — Font Scaler (`initFontScaler`), Dark/Light Theme toggle (`initTheme`), toolbar & WebSocket connection controls, v1/v2/v2.1/v2.2 JSON export/import, layout reset, and initial boot sequence.
 - `installers/Install-Windows.bat` & `installers/Install-Mac.command` — Zero-dependency 1-click setup helpers packaged at the root of release ZIPs. They copy `obs-virtual-deck` to `Documents/obs-virtual-deck`, inspect local OBS `obs-websocket/config.json` read-only for `server_enabled` / `server_port` (appending `?port=<server_port>` when detected and reporting WebSocket status without ever reading or embedding `server_password`), and copy the `file:///.../deck.html` URL to clipboard.
 - `scripts/build-release.mjs` — Zero-dependency Node.js release packager (`npm run build:release`) outputting `dist/obs-virtual-deck/`, `dist/obs-virtual-deck-v<version>.zip`, `dist/obs-virtual-deck-latest.zip`, and `dist/obs-virtual-deck.zip`.
@@ -35,7 +36,7 @@ Before changing terminology, onboarding, or connection behavior, read:
 1. **Zero backend, zero build, `file://` compatible:**
    - Do **not** switch `<script defer src="deck/...">` to `<script type="module">` — Chromium/OBS CEF blocks ES module imports over `file://` due to CORS.
    - Keep `sha256Base64` in `deck/obs-ws.js` pure JS — `crypto.subtle` is unavailable on `file://` and non-HTTPS LAN origins.
-   - Keep the script load order in `deck.html`: `obs-ws.js` → `actions.js` → `ui-pages.js` → `ui-grid.js` → `ui-editor.js` → `ui-palette.js` → `ui-select.js` → `ui-dialogs.js` → `ui-boot.js` (each attaches to `window.Deck`).
+   - Keep the script load order in `deck.html`: `obs-ws.js` → `actions.js` → `ui-pages.js` → `ui-grid.js` → `ui-editor.js` → `ui-palette.js` → `ui-select.js` → `ui-dialogs.js` → `snapshots.js` → `ui-boot.js` (each attaches to `window.Deck`).
 2. **XSS safety:**
    - Escape every OBS-provided name (`sceneName`, `sourceName`, `filterName`, `inputName`, `hotkeyName`, `profileName`, `collectionName`, `transitionName`) and user-provided `label`/`icon`/`hotkey`/`chapterName`/`filePath` with `Deck.esc()` before injecting into `innerHTML`.
 3. **Non-destructive ticks & stats updates:**
