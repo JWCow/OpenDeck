@@ -817,6 +817,94 @@ try {
     outObs.wss.close();
   }
 
+  // 16. Media, Image and Transform Pad state fixes (#12)
+  // AC 1: A media pause event from OBS turns the Media Pad off
+  await page.evaluate(() => {
+    Deck.cfg.pages[0].pads[0] = {
+      type: 'media',
+      inputName: 'Intro Video',
+      mediaAction: 'play_pause',
+      label: 'Video',
+    };
+    Deck.obs.mediaStates['Intro Video'] = 'OBS_MEDIA_STATE_PLAYING';
+    Deck.renderGrid();
+  });
+  await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].className.includes('active'));
+  broadcast('MediaInputActionTriggered', {
+    inputName: 'Intro Video',
+    mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE',
+  });
+  await page.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].className.includes('active'), null, { timeout: 3000 });
+  console.log('  ✓ media pause event from OBS turns Media Pad off (#12)');
+
+  // AC 2: Set file on a slideshow sends the slideshow file-list setting
+  state.calls.length = 0;
+  await page.evaluate(async () => {
+    Deck.cfg.pages[0].pads[1] = {
+      type: 'image',
+      inputName: 'Photo Slideshow',
+      mode: 'set_file',
+      filePath: '/img/slideshow-new.png',
+      label: 'Slideshow File',
+    };
+    Deck.renderGrid();
+  });
+  await page.locator('#grid .pad').nth(1).click();
+  await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[1].className.includes('active'));
+  const slideshowCall = state.calls.find(
+    (c) => c.requestType === 'SetInputSettings' && c.requestData?.inputName === 'Photo Slideshow'
+  );
+  assert.ok(slideshowCall, 'SetInputSettings called for Photo Slideshow');
+  assert.equal(slideshowCall.requestData.inputSettings.file, undefined, 'does not send single file setting on slideshow');
+  assert.deepEqual(
+    slideshowCall.requestData.inputSettings.files,
+    [{ value: '/img/slideshow-new.png', hidden: false, selected: false }],
+    'sends slideshow file-list setting'
+  );
+  console.log('  ✓ set file on slideshow sends file-list setting (#12)');
+
+  // AC 3: After a reload, a PiP'd source shows its Transform Pad as active
+  await page.evaluate(() => {
+    Deck.cfg.pages[0].pads[2] = {
+      type: 'transform',
+      sceneName: 'Main Cam',
+      sourceName: 'Webcam',
+      preset: 'toggle_pip',
+      label: 'Cam PiP',
+    };
+    Deck.saveCfg();
+  });
+  state.itemTransforms['Main Cam:1'] = {
+    positionX: 1350,
+    positionY: 746,
+    scaleX: 0.28,
+    scaleY: 0.28,
+    sourceWidth: 1920,
+    sourceHeight: 1080,
+    alignment: 5,
+  };
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  await page.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+  await page.waitForFunction(() => document.querySelectorAll('#grid .pad')[2].className.includes('active'), null, { timeout: 3000 });
+
+  // Reset source transform to full scale in OBS and reload; pad must be inactive
+  state.itemTransforms['Main Cam:1'] = {
+    positionX: 0,
+    positionY: 0,
+    scaleX: 1,
+    scaleY: 1,
+    sourceWidth: 1920,
+    sourceHeight: 1080,
+    alignment: 5,
+  };
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  await page.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+  await page.waitForFunction(() => !document.querySelectorAll('#grid .pad')[2].className.includes('active'), null, { timeout: 3000 });
+
+  console.log('  ✓ PiP source shows Transform Pad as active after reload (#12)');
+
   console.log('\nPASS: all deck edge E2E checks succeeded.');
 } finally {
   if (browser) await browser.close();

@@ -1257,6 +1257,10 @@
         ...[...monitorInputs].map(Deck.fetchMonitorType),
       ]);
 
+      if (typeof Deck.syncTransforms === 'function') {
+        try { await Deck.syncTransforms(); } catch {}
+      }
+
       Deck.updateSceneHeader();
       Deck.renderGrid();
       Deck.syncStatsPolling();
@@ -1341,6 +1345,30 @@
     } else if (type === 'MediaInputPlaybackEnded') {
       if (d.inputName) obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_ENDED';
       Deck.renderGrid();
+    } else if (type === 'MediaInputActionTriggered') {
+      if (d.inputName) {
+        if (d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' || d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART' || d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_NEXT' || d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PREVIOUS') {
+          obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_PLAYING';
+        } else if (d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE') {
+          obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_PAUSED';
+        } else if (d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP') {
+          obs.mediaStates[d.inputName] = 'OBS_MEDIA_STATE_STOPPED';
+        }
+      }
+      Deck.renderGrid();
+    } else if (type === 'SceneItemTransformChanged') {
+      const { sceneName, sceneItemId, sceneItemTransform } = d;
+      if (sceneName && sceneItemId != null && sceneItemTransform) {
+        const items = obs.itemsByScene[sceneName] || [];
+        const item = items.find((it) => it.sceneItemId === sceneItemId);
+        if (item?.sourceName && typeof Deck.deriveTransformPreset === 'function') {
+          obs.transforms[`${sceneName}\0${item.sourceName}`] = Deck.deriveTransformPreset(
+            sceneItemTransform,
+            obs.videoSettings
+          );
+          Deck.renderGrid();
+        }
+      }
     } else if (type === 'CurrentProfileChanged') {
       obs.currentProfile = d.profileName || '';
       Deck.renderGrid();
