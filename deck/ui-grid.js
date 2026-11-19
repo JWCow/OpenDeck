@@ -322,11 +322,43 @@
     const isDragOver = el.classList.contains('drag-over');
     const isDraggingEl = el.classList.contains('dragging');
     const selectedPads = Deck.getSelectedPads();
+    const isSelected = selectedPads.has(i);
+
+    const subText = p.type === 'stats' ? Deck.formatStatsText(p.mode || 'all') : tickText(rt);
+    const ctxText = (typeof Deck.getPadContextSubtitle === 'function') ? Deck.getPadContextSubtitle(p) : '';
+    const lbl = p.label || padFallbackLabel(p, i, page.cols);
+
+    const sig = [
+      page.id,
+      page.cols,
+      i,
+      p.type,
+      active ? 1 : 0,
+      isRunning ? 1 : 0,
+      isArmed ? 1 : 0,
+      isFullFace ? 1 : 0,
+      isDragOver ? 1 : 0,
+      isDraggingEl ? 1 : 0,
+      isSelected ? 1 : 0,
+      Deck.editMode ? 1 : 0,
+      p.color && p.type !== 'none' ? p.color : '',
+      p.hideLabel ? 1 : 0,
+      lbl,
+      ctxText,
+      p.image || '',
+      p.imageFit || '',
+      p.icon || '',
+      p.type === 'stats' ? (p.mode || 'all') : '',
+    ].join('\x1f');
+
+    if (el._padSig === sig) return;
+    el._padSig = sig;
+
     el.className = 'pad'
       + (p.type === 'none' ? ' empty' : '')
       + (p.type === 'stats' ? ' stats-pad' : '')
       + (Deck.editMode ? ' edit-mode' : '')
-      + (selectedPads.has(i) ? ' selected' : '')
+      + (isSelected ? ' selected' : '')
       + (active ? ' active' : '')
       + (isRunning ? ' running' : '')
       + (isArmed ? ' armed' : '')
@@ -346,9 +378,6 @@
       el.style.background = p.color && p.type !== 'none' ? p.color : '';
     }
     el.draggable = Deck.editMode && p.type !== 'none';
-    const subText = p.type === 'stats' ? Deck.formatStatsText(p.mode || 'all') : tickText(rt);
-    const ctxText = (typeof Deck.getPadContextSubtitle === 'function') ? Deck.getPadContextSubtitle(p) : '';
-    const lbl = p.label || padFallbackLabel(p, i, page.cols);
     const tipParts = [lbl || `Pad ${i + 1}`];
     if (ctxText) tipParts.push(`[${ctxText}]`);
     if (p.type === 'stats' && subText) tipParts.push(`(${subText})`);
@@ -372,11 +401,20 @@
       + `${subText ? `<span class="sub">${esc(subText)}</span>` : ''}`;
   }
 
-  Deck.TAGS = TAGS;
-  Deck.padFallbackLabel = padFallbackLabel;
-  Deck.initGrid = initGrid;
-  Deck.renderPad = renderPad;
-  Deck.renderGrid = () => {
+  let renderFrame = null;
+  function scheduleRenderGrid() {
+    if (renderFrame !== null) return;
+    renderFrame = requestAnimationFrame(() => {
+      renderFrame = null;
+      Deck.renderGrid();
+    });
+  }
+
+  function renderGrid() {
+    if (renderFrame !== null) {
+      cancelAnimationFrame(renderFrame);
+      renderFrame = null;
+    }
     const page = Deck.getActivePage();
     Deck.renderPageBar();
     initGrid(page);
@@ -385,5 +423,12 @@
       renderPad(p, i, btns[i], page);
     });
     Deck.updateSelectionUi();
-  };
+  }
+
+  Deck.TAGS = TAGS;
+  Deck.padFallbackLabel = padFallbackLabel;
+  Deck.initGrid = initGrid;
+  Deck.renderPad = renderPad;
+  Deck.scheduleRenderGrid = scheduleRenderGrid;
+  Deck.renderGrid = renderGrid;
 })();
