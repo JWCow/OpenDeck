@@ -1061,14 +1061,14 @@
     return pages;
   };
 
-  Deck.applyAutoImport = (pages, { replaceEmptyStarter = true } = {}) => {
+  Deck.applyAutoImport = (pages, { replaceEmptyStarter = true, skipSnapshot = false } = {}) => {
     const incoming = Array.isArray(pages) ? pages.filter((p) => p && typeof p === 'object') : [];
     if (!incoming.length) return [];
     const replace = replaceEmptyStarter && Deck.isStarterDeck();
     const usedIds = replace ? new Set() : new Set(Deck.cfg.pages.map((d) => d.id));
     const normalized = incoming.map((p, idx) => normalizePage(p, idx, usedIds, false));
     if (replace) {
-      if (typeof Deck.createSnapshot === 'function') Deck.createSnapshot('Before Auto-Import');
+      if (!skipSnapshot && typeof Deck.createSnapshot === 'function') Deck.createSnapshot('Before Auto-Import');
       if (typeof Deck.abortPageTimers === 'function') {
         for (const old of Deck.cfg.pages) Deck.abortPageTimers(old.id);
       }
@@ -1098,6 +1098,427 @@
     const padCount = normalized.reduce((sum, p) => sum + (p.pads || []).filter((pad) => pad && pad.type !== 'none').length, 0);
     Deck.setMsg(`Auto-Imported ${padCount} pad(s) across ${normalized.length} page(s)`);
     return normalized;
+  };
+
+  const STARTER_LAYOUTS = [
+    {
+      id: 'solo-streamer',
+      name: 'Solo Streamer',
+      cols: 4,
+      rows: 3,
+      pads: [
+        {
+          slot: 'scene',
+          match: /cam|main|talk|chat|face/i,
+          fallbackIndex: 0,
+          label: 'Main Scene',
+          icon: '🎥',
+        },
+        {
+          slot: 'scene',
+          match: /game|play|screen|desktop|slide/i,
+          fallbackIndex: 1,
+          label: 'Game / Screen',
+          icon: '🎮',
+        },
+        {
+          slot: 'scene',
+          match: /brb|break|away|pause/i,
+          fallbackIndex: 2,
+          label: 'BRB Scene',
+          icon: '☕',
+        },
+        {
+          type: 'output',
+          target: 'stream',
+          mode: 'toggle',
+          label: 'Stream',
+          icon: '📡',
+          color: '#991b1b',
+        },
+        {
+          slot: 'mute',
+          match: /mic|aux|input/i,
+          fallbackIndex: 0,
+          label: 'Mic Mute',
+          icon: '🎙️',
+        },
+        {
+          slot: 'mute',
+          match: /desktop|game|audio|music/i,
+          fallbackIndex: 1,
+          label: 'Desktop Audio',
+          icon: '🔊',
+        },
+        {
+          slot: 'source',
+          match: /webcam|cam|overlay|alert|face/i,
+          label: 'Webcam / Source',
+          icon: '📷',
+        },
+        {
+          type: 'output',
+          target: 'record',
+          mode: 'toggle',
+          label: 'Record',
+          icon: '🔴',
+          color: '#991b1b',
+        },
+        {
+          type: 'chapter',
+          label: 'Chapter',
+          icon: '🔖',
+          color: '#854d0e',
+        },
+        {
+          type: 'stats',
+          mode: 'all',
+          label: 'OBS Stats',
+          icon: '📊',
+          color: '#222733',
+        },
+        {
+          type: 'studio',
+          action: 'toggle',
+          label: 'Studio Mode',
+          icon: '🎬',
+          color: '#581c87',
+        },
+        {
+          type: 'panic',
+          label: 'PANIC',
+          icon: '🚨',
+          color: '#991b1b',
+        },
+      ],
+    },
+    {
+      id: 'talk-slides',
+      name: 'Talk + Slides',
+      cols: 4,
+      rows: 3,
+      pads: [
+        {
+          slot: 'scene',
+          match: /speaker|talk|cam|face|main/i,
+          fallbackIndex: 0,
+          label: 'Speaker Scene',
+          icon: '🎥',
+        },
+        {
+          slot: 'scene',
+          match: /slide|deck|present/i,
+          fallbackIndex: 1,
+          label: 'Slides Scene',
+          icon: '🖥️',
+        },
+        {
+          slot: 'scene',
+          match: /brb|break|intro|start/i,
+          fallbackIndex: 2,
+          label: 'BRB / Intro',
+          icon: '☕',
+        },
+        {
+          type: 'output',
+          target: 'stream',
+          mode: 'toggle',
+          label: 'Stream',
+          icon: '📡',
+          color: '#991b1b',
+        },
+        {
+          slot: 'mute',
+          match: /mic|aux|input/i,
+          fallbackIndex: 0,
+          label: 'Mic Mute',
+          icon: '🎙️',
+        },
+        {
+          slot: 'source',
+          match: /slide|present|deck|image|pdf/i,
+          label: 'Slide Source',
+          icon: '🖼️',
+        },
+        {
+          type: 'studio',
+          action: 'toggle',
+          label: 'Studio Mode',
+          icon: '🎬',
+          color: '#581c87',
+        },
+        {
+          type: 'output',
+          target: 'record',
+          mode: 'toggle',
+          label: 'Record',
+          icon: '🔴',
+          color: '#991b1b',
+        },
+        {
+          type: 'chapter',
+          label: 'Chapter',
+          icon: '🔖',
+          color: '#854d0e',
+        },
+        {
+          type: 'stats',
+          mode: 'all',
+          label: 'OBS Stats',
+          icon: '📊',
+          color: '#222733',
+        },
+        {
+          type: 'scene',
+          mode: 'next',
+          label: 'Next Scene',
+          icon: '⏭️',
+          color: '#115e59',
+        },
+        {
+          type: 'panic',
+          label: 'PANIC',
+          icon: '🚨',
+          color: '#991b1b',
+        },
+      ],
+    },
+    {
+      id: 'podcast-interview',
+      name: 'Podcast/Interview',
+      cols: 4,
+      rows: 3,
+      pads: [
+        {
+          slot: 'scene',
+          match: /host|main|cam|talk/i,
+          fallbackIndex: 0,
+          label: 'Host Scene',
+          icon: '🎥',
+        },
+        {
+          slot: 'scene',
+          match: /guest|split|side|interview|slides/i,
+          fallbackIndex: 1,
+          label: 'Guest Scene',
+          icon: '👥',
+        },
+        {
+          slot: 'scene',
+          match: /both|wide|all|group|brb/i,
+          fallbackIndex: 2,
+          label: 'Wide / Both',
+          icon: '🎬',
+        },
+        {
+          type: 'output',
+          target: 'stream',
+          mode: 'toggle',
+          label: 'Stream',
+          icon: '📡',
+          color: '#991b1b',
+        },
+        {
+          slot: 'mute',
+          match: /host|mic|aux|input/i,
+          fallbackIndex: 0,
+          label: 'Host Mic',
+          icon: '🎙️',
+        },
+        {
+          slot: 'mute',
+          match: /guest|aux|discord|desktop|audio/i,
+          fallbackIndex: 1,
+          label: 'Guest Audio',
+          icon: '🎧',
+        },
+        {
+          slot: 'media',
+          match: /media|video|intro|sound|music/i,
+          label: 'Soundboard / Media',
+          icon: '🎞️',
+        },
+        {
+          type: 'output',
+          target: 'record',
+          mode: 'toggle',
+          label: 'Record',
+          icon: '🔴',
+          color: '#991b1b',
+        },
+        {
+          type: 'chapter',
+          label: 'Chapter',
+          icon: '🔖',
+          color: '#854d0e',
+        },
+        {
+          type: 'stats',
+          mode: 'all',
+          label: 'OBS Stats',
+          icon: '📊',
+          color: '#222733',
+        },
+        {
+          type: 'output',
+          target: 'vcam',
+          mode: 'toggle',
+          label: 'Virtual Cam',
+          icon: '📹',
+          color: '#166534',
+        },
+        {
+          type: 'panic',
+          label: 'PANIC',
+          icon: '🚨',
+          color: '#991b1b',
+        },
+      ],
+    },
+  ];
+
+  function pickCleanItem(list, match, fallbackIndex) {
+    if (!Array.isArray(list) || !list.length) return null;
+    const clean = list.filter((s) => typeof s === 'string' && !s.startsWith('<'));
+    if (match) {
+      const foundClean = clean.find((s) => match.test(s));
+      if (foundClean) return foundClean;
+      const foundAny = list.find((s) => typeof s === 'string' && match.test(s));
+      if (foundAny) return foundAny;
+    }
+    if (fallbackIndex != null) {
+      if (clean[fallbackIndex]) return clean[fallbackIndex];
+      if (list[fallbackIndex]) return list[fallbackIndex];
+    }
+    return null;
+  }
+
+  function resolveStarterPad(def, obs) {
+    if (!def.slot) {
+      return normalizePad(JSON.parse(JSON.stringify(def)));
+    }
+    const connected = obs && obs.status === 'ok';
+    const emptySlotPad = () => ({
+      type: 'none',
+      label: def.label || '',
+      icon: def.icon || '',
+      color: COLORS[0],
+    });
+
+    if (!connected) {
+      return emptySlotPad();
+    }
+
+    if (def.slot === 'scene') {
+      const found = pickCleanItem(obs.scenes || [], def.match, def.fallbackIndex);
+      if (found) {
+        return normalizePad({
+          type: 'scene',
+          mode: 'named',
+          sceneName: found,
+          label: found,
+          icon: smartSceneIcon(found),
+          color: '#991b1b',
+        });
+      }
+      return emptySlotPad();
+    }
+
+    if (def.slot === 'mute') {
+      const nonAudioKindRe = /^(image_source|slideshow(_v2)?|browser_source|color_source|text_|window_capture|monitor_capture|display_capture)/i;
+      const allInputs = obs.inputs || [];
+      const audioCandidates = allInputs.filter((inp) => (
+        typeof obs.mutes[inp] === 'boolean' && !nonAudioKindRe.test(obs.inputKinds[inp] || '')
+      ));
+      const candidates = audioCandidates.length ? audioCandidates : allInputs;
+      const found = pickCleanItem(candidates, def.match, def.fallbackIndex);
+      if (found) {
+        return normalizePad({
+          type: 'mute',
+          inputName: found,
+          mode: 'toggle',
+          label: found,
+          icon: def.icon || '🎙️',
+          color: '#854d0e',
+        });
+      }
+      return emptySlotPad();
+    }
+
+    if (def.slot === 'source') {
+      const targets = [...new Set([...(obs.scenes || []), ...(obs.groups || [])])];
+      let foundScene = '';
+      let foundSource = '';
+      for (const sc of targets) {
+        const items = obs.itemsByScene[sc] || [];
+        const item = def.match
+          ? items.find((it) => it?.sourceName && def.match.test(it.sourceName))
+          : items[0];
+        if (item && item.sourceName) {
+          foundScene = sc;
+          foundSource = item.sourceName;
+          break;
+        }
+      }
+      if (foundSource) {
+        return normalizePad({
+          type: 'source',
+          sceneName: foundScene,
+          sourceName: foundSource,
+          mode: 'toggle',
+          label: foundSource,
+          icon: smartSourceIcon(foundSource, obs.inputKinds[foundSource]),
+          color: '#115e59',
+        });
+      }
+      return emptySlotPad();
+    }
+
+    if (def.slot === 'media') {
+      const mediaList = obs.mediaInputs || [];
+      let found = def.match ? mediaList.find((m) => def.match.test(m)) : mediaList[0];
+      if (found) {
+        return normalizePad({
+          type: 'media',
+          inputName: found,
+          mediaAction: 'play_pause',
+          label: found,
+          icon: '🎞️',
+          color: '#166534',
+        });
+      }
+      return emptySlotPad();
+    }
+
+    return emptySlotPad();
+  }
+
+  function buildStarterLayoutPage(nameOrId, obs = Deck.obs) {
+    const tpl = STARTER_LAYOUTS.find((t) => t.id === nameOrId || t.name === nameOrId) || STARTER_LAYOUTS[0];
+    if (!tpl) return null;
+    const total = tpl.cols * tpl.rows;
+    const pads = Array.from({ length: total }, emptyPad);
+    for (let i = 0; i < tpl.pads.length && i < total; i++) {
+      pads[i] = resolveStarterPad(tpl.pads[i], obs);
+    }
+    return {
+      id: `page-${tpl.id}`,
+      name: tpl.name,
+      cols: tpl.cols,
+      rows: tpl.rows,
+      pads,
+    };
+  }
+
+  Deck.STARTER_LAYOUTS = STARTER_LAYOUTS;
+  Deck.buildStarterLayoutPage = buildStarterLayoutPage;
+  Deck.applyStarterLayout = (templateName, { replaceEmptyStarter = true } = {}) => {
+    const page = buildStarterLayoutPage(templateName);
+    if (!page) return [];
+    if (typeof Deck.createSnapshot === 'function') {
+      Deck.createSnapshot('Before Starter Layout');
+    }
+    return Deck.applyAutoImport([page], { replaceEmptyStarter, skipSnapshot: true });
   };
 
   Deck.setMsg = (txt) => {

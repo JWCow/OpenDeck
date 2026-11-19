@@ -203,7 +203,19 @@
   <div class="dlg-h"><span>🪄 Auto-Import from OBS</span><button id="import-wiz-close" type="button" class="btn sm">✕</button></div>
   <form id="import-wiz-form" class="frm" method="dialog">
     <div id="wiz-summary" class="wiz-summary">Read-only setup: inspects your connected OBS Studio scene collection and builds Pages automatically without modifying OBS.</div>
-    <div class="wiz-checks">
+    <div class="wiz-mode-choice" style="display:flex;gap:12px;margin:6px 0 10px;">
+      <label class="chk"><input type="radio" name="wiz-mode" id="wiz-mode-categories" value="categories" checked> <span>OBS Categories</span></label>
+      <label class="chk"><input type="radio" name="wiz-mode" id="wiz-mode-starter" value="starter"> <span>Starter layout</span></label>
+    </div>
+    <div id="wiz-starter-row" class="row" style="display:none;margin-bottom:8px;">
+      <label for="wiz-starter-layout">Starter layout</label>
+      <select id="wiz-starter-layout">
+        <option value="Solo Streamer">Solo Streamer</option>
+        <option value="Talk + Slides">Talk + Slides</option>
+        <option value="Podcast/Interview">Podcast/Interview</option>
+      </select>
+    </div>
+    <div id="wiz-checks-group" class="wiz-checks">
       <label class="chk"><input type="checkbox" id="wiz-scenes" checked> <span><strong>Scenes</strong> — Scene pads + Next/Prev Scene</span></label>
       <label class="chk"><input type="checkbox" id="wiz-sources" checked> <span><strong>Sources &amp; Overlays</strong> — Scene &amp; group item toggles</span></label>
       <label class="chk"><input type="checkbox" id="wiz-filters" checked> <span><strong>Filters</strong> — Source &amp; scene filter toggles</span></label>
