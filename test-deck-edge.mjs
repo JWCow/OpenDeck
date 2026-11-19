@@ -628,6 +628,71 @@ try {
     seamObs.wss.close();
   }
 
+  // 16. Auto-Import past 63 items (100 sources -> 2 Sources Pages holding all 100, footer reports Pad and Page counts, read-only)
+  const bigObs = createFakeObs(false);
+  const hundredSources = Array.from({ length: 100 }, (_, i) => `Source ${String(i + 1).padStart(3, '0')}`);
+  bigObs.state.scenes = ['Main Scene'];
+  bigObs.state.sceneItems = {
+    'Main Scene': hundredSources.map((name, i) => ({
+      sceneItemId: 1000 + i,
+      sourceName: name,
+      sceneItemEnabled: true,
+      isGroup: false,
+    })),
+  };
+  await new Promise((r) => bigObs.wss.once('listening', r));
+  const bigPort = bigObs.wss.address().port;
+  try {
+    const ctxBig = await browser.newContext();
+    const pageBig = await ctxBig.newPage();
+    pageBig.on('pageerror', (e) => pageErrors.push(e.message));
+    await pageBig.goto(`${DECK_URL}?port=${bigPort}`);
+    await pageBig.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageBig.waitForSelector('#import-wiz-dlg[open]');
+
+    // Uncheck scenes, filters, broadcast so only sources are imported
+    await pageBig.uncheck('#wiz-scenes');
+    await pageBig.uncheck('#wiz-filters');
+    await pageBig.uncheck('#wiz-broadcast');
+    bigObs.state.calls.length = 0;
+
+    await pageBig.click('#btn-wiz-apply');
+    await pageBig.waitForFunction(() => !document.getElementById('import-wiz-dlg').open);
+
+    const tabNames = await pageBig.locator('#deck-tabs .page-tab').allTextContents();
+    assert.deepEqual(tabNames, ['Sources', 'Sources 2'], '100 sources produces two Sources Pages');
+
+    const importedSources = await pageBig.evaluate(() => {
+      const p1 = Deck.cfg.pages.find((p) => p.name === 'Sources');
+      const p2 = Deck.cfg.pages.find((p) => p.name === 'Sources 2');
+      const s1 = p1 ? p1.pads.filter((p) => p.type === 'source').map((p) => p.sourceName) : [];
+      const s2 = p2 ? p2.pads.filter((p) => p.type === 'source').map((p) => p.sourceName) : [];
+      return { s1, s2 };
+    });
+
+    assert.equal(importedSources.s1.length, 63, 'First Sources Page holds 63 sources');
+    assert.equal(importedSources.s2.length, 37, 'Second Sources Page holds remaining 37 sources');
+    assert.deepEqual(
+      [...importedSources.s1, ...importedSources.s2],
+      hundredSources,
+      'All 100 sources are held across the two Sources Pages'
+    );
+
+    // Footer message reports Pad and Page counts
+    const footerMsg = await pageBig.textContent('#msg-info');
+    assert.match(footerMsg, /Auto-Imported \d+ pad\(s\) across 2 page\(s\)/i, 'Footer message reports Pad and Page counts');
+    assert.ok(footerMsg.includes('102 pad(s)') || footerMsg.includes('100 pad(s)'), 'Footer message contains pad count');
+
+    // No OBS write requests are sent
+    const mutatingCalls = bigObs.state.calls.filter((c) => /^(Create|Set|Remove|Press|Trigger)/.test(c.requestType));
+    assert.equal(mutatingCalls.length, 0, 'No OBS write requests are sent during Auto-Import');
+
+    await ctxBig.close();
+    console.log('  ✓ Auto-Import past 63 items (100 sources -> 2 Sources Pages holding all 100, footer reports Pad and Page counts, read-only)');
+  } finally {
+    bigObs.wss.close();
+  }
+
   // 16. Output stop protection and in-flight guard (#5)
   const outObs = createFakeObs(false);
   await new Promise((r) => outObs.wss.once('listening', r));
