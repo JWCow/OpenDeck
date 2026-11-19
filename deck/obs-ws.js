@@ -1512,17 +1512,8 @@
       }
       Deck.renderGrid();
     } else if (type === 'SceneItemTransformChanged') {
-      const { sceneName, sceneItemId, sceneItemTransform } = d;
-      if (sceneName && sceneItemId != null && sceneItemTransform) {
-        const items = obs.itemsByScene[sceneName] || [];
-        const item = items.find((it) => it.sceneItemId === sceneItemId);
-        if (item?.sourceName && typeof Deck.deriveTransformPreset === 'function') {
-          obs.transforms[`${sceneName}\0${item.sourceName}`] = Deck.deriveTransformPreset(
-            sceneItemTransform,
-            obs.videoSettings
-          );
-          Deck.renderGrid();
-        }
+      if (typeof Deck.syncTransforms === 'function') {
+        Deck.syncTransforms();
       }
     } else if (type === 'CurrentProfileChanged') {
       obs.currentProfile = d.profileName || '';

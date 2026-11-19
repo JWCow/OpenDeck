@@ -242,10 +242,9 @@
         await fetchTransform(sceneName, sourceName);
       } catch {}
     }));
+    Deck.renderGrid();
   }
 
-  Deck.deriveTransformPreset = deriveTransformPreset;
-  Deck.fetchTransform = fetchTransform;
   Deck.syncTransforms = syncTransforms;
 
   async function execAction(a) {
