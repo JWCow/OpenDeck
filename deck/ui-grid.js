@@ -183,7 +183,41 @@
       const el = document.createElement('button');
       el.type = 'button';
       el.dataset.idx = i;
+      let holdTimer = null;
+      let holdTriggered = false;
+
+      el.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        if (Deck.editMode) return;
+        holdTriggered = false;
+        const page = Deck.getActivePage();
+        const p = page?.pads[i];
+        if (!p || !Deck.isOutputStopAction || !Deck.isOutputStopAction(p)) return;
+
+        holdTimer = setTimeout(async () => {
+          holdTimer = null;
+          holdTriggered = true;
+          await Deck.onPadClick(i, page.id, { hold: true });
+        }, 500);
+      });
+
+      const cancelHold = () => {
+        if (holdTimer) {
+          clearTimeout(holdTimer);
+          holdTimer = null;
+        }
+      };
+
+      el.addEventListener('pointerup', cancelHold);
+      el.addEventListener('pointercancel', cancelHold);
+      el.addEventListener('pointerleave', cancelHold);
+
       el.addEventListener('click', (e) => {
+        if (holdTriggered) {
+          holdTriggered = false;
+          return;
+        }
+        cancelHold();
         if (Date.now() - Deck.getDragState().justDroppedAt < 250) return;
         if (Deck.editMode) {
           if (Deck.handleSelectionClick(i, e)) return;
@@ -279,6 +313,7 @@
     const rt = Deck.getPadRuntime(i, page.id);
     const active = Deck.isPadActive(p);
     const isRunning = Boolean(rt.running);
+    const isArmed = Boolean(Deck.isPadArmed && Deck.isPadArmed(i, page.id));
     const isFullFace = Boolean(p.image && p.imageFit === 'fill');
     const isDragOver = el.classList.contains('drag-over');
     const isDraggingEl = el.classList.contains('dragging');
@@ -290,6 +325,7 @@
       + (selectedPads.has(i) ? ' selected' : '')
       + (active ? ' active' : '')
       + (isRunning ? ' running' : '')
+      + (isArmed ? ' armed' : '')
       + (isFullFace ? ' full-face' : '')
       + (p.hideLabel ? ' hide-label' : '')
       + (isDragOver ? ' drag-over' : '')
