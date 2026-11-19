@@ -76,3 +76,8 @@ _Avoid_: Backup file, revision, autosave slot
 An in-memory stack of up to 50 previous layout states recorded during Edit Mode that allows reverting and replaying layout changes step-by-step without affecting OBS or surviving a page reload.
 _Avoid_: Change log, edit history, revision stack
 
+**Starter Layout**:
+A pre-configured Deck Page template (such as Solo Streamer, Talk + Slides, or Podcast/Interview) with fixed broadcast pads and dynamic slots populated from read-only OBS state when connected, or marked empty pads when disconnected.
+_Avoid_: Preset profile, sample deck, default template
+
+
