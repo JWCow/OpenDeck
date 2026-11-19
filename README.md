@@ -108,6 +108,19 @@ Open the URL printed by the installer or LAN helper (`node scripts/lan-helper.mj
 
 <br>
 
+## 🖥️ Multiple OBS Computers
+
+> 💡 **Tip:** To control more than one OBS machine (e.g. a gaming PC and a streaming PC), copy the Deck folder once per OBS and open each copy in its own dock (or Phone Deck) pointed at its OBS with `?port=` and `?host=`, because saved layouts are tied to the folder they are opened from.
+
+| Computer | Deck Folder | Dock or Phone URL |
+|---|---|---|
+| 🎮 **Gaming PC** (local) | `Documents/obs-virtual-deck-gaming/` | `file:///.../obs-virtual-deck-gaming/deck.html?port=4455` |
+| 📡 **Streaming PC** (remote) | `Documents/obs-virtual-deck-streaming/` | `file:///.../obs-virtual-deck-streaming/deck.html?host=192.168.1.50&port=4455` |
+
+Each copy maintains its own independent Pages, Pads, and settings. On Phone Deck, append the same `?host=` and `?port=` query parameters to the LAN URL (e.g. `http://192.168.1.50:8080/deck.html?host=192.168.1.50&port=4455`).
+
+<br>
+
 ## 🧑‍💻 Docs & Dev
 
 📖 [Glossary](GLOSSARY.md) · [ADRs](docs/adr/) · [Agent Guide](AGENTS.md)
