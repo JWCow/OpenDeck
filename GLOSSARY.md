@@ -55,3 +55,15 @@ _Avoid_: Button picture, tile background
 **Auto-Label**:
 The automatic synchronization of a Pad's Label to match the name of the selected target Scene, Source, Filter, or Audio Input in the Pad Editor.
 _Avoid_: Auto-namer, default title sync
+
+**Hold Pad**:
+A Pad whose action stays on only while it is pressed and turns back off when released, such as a cough button or push-to-talk.
+_Avoid_: Momentary key, push button
+
+**Scene-Linked Page**:
+A Page that comes to the front automatically when its chosen OBS scene goes live on program.
+_Avoid_: Auto-page, scene profile
+
+**Live Readout**:
+A live value shown on a Pad alongside its on/off state, such as elapsed stream or recording time, or an input's volume level.
+_Avoid_: Pad stats, overlay text

@@ -79,3 +79,17 @@ npm run build:release
 
 - Never weaken or skip existing test assertions.
 - Add E2E assertions in `test-deck.mjs` or `test-deck-edge.mjs` (and fake server support in `test-deck-fake-obs.mjs` if needed) for any new action type, OBS event, installer behavior, or UI feature.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for `JWCow/obs-virtual-deck` (via `gh`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default canonical labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.
