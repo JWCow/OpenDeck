@@ -279,15 +279,17 @@
             Deck.abortPadTimer(activePage.id, i);
           }
           if (Deck.isSelfContained(paletteData)) {
-            const newPad = JSON.parse(JSON.stringify(paletteData));
-            delete newPad.isLive;
-            if (!newPad.color) {
-              newPad.color = newPad.type === 'scene' ? '#991b1b' : COLORS[0];
-            }
-            pads[i] = Deck.normalizePad(newPad);
-            Deck.saveCfg();
-            Deck.renderGrid();
-            Deck.setMsg(`Assigned ${pads[i].label || pads[i].type} to pad ${i + 1}`);
+            Deck.pushHistory(() => {
+              const newPad = JSON.parse(JSON.stringify(paletteData));
+              delete newPad.isLive;
+              if (!newPad.color) {
+                newPad.color = newPad.type === 'scene' ? '#991b1b' : COLORS[0];
+              }
+              pads[i] = Deck.normalizePad(newPad);
+              Deck.saveCfg();
+              Deck.renderGrid();
+              Deck.setMsg(`Assigned ${pads[i].label || pads[i].type} to pad ${i + 1}`);
+            });
           } else {
             Deck.openPadEditor(i, activePage.id, paletteData);
           }
@@ -299,10 +301,12 @@
           Deck.abortPadTimer(activePage.id, dragIdx);
           Deck.abortPadTimer(activePage.id, i);
         }
-        [pads[dragIdx], pads[i]] = [pads[i], pads[dragIdx]];
-        Deck.setDragState({ dragIdx: null, dragSourcePageId: '', justDroppedAt: Date.now() });
-        Deck.saveCfg();
-        Deck.renderGrid();
+        Deck.pushHistory(() => {
+          [pads[dragIdx], pads[i]] = [pads[i], pads[dragIdx]];
+          Deck.setDragState({ dragIdx: null, dragSourcePageId: '', justDroppedAt: Date.now() });
+          Deck.saveCfg();
+          Deck.renderGrid();
+        });
       });
       grid.appendChild(el);
     }

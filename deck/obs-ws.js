@@ -2,8 +2,9 @@
   'use strict';
 
   const VERSION = '2.2.1';
-  const STORAGE_KEY = 'obs_virtual_deck_v2';
-  const LEGACY_STORAGE_KEY = 'obs_virtual_deck_v1';
+  const STORAGE_KEY = 'opendeck_config';
+  const LEGACY_STORAGE_KEYS = ['obs_virtual_deck_v2', 'obs_deck_config_v2', 'obs_virtual_deck_v1'];
+  let initialSaveFailed = false;
   const PROBE_PORTS = [4455, 4456, 4457, 4458, 4444];
   const MIN_COLS = 2;
   const MAX_COLS = 12;
@@ -249,6 +250,70 @@
     return normalizePadInternal(raw, true);
   }
 
+  function renameReference(item, kind, oldName, newName) {
+    if (!item || typeof item !== 'object' || !oldName || !newName || oldName === newName) return false;
+    let changed = false;
+    if (kind === 'scene') {
+      if (['scene', 'source', 'transform', 'studio'].includes(item.type)) {
+        if (item.sceneName === oldName) {
+          item.sceneName = newName;
+          changed = true;
+        }
+      }
+      if (['source', 'filter', 'screenshot', 'transform'].includes(item.type)) {
+        if (item.sourceName === oldName) {
+          item.sourceName = newName;
+          changed = true;
+        }
+      }
+    } else if (kind === 'input') {
+      if (['source', 'filter', 'screenshot', 'transform'].includes(item.type)) {
+        if (item.sourceName === oldName) {
+          item.sourceName = newName;
+          changed = true;
+        }
+      } else if (['mute', 'volume', 'monitor', 'media', 'image', 'browser'].includes(item.type)) {
+        if (item.inputName === oldName) {
+          item.inputName = newName;
+          changed = true;
+        }
+      }
+    }
+    if (Array.isArray(item.steps)) {
+      for (const step of item.steps) {
+        if (renameReference(step, kind, oldName, newName)) {
+          changed = true;
+        }
+      }
+    }
+    if (changed && item.label === oldName) {
+      item.label = newName;
+    }
+    return changed;
+  }
+
+  function applyRename(kind, oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return false;
+    let changed = false;
+    const { cfg } = Deck;
+    for (const page of (cfg.pages || [])) {
+      for (const pad of (page.pads || [])) {
+        if (renameReference(pad, kind, oldName, newName)) {
+          changed = true;
+        }
+      }
+    }
+    for (const step of (cfg.panicSteps || [])) {
+      if (renameReference(step, kind, oldName, newName)) {
+        changed = true;
+      }
+    }
+    if (changed) {
+      Deck.saveCfg();
+    }
+    return changed;
+  }
+
   function defaultPads(cols = DEFAULT_COLS, rows = DEFAULT_ROWS, seedPanic = false) {
     const c = clampInt(cols, MIN_COLS, MAX_COLS, DEFAULT_COLS);
     const r = clampInt(rows, MIN_ROWS, MAX_ROWS, DEFAULT_ROWS);
@@ -353,33 +418,33 @@
     };
     let state = base;
     try {
-      const rawOpenDeck = localStorage.getItem('opendeck_config');
-      const rawDeckV2 = localStorage.getItem('obs_deck_config_v2');
-      const rawVirtV2 = localStorage.getItem(STORAGE_KEY);
-      const rawVirtV1 = localStorage.getItem(LEGACY_STORAGE_KEY);
-
-      let rawToMigrate = null;
-      if (rawVirtV2) {
-        if (rawVirtV2.includes('"decks"')) {
-          rawToMigrate = rawVirtV2;
-        } else {
-          rawToMigrate = rawOpenDeck || rawVirtV2;
+      const rawCanonical = localStorage.getItem(STORAGE_KEY);
+      if (rawCanonical) {
+        state = migrateConfig(JSON.parse(rawCanonical));
+        for (const k of LEGACY_STORAGE_KEYS) {
+          try { localStorage.removeItem(k); } catch {}
         }
-      } else if (rawVirtV1) {
-        rawToMigrate = rawVirtV1;
-      } else if (rawDeckV2) {
-        rawToMigrate = rawDeckV2;
-      }
-
-      if (rawToMigrate) {
-        state = migrateConfig(JSON.parse(rawToMigrate));
-        try {
-          const json = JSON.stringify(state);
-          localStorage.setItem('opendeck_config', json);
-          localStorage.setItem(STORAGE_KEY, json);
-        } catch {}
       } else {
-        try { localStorage.removeItem('opendeck_config'); } catch {}
+        let rawLegacy = null;
+        for (const k of LEGACY_STORAGE_KEYS) {
+          const raw = localStorage.getItem(k);
+          if (raw) {
+            rawLegacy = raw;
+            break;
+          }
+        }
+        if (rawLegacy) {
+          state = migrateConfig(JSON.parse(rawLegacy));
+          try {
+            const json = JSON.stringify(state);
+            localStorage.setItem(STORAGE_KEY, json);
+            for (const k of LEGACY_STORAGE_KEYS) {
+              try { localStorage.removeItem(k); } catch {}
+            }
+          } catch {
+            initialSaveFailed = true;
+          }
+        }
       }
     } catch {}
 
@@ -526,19 +591,58 @@
       transitionDuration: 300,
       lastScreenshot: '',
     },
+    STORAGE_KEY,
+    hasSaveWarning: initialSaveFailed,
+    setSaveWarning: (show) => {
+      Deck.hasSaveWarning = Boolean(show);
+      const warnEl = $('save-warning');
+      const statusEl = document.querySelector('.status');
+      const msgEl = $('msg-info');
+      if (show) {
+        if (warnEl) {
+          warnEl.hidden = false;
+          warnEl.textContent = '⚠️ Save failed: Export layout and use fewer or smaller Pad Graphics';
+        }
+        if (statusEl) statusEl.classList.add('save-failed');
+        if (msgEl) msgEl.textContent = 'Save failed: Export layout and use fewer or smaller Pad Graphics';
+      } else {
+        if (warnEl) {
+          warnEl.hidden = true;
+          warnEl.textContent = '';
+        }
+        if (statusEl) statusEl.classList.remove('save-failed');
+        if (msgEl && msgEl.textContent.includes('Save failed')) {
+          msgEl.textContent = 'Ready';
+        }
+      }
+    },
     renderGrid: () => {},
     updateMacroTicks: () => {},
     updateStatsPads: () => Deck.renderGrid(),
   };
 
   Deck.saveCfg = () => {
+    let ok = false;
     try {
       const json = JSON.stringify(Deck.cfg);
-      localStorage.setItem('opendeck_config', json);
       localStorage.setItem(STORAGE_KEY, json);
+      ok = true;
+      for (const k of LEGACY_STORAGE_KEYS) {
+        try { localStorage.removeItem(k); } catch {}
+      }
     } catch {}
+    Deck.setSaveWarning(!ok);
     Deck.syncStatsPolling();
+    return ok;
   };
+
+  if (initialSaveFailed) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => Deck.setSaveWarning(true), { once: true });
+    } else {
+      setTimeout(() => Deck.setSaveWarning(true), 0);
+    }
+  }
 
   Deck.exportConfig = () => {
     const { cfg } = Deck;
@@ -1316,7 +1420,23 @@
       obs.studioModeEnabled = !!d.studioModeEnabled;
       Deck.updateSceneHeader();
       Deck.renderGrid();
-    } else if (type === 'SceneListChanged' || type === 'SceneNameChanged' || type === 'InputNameChanged' || type === 'CurrentSceneCollectionChanged') {
+    } else if (type === 'SceneNameChanged') {
+      const oldName = d.oldSceneName;
+      const newName = d.sceneName;
+      if (oldName && newName && oldName !== newName) {
+        if (obs.programScene === oldName) obs.programScene = newName;
+        if (obs.previewScene === oldName) obs.previewScene = newName;
+        applyRename('scene', oldName, newName);
+      }
+      await Deck.syncObsState();
+    } else if (type === 'InputNameChanged') {
+      const oldName = d.oldInputName;
+      const newName = d.inputName;
+      if (oldName && newName && oldName !== newName) {
+        applyRename('input', oldName, newName);
+      }
+      await Deck.syncObsState();
+    } else if (type === 'SceneListChanged' || type === 'CurrentSceneCollectionChanged') {
       if (type === 'CurrentSceneCollectionChanged' && d.sceneCollectionName) {
         obs.currentCollection = d.sceneCollectionName;
       }

@@ -69,6 +69,16 @@ try {
   page.on('pageerror', (e) => pageErrors.push(e.message));
   page.on('dialog', (d) => d.accept());
 
+  await page.addInitScript(() => {
+    const origSet = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(k, v) {
+      if (window.sessionStorage && sessionStorage.getItem('fail_storage') === '1' && k === 'opendeck_config') {
+        throw new Error('QuotaExceededError: simulated migration write failure');
+      }
+      return origSet.apply(this, arguments);
+    };
+  });
+
   await page.goto(DECK_URL);
   await page.waitForSelector('#grid .pad');
 
@@ -78,6 +88,7 @@ try {
     pads[0] = { type: 'scene', sceneName: 'Slides', label: 'Migrated Slides', icon: '📺', color: '#1e3a8a' };
     pads[10] = { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'toggle', label: 'Migrated Blur', icon: '', color: '#581c87' };
     pads[63] = { type: 'panic', label: 'PANIC', icon: '🚨', color: '#991b1b' };
+    localStorage.removeItem('opendeck_config');
     localStorage.removeItem('obs_virtual_deck_v2');
     localStorage.setItem('obs_virtual_deck_v1', JSON.stringify({
       ws: { host: '127.0.0.1', port: p, password: '' },
@@ -87,8 +98,8 @@ try {
   }, port);
   await page.reload();
   await page.waitForSelector('#grid .pad');
-  const migrated = await page.evaluate(() => JSON.parse(localStorage.getItem('obs_virtual_deck_v2') || 'null'));
-  assert.equal(migrated?.version, 2, 'migrated to v2 storage key');
+  const migrated = await page.evaluate(() => JSON.parse(localStorage.getItem('opendeck_config') || 'null'));
+  assert.equal(migrated?.version, 2, 'migrated to canonical storage key');
   assert.equal(migrated.pages.length, 1);
   assert.equal(migrated.activePageId, 'page-1');
   assert.equal(migrated.pages[0].pads.length, 64);
@@ -97,6 +108,8 @@ try {
   assert.equal(migrated.pages[0].pads[63].type, 'panic');
   assert.equal(migrated.panicSteps.length, 1);
   assert.ok((await page.locator('#grid .pad').nth(0).textContent()).includes('Migrated Slides'));
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v1')), null, 'legacy v1 key removed after migration');
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v2')), null, 'legacy v2 key removed after migration');
 
   // 1b. v2.0.0 (decks[], activeDeckId, deckId) -> v2.1.0 (pages[], activePageId, pageId) migration
   await page.evaluate((p) => {
@@ -104,6 +117,7 @@ try {
     d1[0] = { type: 'page', mode: 'goto', deckId: 'deck-2', label: 'Jump D2', icon: '', color: '#222733' };
     const d2 = Array.from({ length: 12 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
     d2[1] = { type: 'scene', sceneName: 'BRB', label: 'D2 BRB', icon: '', color: '#1e3a8a' };
+    localStorage.removeItem('opendeck_config');
     localStorage.removeItem('obs_virtual_deck_v1');
     localStorage.setItem('obs_virtual_deck_v2', JSON.stringify({
       version: 2,
@@ -118,12 +132,13 @@ try {
   }, port);
   await page.reload();
   await page.waitForSelector('#grid .pad');
-  const migratedV20 = await page.evaluate(() => JSON.parse(localStorage.getItem('obs_virtual_deck_v2') || 'null'));
+  const migratedV20 = await page.evaluate(() => JSON.parse(localStorage.getItem('opendeck_config') || 'null'));
   assert.equal(migratedV20.decks, undefined, 'legacy decks[] replaced by pages[]');
   assert.equal(migratedV20.activePageId, 'deck-2', 'activeDeckId migrated to activePageId');
   assert.equal(migratedV20.pages.length, 2);
   assert.equal(migratedV20.pages[0].pads[0].pageId, 'deck-2', 'page pad deckId migrated to pageId');
   assert.ok((await page.locator('#grid .pad').nth(1).textContent()).includes('D2 BRB'));
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v2')), null, 'legacy v2 key removed after migration');
 
   // 1c. obs_deck_config_v2 -> opendeck_config backward-compatible migration & pad image field defaults
   await page.evaluate((p) => {
@@ -147,6 +162,96 @@ try {
   assert.equal(migratedOpenDeck.pages[0].pads[0].imageFit, undefined);
   assert.equal(Boolean(migratedOpenDeck.pages[0].pads[0].hideLabel), false);
   assert.ok((await page.locator('#grid .pad').nth(0).textContent()).includes('Legacy V2 Scene'));
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_deck_config_v2')), null, 'legacy obs_deck_config_v2 key removed after migration');
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v2')), null, 'legacy obs_virtual_deck_v2 key removed after migration');
+
+  // 1d. Save failure warning in status area (suggests Export and fewer/smaller Pad Graphics) & recovery
+  await page.evaluate(() => {
+    const origSet = Storage.prototype.setItem;
+    Storage.prototype.setItem = () => {
+      throw new Error('QuotaExceededError: Setting the value of "opendeck_config" exceeded the quota.');
+    };
+    try {
+      Deck.saveCfg();
+    } finally {
+      Storage.prototype.setItem = origSet;
+    }
+  });
+
+  const saveWarn = page.locator('#save-warning');
+  assert.equal(await saveWarn.isVisible(), true, 'save failure warning is visible in status area');
+  const warnText = await page.textContent('.status');
+  assert.match(warnText, /Save failed/i, 'status mentions save failed');
+  assert.match(warnText, /export/i, 'warning suggests export');
+  assert.match(warnText, /fewer or smaller Pad Graphics/i, 'warning suggests fewer or smaller Pad Graphics');
+
+  // Next successful save clears warning
+  await page.evaluate(() => {
+    Deck.saveCfg();
+  });
+  assert.equal(await saveWarn.isVisible(), false, 'warning is hidden after next successful save');
+  assert.ok(!(await page.textContent('.status')).includes('Save failed'), 'status area cleared of save failure message');
+
+  // 1e. Precedence: canonical opendeck_config wins whenever it exists, ignoring stale legacy keys
+  await page.evaluate((p) => {
+    const padsCanonical = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+    padsCanonical[0] = { type: 'scene', sceneName: 'Slides', label: 'Canonical Layout Pad', icon: '⭐', color: '#1e3a8a' };
+
+    const padsV1 = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+    padsV1[0] = { type: 'scene', sceneName: 'BRB', label: 'Stale V1 Pad', icon: '💀', color: '#991b1b' };
+
+    localStorage.setItem('opendeck_config', JSON.stringify({
+      version: 2,
+      ws: { host: '127.0.0.1', port: p, password: '' },
+      activePageId: 'page-1',
+      pages: [{ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads: padsCanonical }],
+      panicSteps: [],
+    }));
+    localStorage.setItem('obs_virtual_deck_v1', JSON.stringify({
+      ws: { host: '127.0.0.1', port: p, password: '' },
+      pads: padsV1,
+      panicSteps: [],
+    }));
+    localStorage.removeItem('obs_virtual_deck_v2');
+    localStorage.removeItem('obs_deck_config_v2');
+  }, port);
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  const precedenceConfig = await page.evaluate(() => JSON.parse(localStorage.getItem('opendeck_config') || 'null'));
+  assert.equal(precedenceConfig?.pages[0]?.pads[0]?.label, 'Canonical Layout Pad', 'canonical layout loads when stale v1 layout also exists');
+  assert.ok((await page.locator('#grid .pad').nth(0).textContent()).includes('Canonical Layout Pad'), 'grid shows canonical layout pad');
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v1')), null, 'stale v1 key removed after canonical load');
+
+  // 1f. Data-loss prevention during migration: legacy keys preserved if canonical write throws
+  await page.evaluate((p) => {
+    localStorage.removeItem('opendeck_config');
+    localStorage.removeItem('obs_deck_config_v2');
+    localStorage.removeItem('obs_virtual_deck_v1');
+    const pads = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+    pads[0] = { type: 'scene', sceneName: 'Slides', label: 'Unlost Legacy Scene', icon: '💾', color: '#1e3a8a' };
+    localStorage.setItem('obs_virtual_deck_v2', JSON.stringify({
+      version: 2,
+      ws: { host: '127.0.0.1', port: p, password: '' },
+      activePageId: 'page-1',
+      pages: [{ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads }],
+      panicSteps: [],
+    }));
+    sessionStorage.setItem('fail_storage', '1');
+  }, port);
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  // While write failed during migration, legacy key must NOT be deleted
+  assert.notEqual(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v2')), null, 'legacy key preserved when migration write throws');
+  assert.equal(await page.evaluate(() => localStorage.getItem('opendeck_config')), null, 'canonical key not saved when write throws');
+
+  // Make writes work again and reload
+  await page.evaluate(() => sessionStorage.removeItem('fail_storage'));
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  const recovered = await page.evaluate(() => JSON.parse(localStorage.getItem('opendeck_config') || 'null'));
+  assert.equal(recovered?.pages[0]?.pads[0]?.label, 'Unlost Legacy Scene', 'layout preserved and migrated after writes succeed again');
+  assert.ok((await page.locator('#grid .pad').nth(0).textContent()).includes('Unlost Legacy Scene'), 'grid displays unlost legacy scene pad');
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v2')), null, 'legacy key removed after successful migration write');
 
   // Reset back to clean defaults before continuing
   await page.evaluate(() => {
@@ -628,6 +733,231 @@ try {
     seamObs.wss.close();
   }
 
+  // 16. Ticket #8: Pads follow scene and input renames
+  const ctxRenames = await browser.newContext();
+  const pageRenames = await ctxRenames.newPage();
+  pageRenames.on('pageerror', (e) => pageErrors.push(e.message));
+  try {
+    await pageRenames.goto(`${DECK_URL}?port=${port}`);
+    await pageRenames.waitForFunction(() => document.getElementById('conn-text')?.textContent === 'Connected');
+    if (await pageRenames.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageRenames.click('#btn-wiz-cancel');
+    }
+
+    // Verify renameReference and applyRename are not exported on Deck (ticket #8 review)
+    const exportedHelpers = await pageRenames.evaluate(() => ({
+      renameReference: typeof Deck.renameReference,
+      applyRename: typeof Deck.applyRename,
+    }));
+    assert.equal(exportedHelpers.renameReference, 'undefined', 'renameReference must not be exported on Deck');
+    assert.equal(exportedHelpers.applyRename, 'undefined', 'applyRename must not be exported on Deck');
+
+    // 16a. Scene renames update Scene, Source, Transform, Studio preview, Macro and PANIC steps + label preservation
+    await pageRenames.evaluate(() => {
+      const p = Deck.getActivePads();
+      p[0] = { type: 'scene', mode: 'named', sceneName: 'Slides', label: 'Slides', color: '#1e3a8a' };
+      p[1] = { type: 'scene', mode: 'named', sceneName: 'Slides', label: 'My Presentation', color: '#1e3a8a' };
+      p[2] = { type: 'source', sceneName: 'Slides', sourceName: 'Deck Slides', mode: 'toggle', label: 'Deck Slides', color: '#222733' };
+      p[3] = { type: 'transform', sceneName: 'Slides', sourceName: 'Deck Slides', preset: 'toggle_pip', label: 'Slides', color: '#222733' };
+      p[4] = { type: 'studio', action: 'preview', sceneName: 'Slides', label: 'Preview Slides', color: '#222733' };
+      p[5] = {
+        type: 'macro',
+        label: 'Macro 1',
+        color: '#222733',
+        steps: [
+          { type: 'scene', mode: 'named', sceneName: 'Slides' },
+          { type: 'transform', sceneName: 'Slides', sourceName: 'Deck Slides', preset: 'toggle_pip' },
+        ],
+      };
+      Deck.cfg.panicSteps = [
+        { type: 'scene', mode: 'named', sceneName: 'Slides' },
+      ];
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="0"] .lbl').textContent(), 'Slides');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="1"] .lbl').textContent(), 'My Presentation');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="2"] .ctx').textContent(), 'Slides');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="3"] .lbl').textContent(), 'Slides');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="4"] .lbl').textContent(), 'Preview Slides');
+
+    broadcast('SceneNameChanged', { oldSceneName: 'Slides', sceneName: 'Slide Deck' });
+
+    await pageRenames.waitForFunction(
+      () => document.querySelector('#grid .pad[data-idx="0"] .lbl')?.textContent === 'Slide Deck',
+      null,
+      { timeout: 3000 }
+    );
+
+    // Verify Pad properties and labels
+    const pAfter = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pAfter[0].sceneName, 'Slide Deck', 'scene pad sceneName updated');
+    assert.equal(pAfter[0].label, 'Slide Deck', 'scene pad auto-label updated');
+    assert.equal(pAfter[1].sceneName, 'Slide Deck', 'custom-labeled scene pad sceneName updated');
+    assert.equal(pAfter[1].label, 'My Presentation', 'custom label preserved');
+    assert.equal(pAfter[2].sceneName, 'Slide Deck', 'source pad sceneName updated');
+    assert.equal(pAfter[2].label, 'Deck Slides', 'source pad custom label preserved');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="2"] .ctx').textContent(), 'Slide Deck', 'source pad context subtitle updated');
+    assert.equal(pAfter[3].sceneName, 'Slide Deck', 'transform pad sceneName updated');
+    assert.equal(pAfter[3].label, 'Slide Deck', 'transform pad matching label updated');
+    assert.equal(pAfter[4].sceneName, 'Slide Deck', 'studio preview pad sceneName updated');
+    assert.equal(pAfter[4].label, 'Preview Slides', 'studio preview custom label preserved');
+    assert.equal(pAfter[5].steps[0].sceneName, 'Slide Deck', 'macro step 0 sceneName updated');
+    assert.equal(pAfter[5].steps[1].sceneName, 'Slide Deck', 'macro step 1 sceneName updated');
+
+    const panicAfter = await pageRenames.evaluate(() => Deck.cfg.panicSteps);
+    assert.equal(panicAfter[0].sceneName, 'Slide Deck', 'panic step sceneName updated');
+
+    // Changes survive a reload
+    await pageRenames.reload();
+    await pageRenames.waitForSelector('#grid .pad');
+    const pReloaded = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pReloaded[0].sceneName, 'Slide Deck', 'reloaded sceneName preserved');
+    assert.equal(pReloaded[0].label, 'Slide Deck', 'reloaded auto-label preserved');
+    assert.equal(pReloaded[1].label, 'My Presentation', 'reloaded custom label preserved');
+    assert.equal(pReloaded[2].sceneName, 'Slide Deck', 'reloaded source sceneName preserved');
+    assert.equal(pReloaded[5].steps[0].sceneName, 'Slide Deck', 'reloaded macro step preserved');
+    assert.equal((await pageRenames.evaluate(() => Deck.cfg.panicSteps))[0].sceneName, 'Slide Deck', 'reloaded panic step preserved');
+    console.log('  ✓ scene renames update Scene, Source, Transform, Studio, Macro & PANIC steps with label preservation');
+
+    // Filter Pad on the scene "Main Cam" follows SceneNameChanged rename
+    await pageRenames.evaluate(() => {
+      const p = Deck.getActivePads();
+      p[6] = { type: 'filter', sourceName: 'Main Cam', filterName: 'Color Grade', mode: 'toggle', label: 'Main Cam' };
+      p[7] = { type: 'filter', sourceName: 'Main Cam', filterName: 'Blur', mode: 'toggle', label: 'My Custom Filter' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="6"] .ctx').textContent(), 'Main Cam');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="6"] .lbl').textContent(), 'Main Cam');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="7"] .ctx').textContent(), 'Main Cam');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="7"] .lbl').textContent(), 'My Custom Filter');
+
+    broadcast('SceneNameChanged', { oldSceneName: 'Main Cam', sceneName: 'Studio Cam' });
+
+    await pageRenames.waitForFunction(
+      () => document.querySelector('#grid .pad[data-idx="6"] .lbl')?.textContent === 'Studio Cam',
+      null,
+      { timeout: 3000 }
+    );
+
+    const pFilterScene = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pFilterScene[6].sourceName, 'Studio Cam', 'filter pad on scene sourceName updated');
+    assert.equal(pFilterScene[6].label, 'Studio Cam', 'filter pad on scene matching label updated');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="6"] .ctx').textContent(), 'Studio Cam', 'filter pad on scene context subtitle updated');
+    assert.equal(pFilterScene[7].sourceName, 'Studio Cam', 'filter pad on scene custom label sourceName updated');
+    assert.equal(pFilterScene[7].label, 'My Custom Filter', 'filter pad on scene custom label preserved');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="7"] .ctx').textContent(), 'Studio Cam', 'filter pad on scene custom label context subtitle updated');
+
+    // Reload check for scene filter pad
+    await pageRenames.reload();
+    await pageRenames.waitForSelector('#grid .pad');
+    const pFilterReloaded = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pFilterReloaded[6].sourceName, 'Studio Cam', 'reloaded scene filter pad sourceName preserved');
+    assert.equal(pFilterReloaded[6].label, 'Studio Cam', 'reloaded scene filter pad label preserved');
+    assert.equal(pFilterReloaded[7].sourceName, 'Studio Cam', 'reloaded scene filter pad custom label sourceName preserved');
+    assert.equal(pFilterReloaded[7].label, 'My Custom Filter', 'reloaded scene filter pad custom label preserved');
+    console.log('  ✓ Filter Pad on scene "Main Cam" follows SceneNameChanged rename');
+
+    // 16b. Input renames update all input/source target types (source, filter, mute, volume, monitor, media, image, browser, screenshot, transform)
+    await pageRenames.evaluate(() => {
+      const p = Deck.getActivePads();
+      p[0] = { type: 'source', sceneName: 'Slide Deck', sourceName: 'Webcam', mode: 'toggle', label: 'Webcam' };
+      p[1] = { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'toggle', label: 'Webcam' };
+      p[2] = { type: 'screenshot', sourceName: 'Webcam', label: 'Webcam' };
+      p[3] = { type: 'transform', sceneName: 'Slide Deck', sourceName: 'Webcam', preset: 'toggle_pip', label: 'Webcam' };
+      p[4] = { type: 'mute', inputName: 'Webcam', mode: 'toggle', label: 'Webcam' };
+      p[5] = { type: 'volume', inputName: 'Webcam', mode: 'step', volumeDb: -3, label: 'Webcam' };
+      p[6] = { type: 'monitor', inputName: 'Webcam', monitorType: 'cycle', label: 'Webcam' };
+      p[7] = { type: 'media', inputName: 'Webcam', mediaAction: 'play_pause', label: 'Webcam' };
+      p[8] = { type: 'image', inputName: 'Webcam', mode: 'set_file', filePath: '/img/cam.png', label: 'Webcam' };
+      p[9] = { type: 'browser', inputName: 'Webcam', mode: 'refresh', label: 'Webcam' };
+      p[10] = { type: 'mute', inputName: 'Webcam', mode: 'toggle', label: 'My Custom Mic' };
+      p[11] = {
+        type: 'macro',
+        label: 'Macro 2',
+        steps: [
+          { type: 'mute', inputName: 'Webcam', mode: 'toggle' },
+          { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'disable' },
+        ],
+      };
+      Deck.cfg.panicSteps = [
+        { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'disable' },
+        { type: 'mute', inputName: 'Webcam', mode: 'mute' },
+      ];
+      // Also add a second page to verify cross-page rename updates
+      Deck.addPage({ name: 'Page 2', switchTo: false });
+      const p2 = Deck.cfg.pages.find((pg) => pg.name === 'Page 2').pads;
+      p2[0] = { type: 'mute', inputName: 'Webcam', mode: 'toggle', label: 'Webcam' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+
+    broadcast('InputNameChanged', { oldInputName: 'Webcam', inputName: 'Studio Camera' });
+
+    await pageRenames.waitForFunction(
+      () => document.querySelector('#grid .pad[data-idx="0"] .lbl')?.textContent === 'Studio Camera',
+      null,
+      { timeout: 3000 }
+    );
+
+    const pInputsAfter = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pInputsAfter[0].sourceName, 'Studio Camera', 'source pad sourceName updated');
+    assert.equal(pInputsAfter[0].label, 'Studio Camera', 'source pad label updated');
+    assert.equal(pInputsAfter[1].sourceName, 'Studio Camera', 'filter pad sourceName (filter owner) updated');
+    assert.equal(pInputsAfter[1].label, 'Studio Camera', 'filter pad label updated');
+    assert.equal(await pageRenames.locator('#grid .pad[data-idx="1"] .ctx').textContent(), 'Studio Camera', 'filter pad context subtitle updated');
+    assert.equal(pInputsAfter[2].sourceName, 'Studio Camera', 'screenshot pad sourceName updated');
+    assert.equal(pInputsAfter[2].label, 'Studio Camera', 'screenshot pad label updated');
+    assert.equal(pInputsAfter[3].sourceName, 'Studio Camera', 'transform pad sourceName updated');
+    assert.equal(pInputsAfter[3].label, 'Studio Camera', 'transform pad label updated');
+    assert.equal(pInputsAfter[4].inputName, 'Studio Camera', 'mute pad inputName updated');
+    assert.equal(pInputsAfter[4].label, 'Studio Camera', 'mute pad label updated');
+    assert.equal(pInputsAfter[5].inputName, 'Studio Camera', 'volume pad inputName updated');
+    assert.equal(pInputsAfter[5].label, 'Studio Camera', 'volume pad label updated');
+    assert.equal(pInputsAfter[6].inputName, 'Studio Camera', 'monitor pad inputName updated');
+    assert.equal(pInputsAfter[6].label, 'Studio Camera', 'monitor pad label updated');
+    assert.equal(pInputsAfter[7].inputName, 'Studio Camera', 'media pad inputName updated');
+    assert.equal(pInputsAfter[7].label, 'Studio Camera', 'media pad label updated');
+    assert.equal(pInputsAfter[8].inputName, 'Studio Camera', 'image pad inputName updated');
+    assert.equal(pInputsAfter[8].label, 'Studio Camera', 'image pad label updated');
+    assert.equal(pInputsAfter[9].inputName, 'Studio Camera', 'browser pad inputName updated');
+    assert.equal(pInputsAfter[9].label, 'Studio Camera', 'browser pad label updated');
+    assert.equal(pInputsAfter[10].inputName, 'Studio Camera', 'custom-labeled mute pad inputName updated');
+    assert.equal(pInputsAfter[10].label, 'My Custom Mic', 'custom label preserved');
+    assert.equal(pInputsAfter[11].steps[0].inputName, 'Studio Camera', 'macro mute step updated');
+    assert.equal(pInputsAfter[11].steps[1].sourceName, 'Studio Camera', 'macro filter step updated');
+    assert.equal(pInputsAfter[11].label, 'Macro 2', 'macro custom label preserved');
+
+    const panicInputsAfter = await pageRenames.evaluate(() => Deck.cfg.panicSteps);
+    assert.equal(panicInputsAfter[0].sourceName, 'Studio Camera', 'panic filter step sourceName updated');
+    assert.equal(panicInputsAfter[1].inputName, 'Studio Camera', 'panic mute step inputName updated');
+
+    const page2PadAfter = await pageRenames.evaluate(() => Deck.cfg.pages.find((pg) => pg.name === 'Page 2')?.pads[0]);
+    assert.equal(page2PadAfter.inputName, 'Studio Camera', 'cross-page pad inputName updated on non-active page');
+    assert.equal(page2PadAfter.label, 'Studio Camera', 'cross-page pad label updated on non-active page');
+
+    // Changes survive reload
+    await pageRenames.reload();
+    await pageRenames.waitForSelector('#grid .pad');
+    const pInputsReloaded = await pageRenames.evaluate(() => Deck.getActivePads());
+    assert.equal(pInputsReloaded[0].sourceName, 'Studio Camera', 'reloaded source sourceName preserved');
+    assert.equal(pInputsReloaded[1].sourceName, 'Studio Camera', 'reloaded filter sourceName preserved');
+    assert.equal(pInputsReloaded[4].inputName, 'Studio Camera', 'reloaded mute inputName preserved');
+    assert.equal(pInputsReloaded[10].label, 'My Custom Mic', 'reloaded custom label preserved');
+    assert.equal(pInputsReloaded[11].steps[0].inputName, 'Studio Camera', 'reloaded macro step inputName preserved');
+    const panicInputsReloaded = await pageRenames.evaluate(() => Deck.cfg.panicSteps);
+    assert.equal(panicInputsReloaded[0].sourceName, 'Studio Camera', 'reloaded panic filter step preserved');
+    assert.equal(panicInputsReloaded[1].inputName, 'Studio Camera', 'reloaded panic mute step preserved');
+
+    const page2PadReloaded = await pageRenames.evaluate(() => Deck.cfg.pages.find((pg) => pg.name === 'Page 2')?.pads[0]);
+    assert.equal(page2PadReloaded.inputName, 'Studio Camera', 'reloaded cross-page pad inputName preserved');
+    console.log('  ✓ input renames update all 10 input/source target types, Macro & PANIC steps with label preservation across pages');
+  } finally {
+    await ctxRenames.close();
+  }
+
   // 16. Single-flight OBS sync with parallel scene loading (ticket #10)
   const syncObs = createFakeObs(false);
   await new Promise((r) => syncObs.wss.once('listening', r));
@@ -1039,6 +1369,274 @@ try {
     console.log('  ✓ reconnect backoff, drop reasons & unrecoverable close codes (#11)');
   } finally {
     recObs.wss.close();
+  }
+
+  // 17. Undo and redo in Edit Mode (#15)
+  const undoObs = createFakeObs(false);
+  await new Promise((r) => undoObs.wss.once('listening', r));
+  const undoPort = undoObs.wss.address().port;
+  try {
+    const ctxUndo = await browser.newContext();
+    const pageUndo = await ctxUndo.newPage();
+    pageUndo.on('pageerror', (e) => pageErrors.push(e.message));
+    pageUndo.on('dialog', (dlg) => dlg.accept());
+    await pageUndo.goto(`${DECK_URL}?port=${undoPort}`);
+    await pageUndo.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageUndo.waitForTimeout(100);
+    if (await pageUndo.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageUndo.click('#btn-wiz-cancel');
+    }
+
+    // Enter Edit Mode
+    await pageUndo.click('#btn-edit');
+    assert.ok(await pageUndo.evaluate(() => Deck.editMode), 'Edit Mode enabled');
+
+    // Undo & Redo buttons exist in Edit Mode and are initially disabled
+    const undoBtn = pageUndo.locator('#btn-undo');
+    const redoBtn = pageUndo.locator('#btn-redo');
+    assert.equal(await undoBtn.count(), 1, '#btn-undo button exists in Edit Mode');
+    assert.equal(await redoBtn.count(), 1, '#btn-redo button exists in Edit Mode');
+    assert.equal(await undoBtn.isDisabled(), true, 'Undo button initially disabled');
+    assert.equal(await redoBtn.isDisabled(), true, 'Redo button initially disabled');
+
+    const padEl = (idx) => pageUndo.locator('#grid .pad').nth(idx);
+
+    // 1. Pad Editor Save action
+    await padEl(0).click();
+    await pageUndo.waitForSelector('#pad-dlg[open]');
+    await pageUndo.fill('#f-label', 'UndoTestPad');
+    await pageUndo.click('#pad-form button[type="submit"]');
+    await pageUndo.waitForFunction(() => !document.getElementById('pad-dlg').open);
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'UndoTestPad');
+    assert.equal(await undoBtn.isDisabled(), false, 'Undo button enabled after Pad Editor save');
+    assert.equal(await redoBtn.isDisabled(), true, 'Redo button disabled after new edit');
+
+    // Undo via button
+    undoObs.state.calls.length = 0;
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), '', 'Pad Editor save undone');
+    assert.equal(await undoBtn.isDisabled(), true, 'Undo button disabled when stack empty');
+    assert.equal(await redoBtn.isDisabled(), false, 'Redo button enabled after undo');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during Undo');
+
+    // Redo via button
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'UndoTestPad', 'Pad Editor save redone');
+    assert.equal(await undoBtn.isDisabled(), false, 'Undo button enabled after redo');
+    assert.equal(await redoBtn.isDisabled(), true, 'Redo button disabled after redo');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during Redo');
+
+    // 2. Drag swap on grid
+    await pageUndo.evaluate(() => {
+      const p0 = document.querySelectorAll('#grid .pad')[0];
+      const p1 = document.querySelectorAll('#grid .pad')[1];
+      const dt = new DataTransfer();
+      p0.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      p1.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      p1.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      p0.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    });
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[1].label), 'UndoTestPad', 'Pads swapped');
+
+    // Undo via Ctrl+Z keyboard shortcut
+    undoObs.state.calls.length = 0;
+    await pageUndo.keyboard.press('Control+z');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'UndoTestPad', 'Drag swap undone via Ctrl+Z');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[1].label), '');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during Ctrl+Z');
+
+    // Redo via Ctrl+Shift+Z
+    await pageUndo.keyboard.press('Control+Shift+z');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[1].label), 'UndoTestPad', 'Drag swap redone via Ctrl+Shift+Z');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during Ctrl+Shift+Z');
+
+    // 3. Multi-select bulk actions: bulk recolor in ONE step
+    await pageUndo.waitForTimeout(300);
+    await pageUndo.evaluate(() => {
+      const page = Deck.getActivePage();
+      page.pads[2] = { type: 'scene', sceneName: 'Scene A', label: 'Scene A', color: '#1e293b' };
+      page.pads[3] = { type: 'scene', sceneName: 'Scene B', label: 'Scene B', color: '#1e293b' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+    // Select pads 2 and 3
+    await pageUndo.click('#btn-sel-none');
+    await padEl(2).click({ modifiers: ['Control'] });
+    await padEl(3).click({ modifiers: ['Control'] });
+    assert.equal(await pageUndo.locator('#grid .pad.selected').count(), 2);
+
+    // Bulk recolor to #991b1b
+    await pageUndo.click('#btn-sel-color');
+    await pageUndo.locator('#sel-color-pop .sw[title="#991b1b"]').click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].color), '#991b1b');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].color), '#991b1b');
+
+    // Undo bulk recolor in ONE step
+    undoObs.state.calls.length = 0;
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].color), '#1e293b', 'Pad 2 color reverted');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].color), '#1e293b', 'Pad 3 color reverted in same step');
+    assert.equal(undoObs.state.calls.length, 0, 'No OBS requests sent during bulk undo');
+
+    // Redo bulk recolor in ONE step
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].color), '#991b1b');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].color), '#991b1b');
+
+    // 4. Bulk clear in ONE step
+    await padEl(2).click({ modifiers: ['Control'] });
+    await padEl(3).click({ modifiers: ['Control'] });
+    await pageUndo.click('#btn-sel-clear');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].type), 'none');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].type), 'none');
+
+    // Undo bulk clear in ONE step
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].type), 'scene');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].type), 'scene');
+
+    // Redo bulk clear in ONE step
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[2].type), 'none');
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[3].type), 'none');
+
+    // 5. Page operations: Add, Duplicate, Rename, Resize, Delete
+    // Add Page
+    await pageUndo.click('#btn-deck-add');
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page added');
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 1, 'Page add undone');
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page add redone');
+
+    // Duplicate Page
+    await pageUndo.click('#btn-deck-dup');
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 3, 'Page duplicated');
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page duplicate undone');
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 3, 'Page duplicate redone');
+
+    // Rename and Resize Page via Dialog
+    await pageUndo.click('#btn-deck-cfg');
+    await pageUndo.waitForSelector('#deck-dlg[open]');
+    await pageUndo.fill('#d-name', 'RenamedPage');
+    await pageUndo.fill('#d-cols', '6');
+    await pageUndo.fill('#d-rows', '4');
+    await pageUndo.click('#deck-form button[type="submit"]');
+    await pageUndo.waitForFunction(() => !document.getElementById('deck-dlg').open);
+    const renamed = await pageUndo.evaluate(() => {
+      const p = Deck.getActivePage();
+      return { name: p.name, cols: p.cols, rows: p.rows };
+    });
+    assert.deepEqual(renamed, { name: 'RenamedPage', cols: 6, rows: 4 });
+
+    // Undo rename & resize in ONE step
+    await undoBtn.click();
+    const reverted = await pageUndo.evaluate(() => {
+      const p = Deck.getActivePage();
+      return { name: p.name, cols: p.cols, rows: p.rows };
+    });
+    assert.equal(reverted.name !== 'RenamedPage', true, 'Page rename undone');
+    assert.deepEqual({ cols: reverted.cols, rows: reverted.rows }, { cols: 8, rows: 8 }, 'Page resize undone in same step');
+
+    // Redo rename & resize
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().name), 'RenamedPage');
+
+    // Delete Page
+    await pageUndo.click('#btn-deck-cfg');
+    await pageUndo.waitForSelector('#deck-dlg[open]');
+    await pageUndo.click('#btn-deck-del');
+    await pageUndo.waitForFunction(() => !document.getElementById('deck-dlg').open);
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page deleted');
+
+    // Undo delete Page
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 3, 'Page delete undone');
+
+    // Redo delete Page
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.pages.length), 2, 'Page delete redone');
+
+    // 6. Move pad to Page via drag onto page tab
+    await pageUndo.evaluate(() => {
+      const p = Deck.getActivePage();
+      p.pads[0] = { type: 'scene', sceneName: 'MoveMe', label: 'MoveMe' };
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'MoveMe');
+    const targetTab = pageUndo.locator('#deck-tabs .page-tab').nth(0);
+    await pageUndo.evaluate(() => {
+      const p0 = document.querySelectorAll('#grid .pad')[0];
+      const tab0 = document.querySelectorAll('#deck-tabs .page-tab')[0];
+      const dt = new DataTransfer();
+      p0.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      tab0.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      tab0.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      p0.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    });
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), '', 'Pad moved away from active page');
+
+    // Undo move to Page
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), 'MoveMe', 'Pad restored on active page after undo');
+
+    // Redo move to Page
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), '', 'Pad moved again after redo');
+
+    // 7. PANIC steps save
+    await pageUndo.click('#btn-panic-cfg');
+    await pageUndo.waitForSelector('#panic-dlg[open]');
+    await pageUndo.click('#btn-panic-add');
+    await pageUndo.click('#btn-panic-save');
+    await pageUndo.waitForFunction(() => !document.getElementById('panic-dlg').open);
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.panicSteps.length), 1, 'Panic step saved');
+
+    // Undo PANIC steps save
+    await undoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.panicSteps.length), 0, 'Panic step save undone');
+
+    // Redo PANIC steps save
+    await redoBtn.click();
+    assert.equal(await pageUndo.evaluate(() => Deck.cfg.panicSteps.length), 1, 'Panic step save redone');
+
+    // 8. History depth capped at 50
+    await pageUndo.evaluate(() => {
+      const page = Deck.getActivePage();
+      for (let i = 0; i < 55; i++) {
+        Deck.pushHistory(() => {
+          page.pads[0] = { type: 'scene', label: `Depth${i}` };
+          Deck.saveCfg();
+        });
+      }
+    });
+    // Can undo up to 50 times
+    let undoCount = 0;
+    while (await undoBtn.isEnabled()) {
+      await undoBtn.click();
+      undoCount++;
+      if (undoCount > 60) break;
+    }
+    assert.equal(undoCount, 50, 'History depth capped at exactly 50 states');
+
+    // 9. History clears on reload
+    await pageUndo.reload();
+    await pageUndo.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageUndo.click('#btn-edit');
+    assert.equal(await pageUndo.locator('#btn-undo').isDisabled(), true, 'Undo disabled after reload');
+    assert.equal(await pageUndo.locator('#btn-redo').isDisabled(), true, 'Redo disabled after reload');
+
+    // 10. Glossary contains Undo History
+    const glossaryText = fs.readFileSync(join(__dirname, 'GLOSSARY.md'), 'utf8');
+    assert.ok(glossaryText.includes('**Undo History**:'), 'GLOSSARY.md contains Undo History');
+
+    await ctxUndo.close();
+    console.log('  ✓ undo and redo in Edit Mode (#15)');
+  } finally {
+    undoObs.wss.close();
   }
 
   console.log('\nPASS: all deck edge E2E checks succeeded.');
