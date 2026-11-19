@@ -720,11 +720,14 @@ try {
     await pageSeam.waitForFunction(() => Deck.obs.volumes['Host Mic'] === -18);
 
     // Close connection with chosen close code and reason
-    const closedEvent = pageSeam.evaluate(() => new Promise((resolve) => {
-      Deck.obs.ws.addEventListener('close', (ev) => resolve({ code: ev.code, reason: ev.reason }), { once: true });
-    }));
+    await pageSeam.waitForFunction(() => Deck.obs.ws && Deck.obs.ws.readyState === 1);
+    await pageSeam.evaluate(() => {
+      window.__seamClose = new Promise((resolve) => {
+        Deck.obs.ws.addEventListener('close', (ev) => resolve({ code: ev.code, reason: ev.reason }), { once: true });
+      });
+    });
     seamObs.closeAll(4009, 'Custom close reason');
-    const closeInfo = await closedEvent;
+    const closeInfo = await pageSeam.evaluate(() => window.__seamClose);
     assert.deepEqual(closeInfo, { code: 4009, reason: 'Custom close reason' }, 'closed with chosen code and reason');
     await pageSeam.waitForFunction(() => document.getElementById('conn-text').textContent === 'Auth Failed');
 
