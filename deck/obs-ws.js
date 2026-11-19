@@ -1563,28 +1563,23 @@
     return idx >= 0 ? list[idx] : null;
   };
 
-  const UNRECOVERABLE_CLOSE_CODES = new Map([
-    [4009, 'Auth Failed'],
-    [4010, 'Unsupported RPC Version'],
-    [4011, 'Session Invalidated'],
-    [4002, 'Message Decode Error'],
-    [4003, 'Missing Data Field'],
-    [4004, 'Invalid Data Field Type'],
-    [4005, 'Invalid Data Field Value'],
-    [4006, 'Unknown OpCode'],
-    [1002, 'Protocol Error'],
-    [1003, 'Unsupported Data'],
-    [1008, 'Policy Violation'],
-  ]);
-
-  const CLOSE_CODE_DESCRIPTIONS = {
-    1000: 'Normal Closure',
-    1001: 'Going Away',
-    1005: 'No Status',
-    1006: 'Abnormal Closure',
-    4000: 'Unknown Reason',
-    4010: 'Unsupported RPC Version',
-    4011: 'Session Invalidated',
+  const CLOSE_CODES = {
+    1000: { name: 'Normal Closure' },
+    1001: { name: 'Going Away' },
+    1002: { name: 'Protocol Error', unrecoverable: true },
+    1003: { name: 'Unsupported Data', unrecoverable: true },
+    1005: { name: 'No Status' },
+    1006: { name: 'Abnormal Closure' },
+    1008: { name: 'Policy Violation', unrecoverable: true },
+    4000: { name: 'Unknown Reason' },
+    4002: { name: 'Message Decode Error', unrecoverable: true },
+    4003: { name: 'Missing Data Field', unrecoverable: true },
+    4004: { name: 'Invalid Data Field Type', unrecoverable: true },
+    4005: { name: 'Invalid Data Field Value', unrecoverable: true },
+    4006: { name: 'Unknown OpCode', unrecoverable: true },
+    4009: { name: 'Auth Failed', unrecoverable: true },
+    4010: { name: 'Unsupported RPC Version', unrecoverable: true },
+    4011: { name: 'Session Invalidated', unrecoverable: true },
   };
 
   Deck.disconnectObs = (manual = true) => {
@@ -1626,7 +1621,8 @@
 
     const code = ev?.code;
     const codeStr = code ? ` (${code})` : '';
-    const reasonText = ev?.reason || (code && CLOSE_CODE_DESCRIPTIONS[code]) || (code ? `Code ${code}` : 'Connection dropped');
+    const entry = code ? CLOSE_CODES[code] : null;
+    const reasonText = ev?.reason || entry?.name || (code ? `Code ${code}` : 'Connection dropped');
     let remaining = delaySec;
 
     const updateStatus = () => {
@@ -1730,8 +1726,9 @@
         return;
       }
 
-      if (UNRECOVERABLE_CLOSE_CODES.has(ev.code)) {
-        const name = UNRECOVERABLE_CLOSE_CODES.get(ev.code);
+      const closeEntry = CLOSE_CODES[ev.code];
+      if (closeEntry?.unrecoverable) {
+        const name = closeEntry.name;
         const detail = ev.reason ? `${ev.reason} (${ev.code})` : `${name} (${ev.code})`;
         Deck.setConn('bad', name);
         Deck.setMsg(`${detail} — retries stopped`);

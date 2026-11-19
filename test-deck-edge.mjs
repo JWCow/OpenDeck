@@ -586,6 +586,7 @@ try {
   console.log('  ✓ font scaler & palette width bounds clamping + theme persistence');
 
   assert.deepEqual(pageErrors, [], `unexpected page errors: ${pageErrors.join('; ')}`);
+  await page.close();
 
   // 13. Release build check: npm run build:release produces clean valid ZIPs for OpenDeck v2.2.1
   assert.equal(PKG.version, '2.2.1', 'package.json version is 2.2.1');
