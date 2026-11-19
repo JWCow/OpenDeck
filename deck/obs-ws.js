@@ -413,7 +413,7 @@
       const port = Number(raw.ws.port);
       ws.host = String(raw.ws.host || '127.0.0.1');
       ws.port = port >= 1 && port <= 65535 ? port : 4455;
-      ws.password = typeof raw.ws.password === 'string' ? raw.ws.password : fallbackPassword;
+      ws.password = (typeof raw.ws.password === 'string' && raw.ws.password) ? raw.ws.password : fallbackPassword;
       if (raw.ws.manualPort) ws.manualPort = true;
       if (raw.ws.manualHost) ws.manualHost = true;
     }
@@ -1170,7 +1170,9 @@
           snapFailed = true;
         }
       }
-      if (typeof Deck.abortPageTimers === 'function') {
+      if (typeof Deck.abortAllTimers === 'function') {
+        Deck.abortAllTimers();
+      } else if (typeof Deck.abortPageTimers === 'function') {
         for (const old of Deck.cfg.pages) Deck.abortPageTimers(old.id);
       }
       Deck.cfg.pages = normalized;
@@ -1633,6 +1635,15 @@
       Deck.setMsg('No snapshot was saved');
     }
     return res;
+  };
+
+  Deck.getCurrentPassword = () => (Deck.cfg?.ws?.password) || ($('ws-pass') ? $('ws-pass').value : '') || '';
+
+  Deck.syncWsInputs = () => {
+    if (!Deck.cfg?.ws) return;
+    if ($('ws-host')) $('ws-host').value = Deck.cfg.ws.host ?? '';
+    if ($('ws-port')) $('ws-port').value = Deck.cfg.ws.port ?? '';
+    if ($('ws-pass')) $('ws-pass').value = Deck.cfg.ws.password ?? '';
   };
 
   Deck.setMsg = (txt) => {

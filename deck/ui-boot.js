@@ -100,10 +100,7 @@
     Deck.setMsg('Exported obs-virtual-deck.json');
   });
   Deck.importLayout = async (d, sourceName = 'layout') => {
-    const currentPassword = (Deck.cfg?.ws?.password) || ($('ws-pass') ? $('ws-pass').value : '') || '';
-    if (d && d.ws && !d.ws.password) {
-      delete d.ws.password;
-    }
+    const currentPassword = Deck.getCurrentPassword();
     let snapFailed = false;
     if (typeof Deck.createSnapshot === 'function') {
       try {
@@ -114,20 +111,9 @@
       }
     }
     Deck.clearSelection();
-    const pageIds = new Set((Deck.cfg?.pages || []).map((p) => p.id));
-    if (Deck.activeMacros) {
-      for (const k of Deck.activeMacros.keys()) pageIds.add(k.split(':')[0]);
-    }
-    if (Deck.activeAutoOffs) {
-      for (const k of Deck.activeAutoOffs.keys()) pageIds.add(k.split(':')[0]);
-    }
-    for (const pid of pageIds) {
-      if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(pid);
-    }
+    if (typeof Deck.abortAllTimers === 'function') Deck.abortAllTimers();
     Deck.cfg = Deck.migrateConfig(d, currentPassword);
-    if ($('ws-host')) $('ws-host').value = Deck.cfg.ws.host;
-    if ($('ws-port')) $('ws-port').value = Deck.cfg.ws.port;
-    if ($('ws-pass')) $('ws-pass').value = Deck.cfg.ws.password;
+    Deck.syncWsInputs();
     Deck.saveCfg();
     Deck.renderGrid();
     if (Deck.obs.status === 'ok') await Deck.syncObsState();
@@ -186,9 +172,7 @@
       }
     }
     Deck.clearSelection();
-    for (const p of Deck.cfg.pages) {
-      if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(p.id);
-    }
+    if (typeof Deck.abortAllTimers === 'function') Deck.abortAllTimers();
     Deck.cfg.pages = Deck.defaultPages();
     Deck.cfg.activePageId = Deck.cfg.pages[0].id;
     Deck.cfg.panicSteps = [];
@@ -206,9 +190,7 @@
   initTheme();
   Deck.initPaletteResizer();
   if ($('version-badge') && Deck.VERSION) $('version-badge').textContent = `v${Deck.VERSION}`;
-  $('ws-host').value = Deck.cfg.ws.host;
-  $('ws-port').value = Deck.cfg.ws.port;
-  $('ws-pass').value = Deck.cfg.ws.password;
+  Deck.syncWsInputs();
   Deck.updateUndoRedoUi?.();
   Deck.renderPalette();
   Deck.renderGrid();

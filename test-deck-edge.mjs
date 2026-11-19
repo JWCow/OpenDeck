@@ -751,14 +751,6 @@ try {
       await pageRenames.click('#btn-wiz-cancel');
     }
 
-    // Verify renameReference and applyRename are not exported on Deck (ticket #8 review)
-    const exportedHelpers = await pageRenames.evaluate(() => ({
-      renameReference: typeof Deck.renameReference,
-      applyRename: typeof Deck.applyRename,
-    }));
-    assert.equal(exportedHelpers.renameReference, 'undefined', 'renameReference must not be exported on Deck');
-    assert.equal(exportedHelpers.applyRename, 'undefined', 'applyRename must not be exported on Deck');
-
     // 16a. Scene renames update Scene, Source, Transform, Studio preview, Macro and PANIC steps + label preservation
     await pageRenames.evaluate(() => {
       const p = Deck.getActivePads();

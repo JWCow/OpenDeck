@@ -625,8 +625,8 @@
     return true;
   }
 
-  Deck.busyPads = Deck.busyPads || new Set();
-  Deck.armedPads = Deck.armedPads || new Map();
+  const busyPads = new Set();
+  const armedPads = new Map();
 
   const OUTPUT_TARGET_LABELS = {
     stream: 'Stream',
@@ -645,10 +645,10 @@
   }
 
   function disarmPad(key) {
-    const armed = Deck.armedPads.get(key);
+    const armed = armedPads.get(key);
     if (!armed) return false;
     clearTimeout(armed.timer);
-    Deck.armedPads.delete(key);
+    armedPads.delete(key);
     const [pageId, idxStr] = key.split(':');
     if (Deck.cfg?.activePageId === pageId) {
       const grid = Deck.$ ? Deck.$('grid') : document.getElementById('grid');
@@ -671,7 +671,7 @@
         disarmPad(key);
       }, 2000),
     };
-    Deck.armedPads.set(key, ctx);
+    armedPads.set(key, ctx);
     if (Deck.cfg?.activePageId === pageId) {
       const grid = Deck.$ ? Deck.$('grid') : document.getElementById('grid');
       if (grid) {
@@ -732,7 +732,7 @@
     if (!p || p.type === 'none' || !p.hold || !Deck.HOLD_TYPES || !Deck.HOLD_TYPES.has(p.type)) return;
 
     const key = timerKey(page.id, idx);
-    if (Deck.busyPads ? Deck.busyPads.has(key) : false) return;
+    if (busyPads.has(key)) return;
     if (Deck.heldPads.has(key)) return;
 
     let origState = false;
@@ -773,13 +773,13 @@
     }
 
     try {
-      if (Deck.busyPads) Deck.busyPads.add(key);
+      busyPads.add(key);
       entry.pressPromise = execAction(p);
       await entry.pressPromise;
     } catch (e) {
       Deck.setMsg?.(e.message);
     } finally {
-      if (Deck.busyPads) Deck.busyPads.delete(key);
+      busyPads.delete(key);
     }
   }
 
@@ -800,14 +800,14 @@
     if (entry.restoreAction) {
       try {
         if (Deck.obs?.ws && Deck.obs.ws.readyState === 1) {
-          if (Deck.busyPads) Deck.busyPads.add(key);
+          busyPads.add(key);
           await execAction(entry.restoreAction);
         } else {
           pendingHoldRestores.push(entry);
         }
       } catch {}
       finally {
-        if (Deck.busyPads) Deck.busyPads.delete(key);
+        busyPads.delete(key);
       }
     }
   }
@@ -856,9 +856,20 @@
     const prefix = `${pageId}:`;
     for (const k of [...Deck.activeMacros.keys()]) if (k.startsWith(prefix)) abortMacro(k);
     for (const k of [...Deck.activeAutoOffs.keys()]) if (k.startsWith(prefix)) abortAutoOff(k);
-    for (const k of [...Deck.armedPads.keys()]) if (k.startsWith(prefix)) disarmPad(k);
+    for (const k of [...armedPads.keys()]) if (k.startsWith(prefix)) disarmPad(k);
     releaseHold(pageId);
   };
+
+  function abortAllTimers() {
+    const macros = [...Deck.activeMacros.keys()];
+    const timers = [...Deck.activeAutoOffs.keys()];
+    macros.forEach(abortMacro);
+    timers.forEach(abortAutoOff);
+    for (const k of [...armedPads.keys()]) disarmPad(k);
+    releaseHold();
+    return { stoppedCount: macros.length + timers.length, macrosCount: macros.length, timersCount: timers.length };
+  }
+  Deck.abortAllTimers = abortAllTimers;
 
   Deck.getPadRuntime = (idx, pageId = Deck.cfg.activePageId) => {
     const key = timerKey(pageId, idx);
@@ -866,7 +877,7 @@
     if (macro) return { running: true, kind: 'macro', endsAt: macro.endsAt || 0 };
     const autoOff = Deck.activeAutoOffs.get(key);
     if (autoOff) return { running: true, kind: 'autoOff', endsAt: autoOff.endsAt || 0 };
-    const armed = Deck.armedPads.get(key);
+    const armed = armedPads.get(key);
     if (armed) return { running: false, armed: true, kind: 'armed', endsAt: armed.expiresAt || 0 };
     return { running: false, kind: null, endsAt: 0 };
   };
@@ -928,18 +939,8 @@
   }
 
   async function runPanic() {
-    const { activeMacros, activeAutoOffs, armedPads, cfg, obs, obsCall, setMsg } = Deck;
-    const runningMacros = [...activeMacros.keys()];
-    runningMacros.forEach(abortMacro);
-    const runningTimers = [...activeAutoOffs.keys()];
-    runningTimers.forEach(abortAutoOff);
-    if (armedPads) {
-      const runningArmed = [...armedPads.keys()];
-      runningArmed.forEach(disarmPad);
-    }
-    if (Deck.heldPads && Deck.heldPads.size > 0) {
-      await releaseHold();
-    }
+    const { cfg, obsCall, setMsg } = Deck;
+    const { stoppedCount } = abortAllTimers();
     let ran = 0;
     const errs = [];
     if ((cfg.panicSteps || []).length) {
@@ -977,7 +978,6 @@
         }
       }
     }
-    const stoppedCount = runningMacros.length + runningTimers.length;
     setMsg(
       `PANIC executed (${stoppedCount} timer/macro(s) stopped, ${ran} reset action(s))`
       + (errs.length ? ` — ${errs.length} error(s): ${errs[0]}` : '')
@@ -1004,7 +1004,7 @@
     if (p.type === 'macro') { await runMacro(idx, p, page.id); return; }
 
     const key = timerKey(page.id, idx);
-    if (Deck.busyPads.has(key)) return;
+    if (busyPads.has(key)) return;
 
     if (p.hold && Deck.HOLD_TYPES && Deck.HOLD_TYPES.has(p.type)) {
       if (Deck.heldPads.has(key)) {
@@ -1022,14 +1022,14 @@
         const rev = buildAutoOffReverse(p);
         if (rev) {
           try {
-            Deck.busyPads.add(key);
+            busyPads.add(key);
             await execAction(rev);
             Deck.setMsg(`Cancelled & turned off: ${describePad(p)}`);
             return;
           } catch (e) {
             Deck.setMsg(e.message);
           } finally {
-            Deck.busyPads.delete(key);
+            busyPads.delete(key);
           }
         }
       }
@@ -1039,18 +1039,18 @@
     }
 
     if (isOutputStopAction(p) && !opts.hold) {
-      if (!Deck.armedPads.has(key)) {
+      if (!armedPads.has(key)) {
         armPad(page.id, idx, p);
         return;
       }
       disarmPad(key);
-    } else if (Deck.armedPads.has(key)) {
+    } else if (armedPads.has(key)) {
       disarmPad(key);
     }
 
     const wasActive = isPadActive(p);
     try {
-      Deck.busyPads.add(key);
+      busyPads.add(key);
       await execAction(p);
       if (isTurnOnAction(p, wasActive)) {
         startAutoOff(key, page.id, idx, p);
@@ -1059,7 +1059,7 @@
     } catch (e) {
       Deck.setMsg(e.message);
     } finally {
-      Deck.busyPads.delete(key);
+      busyPads.delete(key);
     }
   }
 
@@ -1073,11 +1073,9 @@
 
   Deck.isPadActive = isPadActive;
   Deck.isPadArmed = (idx, pageId = Deck.cfg.activePageId) => {
-    return Deck.armedPads.has(timerKey(pageId, idx));
+    return armedPads.has(timerKey(pageId, idx));
   };
   Deck.isOutputStopAction = isOutputStopAction;
-  Deck.armPad = armPad;
-  Deck.disarmPad = disarmPad;
   Deck.execAction = execAction;
   Deck.runPanic = runPanic;
   Deck.onPadClick = onPadClick;
