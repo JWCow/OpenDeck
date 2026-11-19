@@ -3,7 +3,7 @@
 
   const VERSION = '2.2.1';
   const STORAGE_KEY = 'opendeck_config';
-  const LEGACY_STORAGE_KEYS = ['obs_deck_config_v2', 'obs_virtual_deck_v2', 'obs_virtual_deck_v1'];
+  const LEGACY_STORAGE_KEYS = ['obs_virtual_deck_v2', 'obs_deck_config_v2', 'obs_virtual_deck_v1'];
   let initialSaveFailed = false;
   const PROBE_PORTS = [4455, 4456, 4457, 4458, 4444];
   const MIN_COLS = 2;
@@ -355,35 +355,32 @@
     let state = base;
     try {
       const rawCanonical = localStorage.getItem(STORAGE_KEY);
-      const rawDeckV2 = localStorage.getItem('obs_deck_config_v2');
-      const rawVirtV2 = localStorage.getItem('obs_virtual_deck_v2');
-      const rawVirtV1 = localStorage.getItem('obs_virtual_deck_v1');
-
-      let rawToMigrate = null;
-      if (rawVirtV2 && rawVirtV2.includes('"decks"')) {
-        rawToMigrate = rawVirtV2;
-      } else if (rawVirtV1) {
-        rawToMigrate = rawVirtV1;
-      } else if (rawDeckV2) {
-        rawToMigrate = rawDeckV2;
-      } else if (rawVirtV2 && !rawCanonical) {
-        rawToMigrate = rawVirtV2;
-      } else if (rawCanonical) {
-        rawToMigrate = rawCanonical;
-      }
-
-      if (rawToMigrate) {
-        state = migrateConfig(JSON.parse(rawToMigrate));
-        try {
-          const json = JSON.stringify(state);
-          localStorage.setItem(STORAGE_KEY, json);
-        } catch {
-          initialSaveFailed = true;
+      if (rawCanonical) {
+        state = migrateConfig(JSON.parse(rawCanonical));
+        for (const k of LEGACY_STORAGE_KEYS) {
+          try { localStorage.removeItem(k); } catch {}
         }
-      }
-
-      for (const k of LEGACY_STORAGE_KEYS) {
-        try { localStorage.removeItem(k); } catch {}
+      } else {
+        let rawLegacy = null;
+        for (const k of LEGACY_STORAGE_KEYS) {
+          const raw = localStorage.getItem(k);
+          if (raw) {
+            rawLegacy = raw;
+            break;
+          }
+        }
+        if (rawLegacy) {
+          state = migrateConfig(JSON.parse(rawLegacy));
+          try {
+            const json = JSON.stringify(state);
+            localStorage.setItem(STORAGE_KEY, json);
+            for (const k of LEGACY_STORAGE_KEYS) {
+              try { localStorage.removeItem(k); } catch {}
+            }
+          } catch {
+            initialSaveFailed = true;
+          }
+        }
       }
     } catch {}
 
@@ -517,17 +514,10 @@
     hasSaveWarning: initialSaveFailed,
     setSaveWarning: (show) => {
       Deck.hasSaveWarning = Boolean(show);
-      let warnEl = $('save-warning');
+      const warnEl = $('save-warning');
       const statusEl = document.querySelector('.status');
       const msgEl = $('msg-info');
       if (show) {
-        if (!warnEl && statusEl) {
-          warnEl = document.createElement('span');
-          warnEl.id = 'save-warning';
-          warnEl.className = 'save-warning';
-          warnEl.title = 'Save failed: Export layout and use fewer or smaller Pad Graphics';
-          statusEl.insertBefore(warnEl, $('version-badge') || null);
-        }
         if (warnEl) {
           warnEl.hidden = false;
           warnEl.textContent = '⚠️ Save failed: Export layout and use fewer or smaller Pad Graphics';
@@ -556,6 +546,9 @@
       const json = JSON.stringify(Deck.cfg);
       localStorage.setItem(STORAGE_KEY, json);
       ok = true;
+      for (const k of LEGACY_STORAGE_KEYS) {
+        try { localStorage.removeItem(k); } catch {}
+      }
     } catch {}
     Deck.setSaveWarning(!ok);
     Deck.syncStatsPolling();

@@ -69,6 +69,16 @@ try {
   page.on('pageerror', (e) => pageErrors.push(e.message));
   page.on('dialog', (d) => d.accept());
 
+  await page.addInitScript(() => {
+    const origSet = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(k, v) {
+      if (window.sessionStorage && sessionStorage.getItem('fail_storage') === '1' && k === 'opendeck_config') {
+        throw new Error('QuotaExceededError: simulated migration write failure');
+      }
+      return origSet.apply(this, arguments);
+    };
+  });
+
   await page.goto(DECK_URL);
   await page.waitForSelector('#grid .pad');
 
@@ -181,6 +191,67 @@ try {
   });
   assert.equal(await saveWarn.isVisible(), false, 'warning is hidden after next successful save');
   assert.ok(!(await page.textContent('.status')).includes('Save failed'), 'status area cleared of save failure message');
+
+  // 1e. Precedence: canonical opendeck_config wins whenever it exists, ignoring stale legacy keys
+  await page.evaluate((p) => {
+    const padsCanonical = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+    padsCanonical[0] = { type: 'scene', sceneName: 'Slides', label: 'Canonical Layout Pad', icon: '⭐', color: '#1e3a8a' };
+
+    const padsV1 = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+    padsV1[0] = { type: 'scene', sceneName: 'BRB', label: 'Stale V1 Pad', icon: '💀', color: '#991b1b' };
+
+    localStorage.setItem('opendeck_config', JSON.stringify({
+      version: 2,
+      ws: { host: '127.0.0.1', port: p, password: '' },
+      activePageId: 'page-1',
+      pages: [{ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads: padsCanonical }],
+      panicSteps: [],
+    }));
+    localStorage.setItem('obs_virtual_deck_v1', JSON.stringify({
+      ws: { host: '127.0.0.1', port: p, password: '' },
+      pads: padsV1,
+      panicSteps: [],
+    }));
+    localStorage.removeItem('obs_virtual_deck_v2');
+    localStorage.removeItem('obs_deck_config_v2');
+  }, port);
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  const precedenceConfig = await page.evaluate(() => JSON.parse(localStorage.getItem('opendeck_config') || 'null'));
+  assert.equal(precedenceConfig?.pages[0]?.pads[0]?.label, 'Canonical Layout Pad', 'canonical layout loads when stale v1 layout also exists');
+  assert.ok((await page.locator('#grid .pad').nth(0).textContent()).includes('Canonical Layout Pad'), 'grid shows canonical layout pad');
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v1')), null, 'stale v1 key removed after canonical load');
+
+  // 1f. Data-loss prevention during migration: legacy keys preserved if canonical write throws
+  await page.evaluate((p) => {
+    localStorage.removeItem('opendeck_config');
+    localStorage.removeItem('obs_deck_config_v2');
+    localStorage.removeItem('obs_virtual_deck_v1');
+    const pads = Array.from({ length: 64 }, () => ({ type: 'none', label: '', icon: '', color: '#222733' }));
+    pads[0] = { type: 'scene', sceneName: 'Slides', label: 'Unlost Legacy Scene', icon: '💾', color: '#1e3a8a' };
+    localStorage.setItem('obs_virtual_deck_v2', JSON.stringify({
+      version: 2,
+      ws: { host: '127.0.0.1', port: p, password: '' },
+      activePageId: 'page-1',
+      pages: [{ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads }],
+      panicSteps: [],
+    }));
+    sessionStorage.setItem('fail_storage', '1');
+  }, port);
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  // While write failed during migration, legacy key must NOT be deleted
+  assert.notEqual(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v2')), null, 'legacy key preserved when migration write throws');
+  assert.equal(await page.evaluate(() => localStorage.getItem('opendeck_config')), null, 'canonical key not saved when write throws');
+
+  // Make writes work again and reload
+  await page.evaluate(() => sessionStorage.removeItem('fail_storage'));
+  await page.reload();
+  await page.waitForSelector('#grid .pad');
+  const recovered = await page.evaluate(() => JSON.parse(localStorage.getItem('opendeck_config') || 'null'));
+  assert.equal(recovered?.pages[0]?.pads[0]?.label, 'Unlost Legacy Scene', 'layout preserved and migrated after writes succeed again');
+  assert.ok((await page.locator('#grid .pad').nth(0).textContent()).includes('Unlost Legacy Scene'), 'grid displays unlost legacy scene pad');
+  assert.equal(await page.evaluate(() => localStorage.getItem('obs_virtual_deck_v2')), null, 'legacy key removed after successful migration write');
 
   // Reset back to clean defaults before continuing
   await page.evaluate(() => {
