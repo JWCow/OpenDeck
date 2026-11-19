@@ -28,6 +28,7 @@ export function createFakeObs(requireAuth = true) {
     inputSettings: {
       'Alert Overlay': { url: 'https://example.com/alerts' },
       'Slide Image': { file: '/img/slide1.png' },
+      'Photo Slideshow': { files: [{ value: '/img/slide1.png', hidden: false, selected: false }] },
     },
     sceneItems: {
       'Main Cam': [
@@ -100,9 +101,91 @@ export function createFakeObs(requireAuth = true) {
 
   const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   const sockets = new Set();
-  const broadcast = (eventType, eventData) => {
+  const broadcast = (eventType, eventData = {}) => {
+    if (eventType === 'SceneNameChanged') {
+      const { oldSceneName, sceneName } = eventData;
+      if (oldSceneName && sceneName) {
+        const idx = state.scenes.indexOf(oldSceneName);
+        if (idx >= 0) state.scenes[idx] = sceneName;
+        if (state.programScene === oldSceneName) state.programScene = sceneName;
+        if (state.previewScene === oldSceneName) state.previewScene = sceneName;
+        if (Object.prototype.hasOwnProperty.call(state.sceneItems, oldSceneName)) {
+          state.sceneItems[sceneName] = state.sceneItems[oldSceneName];
+          delete state.sceneItems[oldSceneName];
+        }
+        if (Object.prototype.hasOwnProperty.call(state.filters, oldSceneName)) {
+          state.filters[sceneName] = state.filters[oldSceneName];
+          delete state.filters[oldSceneName];
+        }
+        for (const k of Object.keys(state.itemTransforms)) {
+          if (k.startsWith(`${oldSceneName}:`)) {
+            state.itemTransforms[`${sceneName}:${k.slice(oldSceneName.length + 1)}`] = state.itemTransforms[k];
+            delete state.itemTransforms[k];
+          }
+        }
+      }
+    } else if (eventType === 'InputNameChanged') {
+      const { oldInputName, inputName } = eventData;
+      if (oldInputName && inputName) {
+        const idx = state.inputs.indexOf(oldInputName);
+        if (idx >= 0) state.inputs[idx] = inputName;
+        for (const map of [state.inputKinds, state.inputSettings, state.filters, state.mutes, state.volumes, state.monitors, state.mediaStates]) {
+          if (Object.prototype.hasOwnProperty.call(map, oldInputName)) {
+            map[inputName] = map[oldInputName];
+            delete map[oldInputName];
+          }
+        }
+        for (const list of [...Object.values(state.sceneItems), ...Object.values(state.groupItems)]) {
+          for (const it of list) {
+            if (it.sourceName === oldInputName) it.sourceName = inputName;
+          }
+        }
+      }
+    } else if (eventType === 'SceneRemoved') {
+      const { sceneName } = eventData;
+      if (sceneName) {
+        state.scenes = state.scenes.filter((s) => s !== sceneName);
+        delete state.sceneItems[sceneName];
+        if (state.programScene === sceneName) state.programScene = state.scenes[0] || '';
+        if (state.previewScene === sceneName) state.previewScene = state.scenes[0] || '';
+      }
+    } else if (eventType === 'MediaInputActionTriggered') {
+      const { inputName, mediaAction } = eventData;
+      if (inputName) {
+        if (mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' || mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART' || mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_NEXT' || mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PREVIOUS') {
+          state.mediaStates[inputName] = 'OBS_MEDIA_STATE_PLAYING';
+        } else if (mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE') {
+          state.mediaStates[inputName] = 'OBS_MEDIA_STATE_PAUSED';
+        } else if (mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP') {
+          state.mediaStates[inputName] = 'OBS_MEDIA_STATE_STOPPED';
+        }
+      }
+    } else if (eventType === 'InputVolumeChanged') {
+      const { inputName, inputVolumeDb } = eventData;
+      if (inputName && typeof inputVolumeDb === 'number') state.volumes[inputName] = inputVolumeDb;
+    } else if (eventType === 'StreamStateChanged') {
+      if (typeof eventData.outputActive === 'boolean') state.outputs.stream = eventData.outputActive;
+    } else if (eventType === 'RecordStateChanged') {
+      if (typeof eventData.outputActive === 'boolean') state.outputs.record = eventData.outputActive;
+      if (eventData.outputState === 'OBS_WEBSOCKET_OUTPUT_PAUSED') state.outputs.recordPaused = true;
+      else if (eventData.outputState === 'OBS_WEBSOCKET_OUTPUT_RESUMED' || eventData.outputActive === false) state.outputs.recordPaused = false;
+    } else if (eventType === 'VirtualcamStateChanged') {
+      if (typeof eventData.outputActive === 'boolean') state.outputs.vcam = eventData.outputActive;
+    } else if (eventType === 'ReplayBufferStateChanged') {
+      if (typeof eventData.outputActive === 'boolean') state.outputs.replay = eventData.outputActive;
+    } else if (eventType === 'MediaInputPlaybackStarted') {
+      if (eventData.inputName) state.mediaStates[eventData.inputName] = 'OBS_MEDIA_STATE_PLAYING';
+    } else if (eventType === 'MediaInputPlaybackEnded') {
+      if (eventData.inputName) state.mediaStates[eventData.inputName] = 'OBS_MEDIA_STATE_ENDED';
+    }
     const payload = JSON.stringify({ op: 5, d: { eventType, eventIntent: 2047, eventData } });
     for (const s of sockets) if (s.readyState === 1 && s._authed) s.send(payload);
+  };
+
+  const closeAll = (code = 1000, reason = '') => {
+    for (const s of [...sockets]) {
+      try { s.close(code, reason); } catch {}
+    }
   };
 
   wss.on('connection', (ws) => {
@@ -283,14 +366,18 @@ export function createFakeObs(requireAuth = true) {
         if (!state.inputs.includes(name)) { ok = false; comment = 'Input not found'; }
         else if (ma === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' || ma === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART') {
           state.mediaStates[name] = 'OBS_MEDIA_STATE_PLAYING';
+          broadcast('MediaInputActionTriggered', { inputName: name, mediaAction: ma });
           broadcast('MediaInputPlaybackStarted', { inputName: name });
         } else if (ma === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE') {
           state.mediaStates[name] = 'OBS_MEDIA_STATE_PAUSED';
+          broadcast('MediaInputActionTriggered', { inputName: name, mediaAction: ma });
         } else if (ma === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP') {
           state.mediaStates[name] = 'OBS_MEDIA_STATE_STOPPED';
+          broadcast('MediaInputActionTriggered', { inputName: name, mediaAction: ma });
           broadcast('MediaInputPlaybackEnded', { inputName: name });
         } else if (ma === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_NEXT' || ma === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PREVIOUS') {
           state.mediaStates[name] = 'OBS_MEDIA_STATE_PLAYING';
+          broadcast('MediaInputActionTriggered', { inputName: name, mediaAction: ma });
         }
       } else if (requestType === 'PressInputPropertiesButton') {
         if (!state.inputs.includes(requestData.inputName)) { ok = false; comment = 'Input not found'; }
@@ -434,5 +521,5 @@ export function createFakeObs(requireAuth = true) {
     });
   });
 
-  return { wss, state, broadcast };
+  return { wss, state, broadcast, closeAll };
 }
