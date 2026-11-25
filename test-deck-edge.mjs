@@ -3398,9 +3398,29 @@ try {
     assert.equal(mergedState.ws.host, '127.0.0.1', 'existing ws.host preserved on merge');
     assert.equal(mergedState.gotoTarget, mergedState.pages[2].id, 'internal page link preserved after deduplication');
 
+    // 18g. Clean View toggle, restore button, localStorage persistence, and ?clean=1 URL override
+    assert.equal(await pageFeat.isVisible('#top-bar'), true, 'top toolbar visible by default');
+    await pageFeat.click('#btn-clean-view');
+    assert.equal(await pageFeat.evaluate(() => document.documentElement.dataset.clean), '1', 'Clean View sets data-clean=1');
+    assert.equal(await pageFeat.evaluate(() => localStorage.getItem('opendeck_clean_view')), '1', 'Clean View persisted in localStorage');
+    assert.equal(await pageFeat.isVisible('#top-bar'), false, 'top toolbar hidden in Clean View');
+    assert.equal(await pageFeat.isVisible('.status'), false, 'status bar hidden in Clean View');
+    assert.equal(await pageFeat.isVisible('#btn-clean-exit'), true, 'Controls restore button visible in page bar');
+    await pageFeat.click('#btn-clean-exit');
+    assert.equal(await pageFeat.evaluate(() => document.documentElement.dataset.clean || ''), '', 'Controls button exits Clean View');
+    assert.equal(await pageFeat.isVisible('#top-bar'), true, 'top toolbar restored');
+
+    const pageCleanUrl = await ctxFeat.newPage();
+    pageCleanUrl.on('pageerror', (err) => pageErrors.push(err.message));
+    await pageCleanUrl.goto(DECK_URL + '?clean=1');
+    assert.equal(await pageCleanUrl.evaluate(() => document.documentElement.dataset.clean), '1', '?clean=1 activates Clean View');
+    assert.equal(await pageCleanUrl.isVisible('#top-bar'), false, '?clean=1 hides top toolbar on boot');
+    assert.equal(await pageCleanUrl.isVisible('#deck-bar'), true, 'page tabs remain visible in Clean View');
+    await pageCleanUrl.close();
+
     assert.deepEqual(pageErrors, [], `unexpected page errors: ${pageErrors.join('; ')}`);
     await ctxFeat.close();
-    console.log('  ✓ 8x12 grid, TriggerHotkeyByKeySequence, macro cleanupOnAbort, autoOff re-click/PANIC, http API & mergePages');
+    console.log('  ✓ 8x12 grid, TriggerHotkeyByKeySequence, macro cleanupOnAbort, autoOff re-click/PANIC, http API, mergePages & Clean View');
   } finally {
     try { fs.unlinkSync(mergeTmpPath); } catch {}
     hookSrv.close();

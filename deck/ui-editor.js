@@ -253,7 +253,9 @@
 
   function renderActionFields(container, obj, allowWait) {
     const { obs } = Deck;
-    container.innerHTML = '';
+    [...container.children].forEach((ch) => {
+      if (!ch.classList.contains('step-type-row')) ch.remove();
+    });
     const t = obj.type;
 
     if (t === 'scene') {
@@ -438,7 +440,7 @@
       });
 
       const keysWrap = document.createElement('div');
-      keysWrap.className = 'frm';
+      keysWrap.className = 'frm step-row-full';
       const keyListId = 'obs-key-id-presets';
       let dl = document.getElementById(keyListId);
       if (!dl) {
@@ -649,37 +651,356 @@
     }
   }
 
-  function renderStepList(container, steps, allowWait) {
+  const STEP_TYPES = [
+    ['scene', 'Scene'],
+    ['source', 'Source'],
+    ['transform', 'Source Transform / PiP'],
+    ['filter', 'Filter'],
+    ['mute', 'Mute'],
+    ['volume', 'Volume'],
+    ['monitor', 'Audio Monitor'],
+    ['studio', 'Studio Mode'],
+    ['output', 'Stream / Record / Cam'],
+    ['chapter', 'Recording Chapter'],
+    ['media', 'Media'],
+    ['image', 'Image / Slideshow'],
+    ['browser', 'Browser Source'],
+    ['screenshot', 'Screenshot'],
+    ['hotkey', 'OBS Hotkey'],
+    ['http', 'HTTP / Webhook'],
+    ['transition', 'Transition'],
+    ['profile', 'Profile'],
+    ['collection', 'Collection'],
+    ['page', 'Switch Page'],
+  ];
+
+  const STEP_KIND_LABELS = {
+    scene: 'Scene',
+    source: 'Source',
+    transform: 'Transform',
+    filter: 'Filter',
+    mute: 'Mute',
+    volume: 'Volume',
+    monitor: 'Monitor',
+    studio: 'Studio',
+    output: 'Output',
+    chapter: 'Chapter',
+    media: 'Media',
+    image: 'Image',
+    browser: 'Browser',
+    screenshot: 'Screenshot',
+    hotkey: 'Hotkey',
+    http: 'HTTP',
+    transition: 'Transition',
+    profile: 'Profile',
+    collection: 'Collection',
+    page: 'Page',
+    wait: 'Wait',
+  };
+
+  const MODE_LABELS = {
+    toggle: 'Toggle',
+    enable: 'Enable',
+    disable: 'Disable',
+    show: 'Show',
+    hide: 'Hide',
+    solo: 'Solo',
+    mute: 'Mute',
+    unmute: 'Unmute',
+    start: 'Start',
+    stop: 'Stop',
+  };
+
+  const expandedSteps = new WeakSet();
+  const containerStepState = new WeakMap();
+
+  function describeStep(st) {
+    const t = st.type || 'scene';
+    const kind = STEP_KIND_LABELS[t] || t;
+    const mode = MODE_LABELS[st.mode || 'toggle'] || 'Toggle';
+
+    if (t === 'wait') {
+      const ms = Math.max(0, Number(st.delayMs ?? 1000) || 0);
+      return { kind, target: `${ms}ms` };
+    }
+    if (t === 'scene') {
+      if (st.mode === 'next') return { kind, target: 'Next Scene' };
+      if (st.mode === 'prev') return { kind, target: 'Previous Scene' };
+      return { kind, target: st.sceneName || 'Select scene…' };
+    }
+    if (t === 'source') {
+      const target = st.sourceName
+        ? `${mode} ${st.sourceName}${st.sceneName ? ` (${st.sceneName})` : ''}`
+        : (st.sceneName ? `${mode} in ${st.sceneName}` : `${mode} — select source…`);
+      return { kind, target };
+    }
+    if (t === 'transform') {
+      const presets = {
+        toggle_pip: 'Toggle PiP',
+        pip_br: 'PiP Bottom-Right',
+        pip_tr: 'PiP Top-Right',
+        pip_bl: 'PiP Bottom-Left',
+        pip_tl: 'PiP Top-Left',
+        center_half: 'Center Half',
+        full_reset: 'Full Reset',
+      };
+      const preset = presets[st.preset || 'toggle_pip'] || st.preset || 'Toggle PiP';
+      return { kind, target: st.sourceName ? `${preset} · ${st.sourceName}` : preset };
+    }
+    if (t === 'filter') {
+      let target = `${mode} — select filter…`;
+      if (st.filterName && st.sourceName) target = `${mode} ${st.filterName} on ${st.sourceName}`;
+      else if (st.sourceName) target = `${mode} on ${st.sourceName}`;
+      else if (st.filterName) target = `${mode} ${st.filterName}`;
+      return { kind, target };
+    }
+    if (t === 'mute') {
+      return { kind, target: st.inputName ? `${mode} ${st.inputName}` : `${mode} — select input…` };
+    }
+    if (t === 'volume') {
+      const db = st.volumeDb != null ? `${st.volumeDb} dB` : '0 dB';
+      const verb = st.mode === 'step' ? 'Step' : 'Set';
+      return { kind, target: st.inputName ? `${verb} ${st.inputName} (${db})` : 'Select input…' };
+    }
+    if (t === 'monitor') {
+      const monLabels = {
+        cycle: 'Cycle',
+        OBS_MONITORING_TYPE_NONE: 'Off',
+        OBS_MONITORING_TYPE_MONITOR_ONLY: 'Monitor Only',
+        OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT: 'Monitor + Output',
+      };
+      const mon = monLabels[st.monitorType || 'cycle'] || 'Cycle';
+      return { kind, target: st.inputName ? `${mon} · ${st.inputName}` : `${mon} — select input…` };
+    }
+    if (t === 'studio') {
+      const actLabels = {
+        toggle: 'Toggle Studio Mode',
+        enable: 'Enable Studio Mode',
+        disable: 'Disable Studio Mode',
+        preview: `Preview ${st.sceneName || '…'}`,
+        transition: 'Trigger Transition',
+      };
+      return { kind, target: actLabels[st.action || 'toggle'] || 'Studio Mode' };
+    }
+    if (t === 'output') {
+      const targets = {
+        stream: 'Stream',
+        record: 'Record',
+        recordPause: 'Record Pause',
+        vcam: 'Virtual Cam',
+        replay: 'Replay Buffer',
+        saveReplay: 'Save Replay',
+      };
+      const outName = targets[st.target || 'stream'] || 'Stream';
+      return { kind, target: st.target === 'saveReplay' ? outName : `${outName} (${mode})` };
+    }
+    if (t === 'chapter') {
+      return { kind, target: st.chapterName ? `Marker "${st.chapterName}"` : 'Default Chapter Marker' };
+    }
+    if (t === 'media') {
+      const acts = {
+        play_pause: 'Play/Pause',
+        play: 'Play',
+        pause: 'Pause',
+        stop: 'Stop',
+        restart: 'Restart',
+        next: 'Next',
+        previous: 'Previous',
+      };
+      const act = acts[st.mediaAction || 'play_pause'] || 'Play/Pause';
+      return { kind, target: st.inputName ? `${act} ${st.inputName}` : `${act} — select media…` };
+    }
+    if (t === 'image') {
+      const acts = { set_file: 'Set File', next: 'Next Slide', previous: 'Prev Slide', restart: 'Restart' };
+      const act = acts[st.mode || 'set_file'] || 'Set File';
+      return { kind, target: st.inputName ? `${act} · ${st.inputName}` : act };
+    }
+    if (t === 'browser') {
+      const act = st.mode === 'set_url' ? 'Set URL' : 'Refresh Cache';
+      return { kind, target: st.inputName ? `${act} · ${st.inputName}` : act };
+    }
+    if (t === 'screenshot') {
+      return { kind, target: st.sourceName || 'Program Scene' };
+    }
+    if (t === 'hotkey') {
+      const target = st.mode === 'keys'
+        ? (Deck.formatHotkeyKeys ? Deck.formatHotkeyKeys(st) : (st.keyId || 'Key Sequence'))
+        : (st.hotkeyName || 'Select hotkey…');
+      return { kind, target };
+    }
+    if (t === 'http') {
+      const method = st.method || 'POST';
+      return { kind, target: st.url ? `${method} ${st.url}` : `${method} — enter URL…` };
+    }
+    if (t === 'transition') {
+      if (!st.transitionName) return { kind, target: 'Select transition…' };
+      const dur = st.durationMs != null && st.durationMs !== '' ? ` (${st.durationMs}ms)` : '';
+      return { kind, target: `${st.transitionName}${dur}` };
+    }
+    if (t === 'profile') return { kind, target: st.profileName || 'Select profile…' };
+    if (t === 'collection') return { kind, target: st.collectionName || 'Select collection…' };
+    if (t === 'page') {
+      if (st.mode === 'next') return { kind, target: 'Next Page' };
+      if (st.mode === 'prev') return { kind, target: 'Previous Page' };
+      const pg = (Deck.cfg?.pages || []).find((p) => p.id === st.pageId);
+      return { kind, target: pg ? pg.name : 'Select page…' };
+    }
+    return { kind, target: 'Configure step…' };
+  }
+
+  function formatMacroMeta(steps) {
+    const n = steps.length;
+    const countText = `${n} ${n === 1 ? 'step' : 'steps'}`;
+    const totalMs = steps.reduce((acc, s) => (
+      s.type === 'wait' ? acc + Math.max(0, Number(s.delayMs ?? 1000) || 0) : acc
+    ), 0);
+    if (totalMs <= 0) return countText;
+    const waitText = totalMs >= 1000
+      ? `${(totalMs / 1000).toFixed(totalMs % 1000 === 0 ? 0 : 1)}s`
+      : `${totalMs}ms`;
+    return `${countText} · ${waitText} wait`;
+  }
+
+  function makeStepButton(cls, text, title, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `btn sm step-btn ${cls}`;
+    b.textContent = text;
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  function renderStepList(container, steps, allowWait, onStepsChange) {
+    let state = containerStepState.get(container);
+    if (!state || state.steps !== steps) {
+      if (steps.length <= 2) {
+        steps.forEach((st) => expandedSteps.add(st));
+      }
+      state = { steps, len: steps.length, onChange: onStepsChange || null };
+      containerStepState.set(container, state);
+    } else {
+      if (onStepsChange) state.onChange = onStepsChange;
+      if (steps.length === state.len + 1) {
+        expandedSteps.add(steps[steps.length - 1]);
+      }
+      state.len = steps.length;
+    }
+
+    const notifyChange = () => {
+      if (state.onChange) state.onChange();
+    };
+
     container.innerHTML = '';
+    if (!steps.length) {
+      const empty = document.createElement('div');
+      empty.className = 'steps-empty';
+      empty.textContent = allowWait
+        ? 'No steps yet. Click + Add Step to build this Timed Macro.'
+        : 'No PANIC steps configured. Click + Step or Add Deck Filters (Off).';
+      container.appendChild(empty);
+      return;
+    }
+
     steps.forEach((st, idx) => {
+      const isExpanded = expandedSteps.has(st);
       const box = document.createElement('div');
-      box.className = 'step';
+      box.className = 'step'
+        + (isExpanded ? '' : ' collapsed')
+        + (st.type === 'wait' ? ' step-wait' : '');
+
       const top = document.createElement('div');
       top.className = 'step-top';
+
+      const numEl = document.createElement('span');
+      numEl.className = 'step-num';
+      numEl.textContent = `#${idx + 1}`;
+
+      const summaryEl = document.createElement('span');
+      summaryEl.className = 'step-summary';
+      const kindEl = document.createElement('span');
+      kindEl.className = 'step-summary-kind';
+      const targetEl = document.createElement('span');
+      targetEl.className = 'step-summary-target';
+      summaryEl.append(kindEl, document.createTextNode(' · '), targetEl);
+
+      const updateSummary = () => {
+        const { kind, target } = describeStep(st);
+        kindEl.textContent = kind;
+        targetEl.textContent = target;
+        box.classList.toggle('step-wait', st.type === 'wait');
+      };
+      updateSummary();
+
+      const actionsEl = document.createElement('div');
+      actionsEl.className = 'step-actions';
+
+      const upBtn = makeStepButton('step-up', '↑', 'Move step up', () => {
+        if (idx <= 0) return;
+        const [item] = steps.splice(idx, 1);
+        steps.splice(idx - 1, 0, item);
+        renderStepList(container, steps, allowWait, state.onChange);
+        notifyChange();
+      });
+      upBtn.disabled = idx === 0;
+
+      const downBtn = makeStepButton('step-down', '↓', 'Move step down', () => {
+        if (idx >= steps.length - 1) return;
+        const [item] = steps.splice(idx, 1);
+        steps.splice(idx + 1, 0, item);
+        renderStepList(container, steps, allowWait, state.onChange);
+        notifyChange();
+      });
+      downBtn.disabled = idx === steps.length - 1;
+
+      const togBtn = document.createElement('button');
+      togBtn.type = 'button';
+      togBtn.className = 'btn sm step-btn step-toggle';
+      const chev = document.createElement('span');
+      chev.className = 'step-chevron';
+      chev.setAttribute('aria-hidden', 'true');
+      chev.textContent = '▾';
+      togBtn.appendChild(chev);
+
+      const syncExpandedUi = (expanded) => {
+        box.classList.toggle('collapsed', !expanded);
+        togBtn.setAttribute('aria-expanded', String(expanded));
+        const label = expanded ? 'Collapse step' : 'Expand step';
+        togBtn.title = label;
+        togBtn.setAttribute('aria-label', label);
+      };
+      syncExpandedUi(isExpanded);
+
+      const toggleExpanded = () => {
+        const next = !expandedSteps.has(st);
+        if (next) expandedSteps.add(st);
+        else expandedSteps.delete(st);
+        syncExpandedUi(next);
+      };
+      togBtn.addEventListener('click', toggleExpanded);
+      top.addEventListener('click', (e) => {
+        if (!e.target.closest('.step-actions')) toggleExpanded();
+      });
+
+      const delBtn = makeStepButton('step-del', '✕', 'Delete step', () => {
+        steps.splice(idx, 1);
+        renderStepList(container, steps, allowWait, state.onChange);
+        notifyChange();
+      });
+
+      actionsEl.append(upBtn, downBtn, togBtn, delBtn);
+      top.append(numEl, summaryEl, actionsEl);
+
+      const body = document.createElement('div');
+      body.className = 'step-body frm';
+
+      const typeRow = document.createElement('div');
+      typeRow.className = 'row step-type-row';
+      const typeLbl = document.createElement('label');
+      typeLbl.textContent = 'Step Action';
       const sel = document.createElement('select');
-      const types = [
-        ['scene', 'Scene'],
-        ['source', 'Source'],
-        ['transform', 'Source Transform / PiP'],
-        ['filter', 'Filter'],
-        ['mute', 'Mute'],
-        ['volume', 'Volume'],
-        ['monitor', 'Audio Monitor'],
-        ['studio', 'Studio Mode'],
-        ['output', 'Stream / Record / Cam'],
-        ['chapter', 'Recording Chapter'],
-        ['media', 'Media'],
-        ['image', 'Image / Slideshow'],
-        ['browser', 'Browser Source'],
-        ['screenshot', 'Screenshot'],
-        ['hotkey', 'OBS Hotkey'],
-        ['http', 'HTTP / Webhook'],
-        ['transition', 'Transition'],
-        ['profile', 'Profile'],
-        ['collection', 'Collection'],
-        ['page', 'Switch Page'],
-      ];
-      if (allowWait) types.push(['wait', 'Wait (ms)']);
+      const types = allowWait ? [...STEP_TYPES, ['wait', 'Wait (ms)']] : STEP_TYPES;
       for (const [v, t] of types) {
         const o = document.createElement('option');
         o.value = v;
@@ -687,14 +1008,9 @@
         if (v === st.type) o.selected = true;
         sel.appendChild(o);
       }
-      const del = document.createElement('button');
-      del.type = 'button';
-      del.className = 'btn sm';
-      del.textContent = '✕';
-      del.addEventListener('click', () => { steps.splice(idx, 1); renderStepList(container, steps, allowWait); });
-      top.append(sel, del);
-      const body = document.createElement('div');
-      body.className = 'frm';
+      typeRow.append(typeLbl, sel);
+      body.appendChild(typeRow);
+
       sel.addEventListener('change', () => {
         const nextType = sel.value;
         for (const k of Object.keys(st)) {
@@ -703,8 +1019,18 @@
         st.type = nextType;
         if (st.type === 'wait') st.delayMs = 2000;
         renderActionFields(body, st, allowWait);
+        updateSummary();
+        notifyChange();
       });
       renderActionFields(body, st, allowWait);
+
+      const syncLive = () => {
+        updateSummary();
+        notifyChange();
+      };
+      body.addEventListener('input', syncLive);
+      body.addEventListener('change', syncLive);
+
       box.append(top, body);
       container.appendChild(box);
     });
@@ -714,11 +1040,14 @@
     const f = $('f-fields');
     f.innerHTML = '';
     draftPad.type = $('f-type').value;
+    const padDlg = $('pad-dlg');
+    if (padDlg) padDlg.classList.toggle('macro-wide', draftPad.type === 'macro');
     if (!Deck.HOLD_TYPES.has(draftPad.type)) delete draftPad.hold;
     if (!Deck.AUTO_OFF_TYPES.has(draftPad.type)) delete draftPad.autoOffMs;
     if (draftPad.type === 'macro') {
-      const cleanupRow = document.createElement('div');
-      cleanupRow.className = 'row';
+      const toolbar = document.createElement('div');
+      toolbar.className = 'macro-toolbar';
+
       const cleanupLbl = document.createElement('label');
       cleanupLbl.className = 'chk-label';
       const cleanupChk = document.createElement('input');
@@ -730,20 +1059,30 @@
         else delete draftPad.cleanupOnAbort;
       });
       cleanupLbl.append(cleanupChk, document.createTextNode(' Run trailing cleanup steps if aborted or PANIC'));
-      cleanupRow.appendChild(cleanupLbl);
 
-      const list = document.createElement('div');
-      list.className = 'steps';
+      const meta = document.createElement('span');
+      meta.className = 'macro-meta';
+      const syncMeta = () => { meta.textContent = formatMacroMeta(draftPad.steps); };
+      syncMeta();
+
       const add = document.createElement('button');
       add.type = 'button';
       add.className = 'btn sm';
       add.textContent = '+ Add Step';
+
+      toolbar.append(cleanupLbl, meta, add);
+
+      const list = document.createElement('div');
+      list.className = 'steps';
+
       add.addEventListener('click', () => {
         draftPad.steps.push({ type: 'filter', mode: 'enable' });
-        renderStepList(list, draftPad.steps, true);
+        renderStepList(list, draftPad.steps, true, syncMeta);
+        syncMeta();
+        list.scrollTop = list.scrollHeight;
       });
-      renderStepList(list, draftPad.steps, true);
-      f.append(cleanupRow, list, add);
+      renderStepList(list, draftPad.steps, true, syncMeta);
+      f.append(toolbar, list);
     } else if (draftPad.type === 'panic') {
       const btn = document.createElement('button');
       btn.type = 'button';

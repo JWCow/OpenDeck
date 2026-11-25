@@ -1801,6 +1801,11 @@
     const text = $('conn-text');
     if (pill) pill.className = `pill ${cls}`;
     if (text) text.textContent = txt;
+    const cleanDot = $('clean-conn-dot');
+    if (cleanDot) {
+      cleanDot.className = `clean-conn-dot ${cls}`;
+      cleanDot.title = `OBS: ${txt}`;
+    }
   };
 
   Deck.obsCall = (requestType, requestData) => {

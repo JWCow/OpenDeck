@@ -17,7 +17,7 @@
 <script defer src="deck/ui-boot.js"></script>
 </head>
 <body>
-<div class="bar">
+<div id="top-bar" class="bar">
   <div class="brand" title="OpenDeck for OBS Studio">
     <span class="brand-title">OpenDeck</span>
     <span class="brand-sub">OBS Studio</span>
@@ -34,6 +34,7 @@
     <button id="btn-font-inc" class="btn sm" type="button" title="Increase font size (A+)">A+</button>
   </div>
   <button id="btn-theme" class="btn sm" type="button" title="Toggle Dark/Light Theme">☀️</button>
+  <button id="btn-clean-view" class="btn sm" type="button" title="Toggle Clean View (hide toolbar &amp; status bar; ?clean=1)">⛶ Clean</button>
   <button id="btn-panic-cfg" class="btn sm" title="Configure PANIC reset steps">⚙ Panic</button>
   <button id="btn-panic" class="btn sm panic" title="Abort running Timed Macros &amp; Auto-Off timers and run PANIC reset">⚡ PANIC</button>
   <button id="btn-snapshots" class="btn sm" title="View and restore layout snapshots">Snapshots</button>
@@ -55,10 +56,15 @@
 </div>
 
 <div id="deck-bar" class="bar page-bar">
+  <span id="clean-conn-dot" class="clean-conn-dot bad" title="OBS: Disconnected" aria-hidden="true"></span>
   <div id="deck-tabs" class="page-tabs" role="tablist" aria-label="Deck Pages"></div>
   <button id="btn-deck-add" class="btn sm" title="Add new Page">+ Page</button>
   <button id="btn-deck-dup" class="btn sm" title="Duplicate current Page">⎘</button>
   <button id="btn-deck-cfg" class="btn sm" title="Rename Page, resize grid, or delete Page">8×8 ⚙</button>
+  <div class="clean-bar-controls">
+    <button id="btn-clean-panic" class="btn sm panic" type="button" title="Abort running Timed Macros &amp; Auto-Off timers and run PANIC reset">⚡ PANIC</button>
+    <button id="btn-clean-exit" class="btn sm" type="button" title="Show OpenDeck toolbar &amp; controls">▾ Controls</button>
+  </div>
 </div>
 
 <div id="select-bar" class="bar select-bar">
@@ -101,8 +107,9 @@
 </div>
 
 <dialog id="pad-dlg">
-  <div class="dlg-h"><span id="dlg-title">Edit Pad</span><button id="dlg-close" type="button" class="btn sm">✕</button></div>
+  <div class="dlg-h"><span id="dlg-title">Edit Pad</span><button id="dlg-close" type="button" class="btn sm" aria-label="Close">✕</button></div>
   <form id="pad-form" class="frm" method="dialog">
+    <div class="pad-meta">
     <div class="row2">
       <div class="row"><label for="f-label">Label</label><input id="f-label" maxlength="32" placeholder="Cam Blur"></div>
       <div class="row"><label for="f-icon">Icon</label><input id="f-icon" maxlength="8" placeholder="🎬"></div>
@@ -159,6 +166,7 @@
           <option value="panic">PANIC Reset</option>
         </optgroup>
       </select>
+    </div>
     </div>
     <div id="f-fields" class="frm"></div>
     <div class="dlg-f">

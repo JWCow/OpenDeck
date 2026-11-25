@@ -66,6 +66,44 @@
     });
   }
 
+  function getCleanViewPref() {
+    try {
+      return localStorage.getItem('opendeck_clean_view') === '1';
+    } catch {}
+    return false;
+  }
+
+  function applyCleanView(enabled, { persist = true } = {}) {
+    const on = Boolean(enabled);
+    if (on) document.documentElement.dataset.clean = '1';
+    else delete document.documentElement.dataset.clean;
+    if (persist) {
+      try {
+        localStorage.setItem('opendeck_clean_view', on ? '1' : '0');
+      } catch {}
+    }
+    const btn = $('btn-clean-view');
+    if (btn) {
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+  }
+
+  function initCleanView() {
+    const cleanParam = new URLSearchParams(location.search).get('clean');
+    if (cleanParam === '1' || cleanParam === 'true') applyCleanView(true, { persist: false });
+    else if (cleanParam === '0' || cleanParam === 'false') applyCleanView(false, { persist: false });
+    else applyCleanView(getCleanViewPref(), { persist: false });
+
+    $('btn-clean-view')?.addEventListener('click', () => {
+      applyCleanView(document.documentElement.dataset.clean !== '1', { persist: true });
+    });
+    $('btn-clean-exit')?.addEventListener('click', () => {
+      applyCleanView(false, { persist: true });
+    });
+    $('btn-clean-panic')?.addEventListener('click', Deck.runPanic);
+  }
+
   // Toolbar & WS
   $('btn-conn-toggle').addEventListener('click', () => $('conn-bar').classList.toggle('open'));
   $('btn-ws-connect').addEventListener('click', () => Deck.connectObs({ manual: true }));
@@ -218,6 +256,7 @@
   // Boot
   initFontScaler();
   initTheme();
+  initCleanView();
   Deck.initPaletteResizer();
   if ($('version-badge') && Deck.VERSION) $('version-badge').textContent = `v${Deck.VERSION}`;
   Deck.syncWsInputs();
