@@ -2,8 +2,13 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -38,6 +43,9 @@ jobs:
             echo "Tag version ($TAG_VER) does not match package.json version ($PKG_VER)"
             exit 1
           fi
+
+      - name: Run static checks
+        run: npm run check
 
       - name: Run E2E test suite
         run: npm test

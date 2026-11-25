@@ -77,6 +77,7 @@ export function createFakeObs(requireAuth = true, host = '127.0.0.1') {
     },
     hotkeys: ['OBSBasic.StartRecording', 'OBSBasic.StopRecording', 'OBSBasic.Screenshot'],
     triggeredHotkeys: [],
+    triggeredKeySequences: [],
     chapters: [],
     itemTransforms: {},
     outputs: {
@@ -504,6 +505,12 @@ export function createFakeObs(requireAuth = true, host = '127.0.0.1') {
       } else if (requestType === 'TriggerHotkeyByName') {
         if (!requestData.hotkeyName) { ok = false; comment = 'Missing hotkeyName'; }
         else state.triggeredHotkeys.push(requestData.hotkeyName);
+      } else if (requestType === 'TriggerHotkeyByKeySequence') {
+        if (!requestData.keyId) { ok = false; comment = 'Missing keyId'; }
+        else state.triggeredKeySequences.push({
+          keyId: requestData.keyId,
+          keyModifiers: requestData.keyModifiers || {},
+        });
       } else if (requestType === 'CreateRecordChapter') {
         state.chapters.push({ chapterName: requestData.chapterName || '' });
       } else if (requestType === 'GetInputAudioMonitorType') {
@@ -571,4 +578,50 @@ export function createFakeObs(requireAuth = true, host = '127.0.0.1') {
   });
 
   return { wss, state, broadcast, closeAll };
+}
+
+function blockLiveObsInInitScript() {
+  const OrigWS = window.WebSocket;
+  const blocked = new Set(['4455', '4456', '4457', '4458', '4444']);
+  window.WebSocket = function (url, protocols) {
+    try {
+      const u = new URL(url);
+      if ((u.hostname === '127.0.0.1' || u.hostname === 'localhost') && blocked.has(u.port || '80')) {
+        const fake = {
+          readyState: 3,
+          close() {},
+          send() {},
+          addEventListener() {},
+          removeEventListener() {},
+        };
+        setTimeout(() => {
+          if (typeof fake.onerror === 'function') fake.onerror(new Event('error'));
+          if (typeof fake.onclose === 'function') fake.onclose({ code: 1006, reason: 'Blocked live OBS port in hermetic test' });
+        }, 5);
+        return fake;
+      }
+    } catch {}
+    return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
+  };
+  window.WebSocket.prototype = OrigWS.prototype;
+  window.WebSocket.CONNECTING = OrigWS.CONNECTING;
+  window.WebSocket.OPEN = OrigWS.OPEN;
+  window.WebSocket.CLOSING = OrigWS.CLOSING;
+  window.WebSocket.CLOSED = OrigWS.CLOSED;
+}
+
+export function isolateBrowserFromLiveObs(browser) {
+  const patchCtx = async (ctx) => {
+    await ctx.addInitScript(blockLiveObsInInitScript);
+    return ctx;
+  };
+  const origNewContext = browser.newContext.bind(browser);
+  const origNewPage = browser.newPage.bind(browser);
+  browser.newContext = async (...args) => patchCtx(await origNewContext(...args));
+  browser.newPage = async (...args) => {
+    const page = await origNewPage(...args);
+    await page.addInitScript(blockLiveObsInInitScript);
+    return page;
+  };
+  return browser;
 }

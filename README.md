@@ -20,12 +20,12 @@ Drop `deck.html` into an OBS Custom Browser Dock — no plugins, no server, no b
 | | Feature | What it does |
 |---|---|---|
 | 🪄 | **Auto-Import** | Reads your OBS scenes, sources, filters & audio into ready pages |
-| 🎛️ | **22 OBS Actions** | Scenes, PiP, filters, audio, media, streams, stats, hotkeys & more |
+| 🎛️ | **23 Actions** | Scenes, PiP, filters, audio, media, streams, stats, hotkeys, HTTP & more |
 | 🖼️ | **Custom Icons** | Upload PNG/JPG/WebP/SVG artwork (Fit Icon, Full Face, Hide Text) |
-| 📄 | **Pages & Grids** | Switchable tabs from `3×2` to `12×10`, crisp down to `360×420` docks |
-| ⏱️ | **Timers & Macros** | Auto-Off countdowns, multi-step macros, and one-click **⚡ PANIC** |
+| 📄 | **Pages & Grids** | Switchable tabs from `2×2` to `12×12`, crisp down to `360×420` docks |
+| ⏱️ | **Timers & Macros** | Auto-Off countdowns, multi-step macros with abort cleanup, and **⚡ PANIC** |
 | 🌓 | **Themes & Sizing** | Dark/Light studio toggle + `A-` / `A+` font scaling |
-| 💾 | **Portable JSON** | Export/import layouts cleanly (passwords stripped) |
+| 💾 | **Portable JSON** | **Export**, **Import**, or **Import Pages** onto your active deck (passwords stripped) |
 
 <br>
 
@@ -36,7 +36,7 @@ Drop `deck.html` into an OBS Custom Browser Dock — no plugins, no server, no b
 <br>
 
 <details>
-<summary>📋 <strong>All 22 OBS Action Types</strong></summary>
+<summary>📋 <strong>All 23 Action Types</strong></summary>
 
 <br>
 
@@ -58,10 +58,11 @@ Drop `deck.html` into an OBS Custom Browser Dock — no plugins, no server, no b
 | 📡 **Broadcast** | Stream / Record / Cam | `OUT` | Stream, Record, Pause, VCam, Replay *(Auto-Off)* |
 | | Recording Chapter | `CHP` | Insert chapter marker |
 | | Telemetry Stats | `STS` | Live CPU %, FPS & dropped frames |
-| | OBS Hotkey | `KEY` | Trigger any OBS hotkey |
+| | OBS Hotkey | `KEY` | Trigger OBS hotkey by name or key sequence |
 | | Profile / Collection | `PRF` / `COL` | Switch OBS Profile or Scene Collection |
 | ⚡ **Automation** | Switch Page | `PAG` | Jump to Page or Next / Prev |
-| | Timed Macro | `MCR` | Multi-step sequence with `Wait (ms)` |
+| | Timed Macro | `MCR` | Multi-step sequence with `Wait (ms)` & abort cleanup |
+| | HTTP / Webhook | `API` | `GET`/`POST`/`PUT` webhook or local bridge call |
 | | PANIC Reset | `PNC` | Abort timers & run recovery steps |
 
 </details>
@@ -116,7 +117,8 @@ Control OBS from a phone or tablet on the same Wi-Fi. Needs [Node.js](https://no
 | 🔑 **Auth Failed** | Copy password from OBS **Show Connect Info** into **WS → Pass** |
 | ⬜ **Blank Dock** | URL must start with `file:///` and point to `deck.html` (macOS: allow Files & Folders access) |
 | 🔄 **Missing Items** | Connect to OBS, then click **↻ Sync** |
-| 📂 **Layout Reset** | Layouts live in the browser's storage, not in the folder — **Export** to back up, and use **Snapshots** to roll back |
+| 📂 **Layout Reset / Sharing** | Layouts live in browser storage, not the folder — click **Export** (saving `layout.json` in the deck folder also lets `Phone Helper.bat` and external tools read/extend your deck), **Import Pages** to append new tabs onto an active deck, or **Snapshots** to roll back |
+| ⌨️ **External App Hotkeys** | For OS hotkeys outside OBS (triggered via `API` / `http` pads), launch optional **Hotkey Bridge.bat** (`127.0.0.1:3905/hotkey`) |
 
 <br>
 
@@ -139,6 +141,7 @@ Each dock connects to the OBS in its own URL, but **both share one layout**: the
 
 ```bash
 npm install && npx playwright install chromium
-npm test               # Playwright E2E suites
+npm run check          # Static syntax, version & PAD_TYPES parity checks
+npm test               # Playwright E2E suites (--section=18 for feature subset)
 npm run build:release  # Build release ZIPs in dist/
 ```

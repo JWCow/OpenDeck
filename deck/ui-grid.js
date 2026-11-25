@@ -26,6 +26,7 @@
     transition: 'TRN',
     page: 'PAG',
     macro: 'MCR',
+    http: 'API',
     panic: 'PNC',
   };
 
@@ -81,7 +82,19 @@
       if (p.mode === 'restart') return p.inputName ? `${p.inputName} Restart` : 'Restart Slide';
       return p.inputName || 'Image Swap';
     }
-    if (p.type === 'hotkey') return p.hotkeyName || 'OBS Hotkey';
+    if (p.type === 'hotkey') {
+      if (p.mode === 'keys') return Deck.formatHotkeyKeys ? Deck.formatHotkeyKeys(p) : 'OBS Key Sequence';
+      return p.hotkeyName || 'OBS Hotkey';
+    }
+    if (p.type === 'http') {
+      if (p.url) {
+        try {
+          const u = new URL(p.url);
+          return `${p.method || 'POST'} ${u.pathname === '/' ? u.host : u.pathname}`;
+        } catch {}
+      }
+      return 'HTTP Request';
+    }
     if (p.type === 'chapter') return p.chapterName || 'Chapter';
     if (p.type === 'stats') {
       if (p.mode === 'cpu') return 'CPU';

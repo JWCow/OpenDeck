@@ -9,7 +9,7 @@
   const MIN_COLS = 2;
   const MAX_COLS = 12;
   const MIN_ROWS = 2;
-  const MAX_ROWS = 10;
+  const MAX_ROWS = 12;
   const DEFAULT_COLS = 8;
   const DEFAULT_ROWS = 8;
   const COLORS = ['#222733', '#1e3a8a', '#115e59', '#166534', '#854d0e', '#991b1b', '#581c87', '#831843'];
@@ -17,7 +17,7 @@
     'none', 'scene', 'source', 'filter', 'mute', 'macro', 'panic',
     'page', 'studio', 'output', 'media', 'screenshot', 'browser', 'volume',
     'profile', 'collection', 'transition',
-    'stats', 'hotkey', 'chapter', 'monitor', 'transform', 'image',
+    'stats', 'hotkey', 'chapter', 'monitor', 'transform', 'image', 'http',
   ];
   const AUTO_OFF_TYPES = new Set(['source', 'filter', 'mute', 'studio', 'output', 'media']);
   const HOLD_TYPES = new Set(['mute', 'source', 'filter']);
@@ -146,6 +146,30 @@
     return Number.isFinite(ms) && ms > 0 ? ms : 0;
   }
 
+  function isValidHttpUrl(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return false;
+    try {
+      const u = new URL(s);
+      return u.protocol === 'http:' || u.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
+  function formatHotkeyKeys(p) {
+    if (!p || p.mode !== 'keys') return p?.hotkeyName || 'OBS Hotkey';
+    const km = p.keyModifiers || {};
+    const mods = [];
+    if (km.control) mods.push('Ctrl');
+    if (km.alt) mods.push('Alt');
+    if (km.shift) mods.push('Shift');
+    if (km.command) mods.push('Cmd');
+    const rawKey = String(p.keyId || '').trim();
+    const keyLabel = rawKey.replace(/^OBS_KEY_/i, '') || 'Key';
+    return [...mods, keyLabel].join('+');
+  }
+
   function emptyPad() {
     return { type: 'none', label: '', icon: '', color: COLORS[0] };
   }
@@ -187,6 +211,7 @@
       out.steps = Array.isArray(raw.steps)
         ? raw.steps.filter((s) => s && typeof s === 'object').map((s) => normalizePadInternal(s, true)).filter((s) => s.type !== 'none')
         : [];
+      if (Boolean(raw.cleanupOnAbort)) out.cleanupOnAbort = true;
     } else if (type === 'page') {
       out.mode = ['goto', 'next', 'prev'].includes(raw.mode) ? raw.mode : 'goto';
       const pid = raw.pageId || raw.deckId;
@@ -233,7 +258,20 @@
     } else if (type === 'stats') {
       out.mode = ['cpu', 'dropped', 'fps', 'all'].includes(raw.mode) ? raw.mode : 'all';
     } else if (type === 'hotkey') {
-      if (raw.hotkeyName) out.hotkeyName = String(raw.hotkeyName);
+      const mode = raw.mode === 'keys' ? 'keys' : 'name';
+      out.mode = mode;
+      if (mode === 'keys') {
+        if (raw.keyId) out.keyId = String(raw.keyId).trim();
+        const km = raw.keyModifiers && typeof raw.keyModifiers === 'object' ? raw.keyModifiers : {};
+        out.keyModifiers = {
+          control: Boolean(km.control),
+          alt: Boolean(km.alt),
+          shift: Boolean(km.shift),
+          command: Boolean(km.command),
+        };
+      } else if (raw.hotkeyName) {
+        out.hotkeyName = String(raw.hotkeyName);
+      }
     } else if (type === 'chapter') {
       if (raw.chapterName) out.chapterName = String(raw.chapterName);
     } else if (type === 'monitor') {
@@ -247,6 +285,17 @@
       if (raw.inputName) out.inputName = String(raw.inputName);
       out.mode = ['set_file', 'next', 'previous', 'restart'].includes(raw.mode) ? raw.mode : 'set_file';
       if (out.mode === 'set_file' && raw.filePath) out.filePath = String(raw.filePath);
+    } else if (type === 'http') {
+      const m = String(raw.method || 'POST').toUpperCase();
+      out.method = ['GET', 'POST', 'PUT'].includes(m) ? m : 'POST';
+      const rawUrl = typeof raw.url === 'string' ? raw.url.trim() : '';
+      if (isValidHttpUrl(rawUrl)) out.url = rawUrl;
+      if (out.method !== 'GET') {
+        if (raw.body != null && raw.body !== '') out.body = String(raw.body);
+        if (raw.contentType != null && String(raw.contentType).trim()) {
+          out.contentType = String(raw.contentType).trim();
+        }
+      }
     }
 
     if (!isStep) {
@@ -575,6 +624,8 @@
     esc,
     getUrlPort,
     getUrlHost,
+    isValidHttpUrl,
+    formatHotkeyKeys,
     getPadContextSubtitle,
     normalizePad,
     normalizeStep,
@@ -1203,6 +1254,90 @@
     }
     const padCount = normalized.reduce((sum, p) => sum + (p.pads || []).filter((pad) => pad && pad.type !== 'none').length, 0);
     Deck.setMsg(`Auto-Imported ${padCount} pad(s) across ${normalized.length} page(s)`);
+    return normalized;
+  };
+
+  function remapMergedPageRefs(item, idMap) {
+    if (!item || typeof item !== 'object') return;
+    if (item.type === 'page' && (item.mode || 'goto') === 'goto' && item.pageId && idMap.has(item.pageId)) {
+      item.pageId = idMap.get(item.pageId);
+    }
+    if (Array.isArray(item.steps)) {
+      for (const st of item.steps) remapMergedPageRefs(st, idMap);
+    }
+  }
+
+  Deck.mergePages = async (raw, sourceName = 'layout') => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('Invalid layout JSON');
+    }
+    let sourcePages = null;
+    if (Array.isArray(raw.pages) && raw.pages.length > 0) {
+      sourcePages = raw.pages;
+    } else if (Array.isArray(raw.decks) && raw.decks.length > 0) {
+      sourcePages = raw.decks;
+    } else if (Array.isArray(raw.pads)) {
+      const baseName = (typeof raw.name === 'string' && raw.name.trim())
+        ? raw.name.trim()
+        : (String(sourceName || 'Imported').replace(/\.json$/i, '').trim() || 'Imported');
+      sourcePages = [{
+        id: raw.id || 'page-1',
+        name: baseName,
+        cols: raw.cols || DEFAULT_COLS,
+        rows: raw.rows || DEFAULT_ROWS,
+        sceneName: raw.sceneName,
+        pads: raw.pads,
+      }];
+    } else {
+      throw new Error('Invalid layout JSON (missing pages[] or pads[])');
+    }
+
+    const validIncoming = sourcePages.filter((d) => d && typeof d === 'object');
+    if (!validIncoming.length) {
+      throw new Error('Invalid layout JSON (empty pages[])');
+    }
+
+    let snapFailed = false;
+    if (typeof Deck.createSnapshot === 'function') {
+      try {
+        const s = await Deck.createSnapshot('Before Merge Pages');
+        if (s === null && Deck.snapshotsAvailable) snapFailed = true;
+      } catch {
+        snapFailed = true;
+      }
+    }
+
+    const usedIds = new Set((Deck.cfg.pages || []).map((p) => p.id));
+    const usedScenes = new Set((Deck.cfg.pages || []).map((p) => p.sceneName).filter(Boolean));
+    const idMap = new Map();
+    const normalized = validIncoming.map((rawPage, idx) => {
+      const page = normalizePage(rawPage, idx, usedIds, false, usedScenes);
+      const oldId = rawPage.id || `page-${idx + 1}`;
+      if (oldId && page.id !== oldId && !idMap.has(oldId)) {
+        idMap.set(oldId, page.id);
+      }
+      return page;
+    });
+
+    if (idMap.size > 0) {
+      for (const page of normalized) {
+        for (const pad of page.pads) remapMergedPageRefs(pad, idMap);
+      }
+    }
+
+    if (typeof Deck.clearSelection === 'function') Deck.clearSelection();
+    Deck.cfg.pages.push(...normalized);
+    Deck.cfg.activePageId = normalized[0].id;
+    Deck.saveCfg();
+    Deck.renderGrid();
+    if (Deck.obs.status === 'ok') {
+      await Deck.syncObsState();
+    }
+    if (snapFailed) {
+      Deck.setMsg('No snapshot was saved');
+    } else {
+      Deck.setMsg(`Merged ${normalized.length} page(s) from ${sourceName}`);
+    }
     return normalized;
   };
 

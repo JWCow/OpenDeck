@@ -146,7 +146,21 @@
     }
   };
 
+  Deck.mergeFromLink = async (url) => {
+    if (!url) return;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const d = await res.json();
+      return await Deck.mergePages(d, url);
+    } catch (err) {
+      Deck.setMsg(`Import error: ${err.message}`);
+      throw err;
+    }
+  };
+
   $('btn-import').addEventListener('click', () => $('file-import').click());
+  $('btn-merge-pages')?.addEventListener('click', () => $('file-merge-pages')?.click());
   $('btn-import-link')?.addEventListener('click', async () => {
     const url = prompt('Enter layout JSON URL (e.g. http://192.168.1.5:8080/layout.json):');
     if (!url) return;
@@ -161,6 +175,17 @@
     try {
       const d = JSON.parse(await file.text());
       await Deck.importLayout(d, file.name);
+    } catch (err) {
+      Deck.setMsg(`Import error: ${err.message}`);
+    }
+  });
+  $('file-merge-pages')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const d = JSON.parse(await file.text());
+      await Deck.mergePages(d, file.name);
     } catch (err) {
       Deck.setMsg(`Import error: ${err.message}`);
     }
@@ -210,6 +235,17 @@
     if (u.origin !== location.origin) Deck.setMsg('Ignored layout link from another site');
     else if (confirm('Load the layout from the computer? This replaces the layout on this device (a Snapshot is saved first).')) {
       Deck.importFromLink(u.href).catch(() => {});
+    }
+  }
+  const mergeParam = new URLSearchParams(location.search).get('merge');
+  if (mergeParam) {
+    const u = new URL(mergeParam, location.href);
+    const url = new URL(location.href);
+    url.searchParams.delete('merge');
+    history.replaceState(null, '', url);
+    if (u.origin !== location.origin) Deck.setMsg('Ignored merge link from another site');
+    else if (confirm('Append Pages from this layout onto your current Deck? (A Snapshot is saved first.)')) {
+      Deck.mergeFromLink(u.href).catch(() => {});
     }
   }
   Deck.connectObs({ isBoot: true });

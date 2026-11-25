@@ -368,8 +368,48 @@
         const enumAction = MEDIA_ENUM[mode] || MEDIA_ENUM.restart;
         await obsCall('TriggerMediaInputAction', { inputName: a.inputName, mediaAction: enumAction });
       }
-    } else if (a.type === 'hotkey' && a.hotkeyName) {
-      await obsCall('TriggerHotkeyByName', { hotkeyName: a.hotkeyName });
+    } else if (a.type === 'hotkey') {
+      if (a.mode === 'keys') {
+        if (a.keyId) {
+          const km = a.keyModifiers || {};
+          await obsCall('TriggerHotkeyByKeySequence', {
+            keyId: a.keyId,
+            keyModifiers: {
+              control: Boolean(km.control),
+              alt: Boolean(km.alt),
+              shift: Boolean(km.shift),
+              command: Boolean(km.command),
+            },
+          });
+        }
+      } else if (a.hotkeyName) {
+        await obsCall('TriggerHotkeyByName', { hotkeyName: a.hotkeyName });
+      }
+    } else if (a.type === 'http') {
+      const url = String(a.url || '').trim();
+      if (!Deck.isValidHttpUrl || !Deck.isValidHttpUrl(url)) {
+        throw new Error('Invalid HTTP URL (must start with http:// or https://)');
+      }
+      const m = String(a.method || 'POST').toUpperCase();
+      const method = ['GET', 'POST', 'PUT'].includes(m) ? m : 'POST';
+      const opts = { method };
+      const headers = {};
+      if (method !== 'GET' && a.body != null && a.body !== '') {
+        opts.body = String(a.body);
+        headers['Content-Type'] = (a.contentType && String(a.contentType).trim()) || 'application/json';
+      } else if (a.contentType && String(a.contentType).trim()) {
+        headers['Content-Type'] = String(a.contentType).trim();
+      }
+      if (Object.keys(headers).length) opts.headers = headers;
+      const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ac ? setTimeout(() => ac.abort(), 5000) : null;
+      if (ac) opts.signal = ac.signal;
+      try {
+        const res = await fetch(url, opts);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     } else if (a.type === 'chapter') {
       const data = a.chapterName ? { chapterName: a.chapterName } : {};
       await obsCall('CreateRecordChapter', data);
@@ -591,6 +631,8 @@
     const ctx = {
       pageId,
       idx,
+      pad,
+      reverse,
       aborted: false,
       endsAt: Date.now() + ms,
       waitTimer: null,
@@ -614,14 +656,30 @@
     Deck.renderGrid();
   }
 
-  function abortMacro(key) {
+  function getMacroTrailingCleanupSteps(pad) {
+    const steps = Array.isArray(pad?.steps) ? pad.steps : [];
+    let lastWaitIdx = -1;
+    for (let i = steps.length - 1; i >= 0; i--) {
+      if (steps[i]?.type === 'wait') {
+        lastWaitIdx = i;
+        break;
+      }
+    }
+    if (lastWaitIdx < 0) return [];
+    return steps.slice(lastWaitIdx + 1).filter((s) => s && s.type !== 'wait' && s.type !== 'none');
+  }
+
+  function abortMacro(key, opts = {}) {
     const m = Deck.activeMacros.get(key);
-    if (!m) return false;
+    if (!m) return opts.collectCleanup ? [] : false;
     m.aborted = true;
     clearTimeout(m.waitTimer);
     clearInterval(m.tickTimer);
     if (m.resolveWait) m.resolveWait();
     Deck.activeMacros.delete(key);
+    if (opts.collectCleanup) {
+      return (m.pad?.cleanupOnAbort && m.hasFired) ? getMacroTrailingCleanupSteps(m.pad) : [];
+    }
     return true;
   }
 
@@ -860,14 +918,36 @@
     releaseHold(pageId);
   };
 
-  function abortAllTimers() {
+  function abortAllTimers(opts = {}) {
     const macros = [...Deck.activeMacros.keys()];
     const timers = [...Deck.activeAutoOffs.keys()];
-    macros.forEach(abortMacro);
+    const macroCleanups = [];
+    const autoOffReverses = [];
+    if (opts.collectCleanups) {
+      for (const k of macros) {
+        const m = Deck.activeMacros.get(k);
+        if (m?.pad?.cleanupOnAbort && m.hasFired) {
+          macroCleanups.push(...getMacroTrailingCleanupSteps(m.pad));
+        }
+      }
+      for (const k of timers) {
+        const t = Deck.activeAutoOffs.get(k);
+        if (t?.reverse && t.pad && ['source', 'filter', 'mute', 'media'].includes(t.pad.type) && isPadActive(t.pad)) {
+          autoOffReverses.push(t.reverse);
+        }
+      }
+    }
+    macros.forEach((k) => abortMacro(k));
     timers.forEach(abortAutoOff);
     for (const k of [...armedPads.keys()]) disarmPad(k);
     releaseHold();
-    return { stoppedCount: macros.length + timers.length, macrosCount: macros.length, timersCount: timers.length };
+    return {
+      stoppedCount: macros.length + timers.length,
+      macrosCount: macros.length,
+      timersCount: timers.length,
+      macroCleanups,
+      autoOffReverses,
+    };
   }
   Deck.abortAllTimers = abortAllTimers;
 
@@ -897,15 +977,40 @@
   async function runMacro(idx, pad, pageId) {
     const { activeMacros, setMsg } = Deck;
     const key = timerKey(pageId, idx);
+    if (busyPads.has(key)) return;
     if (activeMacros.has(key)) {
-      abortMacro(key);
-      setMsg(`Cancelled macro: ${pad.label || `Pad ${idx + 1}`}`);
+      const cleanupSteps = abortMacro(key, { collectCleanup: true });
+      let ranCleanup = 0;
+      const errs = [];
+      if (cleanupSteps.length) {
+        busyPads.add(key);
+        try {
+          for (const st of cleanupSteps) {
+            try {
+              await execAction(st);
+              ranCleanup++;
+            } catch (e) {
+              errs.push(e.message);
+            }
+          }
+        } finally {
+          busyPads.delete(key);
+        }
+      }
+      if (cleanupSteps.length) {
+        setMsg(
+          `Cancelled macro & ran ${ranCleanup} cleanup step(s): ${pad.label || `Pad ${idx + 1}`}`
+          + (errs.length ? ` — ${errs[0]}` : '')
+        );
+      } else {
+        setMsg(`Cancelled macro: ${pad.label || `Pad ${idx + 1}`}`);
+      }
       Deck.renderGrid();
       return;
     }
     const steps = pad.steps || [];
     if (!steps.length) return;
-    const ctx = { pageId, idx, aborted: false, waitTimer: null, tickTimer: null, endsAt: 0, resolveWait: null };
+    const ctx = { pageId, idx, pad, hasFired: false, aborted: false, waitTimer: null, tickTimer: null, endsAt: 0, resolveWait: null };
     activeMacros.set(key, ctx);
     Deck.renderGrid();
     try {
@@ -924,6 +1029,7 @@
           ctx.resolveWait = null;
           ctx.endsAt = 0;
         } else {
+          ctx.hasFired = true;
           await execAction(st);
         }
       }
@@ -940,9 +1046,17 @@
 
   async function runPanic() {
     const { cfg, obsCall, setMsg } = Deck;
-    const { stoppedCount } = abortAllTimers();
+    const { stoppedCount, macroCleanups, autoOffReverses } = abortAllTimers({ collectCleanups: true });
     let ran = 0;
     const errs = [];
+    for (const st of [...macroCleanups, ...autoOffReverses]) {
+      try {
+        await execAction(st);
+        ran++;
+      } catch (e) {
+        errs.push(e.message);
+      }
+    }
     if ((cfg.panicSteps || []).length) {
       for (const st of cfg.panicSteps) {
         try {
@@ -990,6 +1104,10 @@
       return p.label || (p.mode === 'next' ? 'Next Scene' : 'Prev Scene');
     }
     if (p.type === 'stats') return p.label || Deck.formatStatsText(p.mode);
+    if (p.type === 'hotkey' && p.mode === 'keys') {
+      return p.label || (Deck.formatHotkeyKeys ? Deck.formatHotkeyKeys(p) : 'OBS Key Sequence');
+    }
+    if (p.type === 'http') return p.label || p.url || 'HTTP';
     return p.label || p.sceneName || p.filterName || p.sourceName || p.inputName
       || p.hotkeyName || p.chapterName || p.profileName || p.collectionName
       || p.transitionName || p.preset || p.target || p.type;

@@ -139,8 +139,10 @@ function main() {
     'deck.html',
     'deck/snapshots.js',
     'scripts/lan-helper.mjs',
+    'scripts/hotkey-bridge.ps1',
     'scripts/vendor/qrcode-terminal.cjs',
     'Phone Helper.bat',
+    'Hotkey Bridge.bat',
     'README.md',
     'installers/Install-Windows.bat',
     'installers/Install-Mac.command',
@@ -197,6 +199,12 @@ function main() {
     executable: false,
   });
 
+  entries.push({
+    zipPath: 'obs-virtual-deck/scripts/hotkey-bridge.ps1',
+    data: fs.readFileSync(path.join(ROOT, 'scripts/hotkey-bridge.ps1')),
+    executable: false,
+  });
+
   // QR code library (optional at runtime, but ship it so the helper prints a QR)
   collectDir(path.join(ROOT, 'scripts/vendor'), 'obs-virtual-deck/scripts/vendor', entries);
 
@@ -206,6 +214,15 @@ function main() {
   entries.push({
     zipPath: 'obs-virtual-deck/Phone Helper.bat',
     data: Buffer.from(phoneBat, 'utf8'),
+    executable: false,
+  });
+
+  const bridgeBat = fs
+    .readFileSync(path.join(ROOT, 'Hotkey Bridge.bat'), 'utf8')
+    .replace(/\r?\n/g, '\r\n');
+  entries.push({
+    zipPath: 'obs-virtual-deck/Hotkey Bridge.bat',
+    data: Buffer.from(bridgeBat, 'utf8'),
     executable: false,
   });
 

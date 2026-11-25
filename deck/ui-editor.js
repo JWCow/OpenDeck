@@ -424,9 +424,116 @@
         ], (v) => { obj.mode = v; })
       );
     } else if (t === 'hotkey') {
-      container.appendChild(
-        makeObsSelect('OBS Hotkey', obj.hotkeyName, obs.hotkeys || [], (v) => { obj.hotkeyName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select OBS hotkey…').el
+      if (obj.mode !== 'keys') obj.mode = 'name';
+      if (!obj.keyModifiers || typeof obj.keyModifiers !== 'object') {
+        obj.keyModifiers = { control: false, alt: false, shift: false, command: false };
+      }
+      const nameRow = makeObsSelect('OBS Hotkey', obj.hotkeyName, obs.hotkeys || [], (v) => { obj.hotkeyName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select OBS hotkey…').el;
+      const modeRow = makeSelect('Hotkey Mode', obj.mode, [
+        ['name', 'Named OBS Hotkey'],
+        ['keys', 'Key Sequence (TriggerHotkeyByKeySequence)'],
+      ], (v) => {
+        obj.mode = v;
+        syncVis();
+      });
+
+      const keysWrap = document.createElement('div');
+      keysWrap.className = 'frm';
+      const keyListId = 'obs-key-id-presets';
+      let dl = document.getElementById(keyListId);
+      if (!dl) {
+        dl = document.createElement('datalist');
+        dl.id = keyListId;
+        const commonKeys = [
+          'OBS_KEY_F1', 'OBS_KEY_F2', 'OBS_KEY_F3', 'OBS_KEY_F4', 'OBS_KEY_F5', 'OBS_KEY_F6',
+          'OBS_KEY_F7', 'OBS_KEY_F8', 'OBS_KEY_F9', 'OBS_KEY_F10', 'OBS_KEY_F11', 'OBS_KEY_F12',
+          'OBS_KEY_1', 'OBS_KEY_2', 'OBS_KEY_3', 'OBS_KEY_4', 'OBS_KEY_5', 'OBS_KEY_6',
+          'OBS_KEY_7', 'OBS_KEY_8', 'OBS_KEY_9', 'OBS_KEY_0',
+          'OBS_KEY_SPACE', 'OBS_KEY_ESCAPE', 'OBS_KEY_RETURN', 'OBS_KEY_TAB',
+        ];
+        for (const k of commonKeys) {
+          const opt = document.createElement('option');
+          opt.value = k;
+          dl.appendChild(opt);
+        }
+        document.body.appendChild(dl);
+      }
+      const keyRow = makeTextInput('OBS Key ID', obj.keyId || '', 'OBS_KEY_F7', (v) => {
+        obj.keyId = v.trim();
+        if (!allowWait && Deck.formatHotkeyKeys) maybeAutoSyncLabel(Deck.formatHotkeyKeys(obj));
+      });
+      const keyInput = keyRow.querySelector('input');
+      if (keyInput) keyInput.setAttribute('list', keyListId);
+
+      const modRow = document.createElement('div');
+      modRow.className = 'row';
+      const modTitle = document.createElement('label');
+      modTitle.textContent = 'Modifiers';
+      const modBox = document.createElement('div');
+      modBox.className = 'hotkey-mods';
+      for (const [k, text] of [['control', 'Ctrl'], ['alt', 'Alt'], ['shift', 'Shift'], ['command', 'Cmd']]) {
+        const lbl = document.createElement('label');
+        lbl.className = 'chk-label';
+        const chk = document.createElement('input');
+        chk.type = 'checkbox';
+        chk.dataset.mod = k;
+        chk.checked = Boolean(obj.keyModifiers[k]);
+        chk.addEventListener('change', () => {
+          obj.keyModifiers[k] = chk.checked;
+          if (!allowWait && obj.keyId && Deck.formatHotkeyKeys) maybeAutoSyncLabel(Deck.formatHotkeyKeys(obj));
+        });
+        lbl.append(chk, document.createTextNode(` ${text}`));
+        modBox.appendChild(lbl);
+      }
+      modRow.append(modTitle, modBox);
+      keysWrap.append(keyRow, modRow);
+
+      const syncVis = () => {
+        const isKeys = obj.mode === 'keys';
+        nameRow.hidden = isKeys;
+        keysWrap.hidden = !isKeys;
+      };
+      container.append(nameRow, modeRow, keysWrap);
+      syncVis();
+    } else if (t === 'http') {
+      if (!['GET', 'POST', 'PUT'].includes(String(obj.method || '').toUpperCase())) obj.method = 'POST';
+      const urlRow = makeTextInput('URL (http:// or https://)', obj.url || '', 'http://127.0.0.1:3905/hotkey', (v) => {
+        obj.url = v.trim();
+      });
+      const ctRow = makeTextInput('Content-Type (optional)', obj.contentType || '', 'application/json', (v) => {
+        if (v.trim()) obj.contentType = v.trim();
+        else delete obj.contentType;
+      });
+      const bodyRow = document.createElement('div');
+      bodyRow.className = 'row';
+      const bodyLbl = document.createElement('label');
+      bodyLbl.textContent = 'Body (optional, JSON or text)';
+      const bodyInp = document.createElement('textarea');
+      bodyInp.rows = 3;
+      bodyInp.placeholder = '{"key":"1","ctrl":true,"alt":true,"shift":true}';
+      bodyInp.value = obj.body || '';
+      bodyInp.addEventListener('input', () => {
+        if (bodyInp.value) obj.body = bodyInp.value;
+        else delete obj.body;
+      });
+      bodyRow.append(bodyLbl, bodyInp);
+
+      const syncVis = () => {
+        const isGet = (obj.method || 'POST') === 'GET';
+        ctRow.hidden = isGet;
+        bodyRow.hidden = isGet;
+      };
+      container.append(
+        makeSelect('HTTP Method', obj.method, [
+          ['POST', 'POST'],
+          ['GET', 'GET'],
+          ['PUT', 'PUT'],
+        ], (v) => { obj.method = v; syncVis(); }),
+        urlRow,
+        ctRow,
+        bodyRow
       );
+      syncVis();
     } else if (t === 'media') {
       const mediaOpts = obs.mediaInputs?.length ? obs.mediaInputs : obs.inputs;
       container.append(
@@ -566,6 +673,7 @@
         ['browser', 'Browser Source'],
         ['screenshot', 'Screenshot'],
         ['hotkey', 'OBS Hotkey'],
+        ['http', 'HTTP / Webhook'],
         ['transition', 'Transition'],
         ['profile', 'Profile'],
         ['collection', 'Collection'],
@@ -609,6 +717,21 @@
     if (!Deck.HOLD_TYPES.has(draftPad.type)) delete draftPad.hold;
     if (!Deck.AUTO_OFF_TYPES.has(draftPad.type)) delete draftPad.autoOffMs;
     if (draftPad.type === 'macro') {
+      const cleanupRow = document.createElement('div');
+      cleanupRow.className = 'row';
+      const cleanupLbl = document.createElement('label');
+      cleanupLbl.className = 'chk-label';
+      const cleanupChk = document.createElement('input');
+      cleanupChk.type = 'checkbox';
+      cleanupChk.id = 'f-macro-cleanup';
+      cleanupChk.checked = Boolean(draftPad.cleanupOnAbort);
+      cleanupChk.addEventListener('change', () => {
+        if (cleanupChk.checked) draftPad.cleanupOnAbort = true;
+        else delete draftPad.cleanupOnAbort;
+      });
+      cleanupLbl.append(cleanupChk, document.createTextNode(' Run trailing cleanup steps if aborted or PANIC'));
+      cleanupRow.appendChild(cleanupLbl);
+
       const list = document.createElement('div');
       list.className = 'steps';
       const add = document.createElement('button');
@@ -620,7 +743,7 @@
         renderStepList(list, draftPad.steps, true);
       });
       renderStepList(list, draftPad.steps, true);
-      f.append(list, add);
+      f.append(cleanupRow, list, add);
     } else if (draftPad.type === 'panic') {
       const btn = document.createElement('button');
       btn.type = 'button';

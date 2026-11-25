@@ -39,8 +39,10 @@
   <button id="btn-snapshots" class="btn sm" title="View and restore layout snapshots">Snapshots</button>
   <button id="btn-export" class="btn sm" title="Export Deck configuration as JSON (passwords omitted)">Export</button>
   <button id="btn-import" class="btn sm" title="Import Deck configuration JSON">Import</button>
+  <button id="btn-merge-pages" class="btn sm" title="Append Pages from a layout JSON onto your current Deck">Import Pages</button>
   <button id="btn-import-link" class="btn sm" title="Import Deck configuration from link or URL">Import Link</button>
   <input id="file-import" type="file" accept=".json,application/json" hidden>
+  <input id="file-merge-pages" type="file" accept=".json,application/json" hidden>
 </div>
 
 <div id="conn-bar" class="bar conn">
@@ -153,6 +155,7 @@
         <optgroup label="Pages &amp; Automation">
           <option value="page">Switch Page</option>
           <option value="macro">Timed Macro</option>
+          <option value="http">HTTP / Webhook</option>
           <option value="panic">PANIC Reset</option>
         </optgroup>
       </select>
@@ -191,11 +194,12 @@
         <button type="button" class="btn sm" data-cols="6" data-rows="4">6×4</button>
         <button type="button" class="btn sm" data-cols="8" data-rows="4">8×4</button>
         <button type="button" class="btn sm" data-cols="8" data-rows="8">8×8</button>
+        <button type="button" class="btn sm" data-cols="8" data-rows="12">8×12</button>
       </div>
     </div>
     <div class="row2">
       <div class="row"><label for="d-cols">Columns (2–12)</label><input id="d-cols" type="number" min="2" max="12" value="8"></div>
-      <div class="row"><label for="d-rows">Rows (2–10)</label><input id="d-rows" type="number" min="2" max="10" value="8"></div>
+      <div class="row"><label for="d-rows">Rows (2–12)</label><input id="d-rows" type="number" min="2" max="12" value="8"></div>
     </div>
     <div class="dlg-f">
       <button type="button" id="btn-deck-del" class="btn sm panic" title="Delete this Page">Delete Page</button>

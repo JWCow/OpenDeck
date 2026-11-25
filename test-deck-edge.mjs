@@ -5,18 +5,20 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import zlib from 'node:zlib';
 import { chromium } from 'playwright';
-import { createFakeObs, PASSWORD } from './test-deck-fake-obs.mjs';
+import { createFakeObs, isolateBrowserFromLiveObs, PASSWORD } from './test-deck-fake-obs.mjs';
 import { createLanHelper } from './scripts/lan-helper.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DECK_URL = pathToFileURL(join(__dirname, 'deck.html')).href;
 const PKG = JSON.parse(fs.readFileSync(join(__dirname, 'package.json'), 'utf8'));
+const ONLY_SECTION = process.argv.find((a) => a.startsWith('--section='))?.split('=')[1] || '';
 
 function parseZipEntries(buf) {
   // Locate End of Central Directory (PK\x05\x06)
@@ -64,9 +66,10 @@ const port = wss.address().port;
 let browser;
 
 try {
-  browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+  browser = isolateBrowserFromLiveObs(await chromium.launch({ headless: true }));
   const pageErrors = [];
+  if (!ONLY_SECTION) {
+  const page = await browser.newPage();
   page.on('pageerror', (e) => pageErrors.push(e.message));
   page.on('dialog', (d) => d.accept());
 
@@ -479,19 +482,19 @@ try {
   // In 4x3, (row 1, col 1) is index 1*4 + 1 = 5
   assert.ok((await pad(5).textContent()).includes('R2C2'), '2D (row 1, col 1) mapped to index 5 in 4x3');
   assert.equal(await page.evaluate(() => Deck.getActivePads().some((p) => p.label === 'DroppedPad')), false, 'out-of-bounds pad dropped cleanly');
-  // Clamp bounds (1x1 -> 2x2, 99x99 -> 12x10)
+  // Clamp bounds (1x1 -> 2x2, 99x99 -> 12x12)
   const clampedMin = await page.evaluate(() => { const d = Deck.resizePage(Deck.getActivePage().id, 1, 1); return [d.cols, d.rows]; });
   assert.deepEqual(clampedMin, [2, 2]);
   const clampedMax = await page.evaluate(() => { const d = Deck.resizePage(Deck.getActivePage().id, 99, 99); return [d.cols, d.rows]; });
-  assert.deepEqual(clampedMax, [12, 10]);
-  console.log('  ✓ grid resize 2D coordinate preservation & bounds clamping (2..12 x 2..10)');
+  assert.deepEqual(clampedMax, [12, 12]);
+  console.log('  ✓ grid resize 2D coordinate preservation & bounds clamping (2..12 x 2..12)');
 
   // 11. Narrow OBS dock viewport (360x420) fits without horizontal overflow + pads stay >= 54x54px
   await page.click('#btn-deck-add');
   await page.click('#btn-deck-add');
   await page.click('#btn-deck-add');
   await page.locator('#deck-tabs .page-tab').nth(0).click();
-  await page.waitForFunction(() => document.querySelectorAll('#grid .pad').length === 120);
+  await page.waitForFunction(() => document.querySelectorAll('#grid .pad').length === 144);
   await page.setViewportSize({ width: 360, height: 420 });
   const layoutAudit = await page.evaluate(() => {
     const pads = [...document.querySelectorAll('#grid .pad')].map((el) => el.getBoundingClientRect());
@@ -501,7 +504,7 @@ try {
       minH: Math.min(...pads.map((r) => r.height)),
     };
   });
-  assert.equal(layoutAudit.overflow, false, 'no horizontal overflow at 360x420 OBS dock size with 4 tabs & 12x10 grid');
+  assert.equal(layoutAudit.overflow, false, 'no horizontal overflow at 360x420 OBS dock size with 4 tabs & 12x12 grid');
   assert.ok(layoutAudit.minW >= 54 && layoutAudit.minH >= 54, `pads remain >= 54x54px (got ${layoutAudit.minW}x${layoutAudit.minH})`);
   console.log('  ✓ narrow OBS dock viewport (360x420) layout & min 54x54 pad size check');
 
@@ -618,9 +621,11 @@ try {
     'obs-virtual-deck/deck/snapshots.js',
     'obs-virtual-deck/deck/ui-boot.js',
     'obs-virtual-deck/scripts/lan-helper.mjs',
+    'obs-virtual-deck/scripts/hotkey-bridge.ps1',
     'obs-virtual-deck/scripts/vendor/qrcode-terminal.cjs',
     'obs-virtual-deck/scripts/vendor/QRCode/index.js',
     'obs-virtual-deck/Phone Helper.bat',
+    'obs-virtual-deck/Hotkey Bridge.bat',
     'obs-virtual-deck/README.md',
     'obs-virtual-deck/Install-Windows.bat',
     'obs-virtual-deck/Install-Mac.command',
@@ -3106,6 +3111,301 @@ try {
     try { fs.unlinkSync(testLayoutPath); } catch {}
     await helper.close();
     phoneObs.wss.close();
+  }
+  }
+
+  // 18. 8x12 grid, Hotkey key-sequence mode, Macro cleanupOnAbort, Auto-Off re-click/PANIC, HTTP webhook & mergePages
+  if (!ONLY_SECTION || ONLY_SECTION === '18') {
+  const featObs = createFakeObs(false);
+  await new Promise((r) => featObs.wss.once('listening', r));
+  const featPort = featObs.wss.address().port;
+  const httpReqs = [];
+  const hookSrv = http.createServer((req, res) => {
+    const cors = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Private-Network': 'true',
+    };
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, cors);
+      res.end();
+      return;
+    }
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      httpReqs.push({ method: req.method, url: req.url, contentType: req.headers['content-type'] || '', body });
+      res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  await new Promise((r) => hookSrv.listen(0, '127.0.0.1', r));
+  const hookPort = hookSrv.address().port;
+  const mergeTmpPath = join(os.tmpdir(), `opendeck-merge-${Date.now()}.json`);
+  try {
+    const ctxFeat = await browser.newContext();
+    const pageFeat = await ctxFeat.newPage();
+    pageFeat.on('pageerror', (e) => pageErrors.push(e.message));
+    pageFeat.on('dialog', (d) => d.accept());
+
+    await pageFeat.goto(`${DECK_URL}?port=${featPort}`);
+    await pageFeat.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+    await pageFeat.waitForTimeout(80);
+    if (await pageFeat.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+      await pageFeat.click('#btn-wiz-cancel');
+    }
+
+    // 18a. 8x12 Grid via Page & Grid Settings dialog + narrow 360x420 overflow check
+    await pageFeat.click('#btn-deck-cfg');
+    await pageFeat.click('#d-presets button[data-cols="8"][data-rows="12"]');
+    assert.equal(await pageFeat.inputValue('#d-cols'), '8');
+    assert.equal(await pageFeat.inputValue('#d-rows'), '12');
+    await pageFeat.click('#deck-form button[type="submit"]');
+    await pageFeat.waitForFunction(() => document.querySelectorAll('#grid .pad').length === 96);
+    await pageFeat.setViewportSize({ width: 360, height: 420 });
+    const overflow8x12 = await pageFeat.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+    assert.equal(overflow8x12, false, '8x12 grid has zero horizontal overflow at 360x420');
+    await pageFeat.setViewportSize({ width: 1280, height: 800 });
+
+    // 18b. Hotkey Key-Sequence mode (top-level pad via editor, macro step, panic step)
+    await pageFeat.click('#btn-edit');
+    await pageFeat.locator('#grid .pad').nth(0).click();
+    await pageFeat.selectOption('#f-type', 'hotkey');
+    await pageFeat.locator('#f-fields select').nth(1).selectOption('keys');
+    await pageFeat.locator('#f-fields input[list="obs-key-id-presets"]').fill('OBS_KEY_F7');
+    await pageFeat.locator('#f-fields input[data-mod="control"]').check();
+    await pageFeat.locator('#f-fields input[data-mod="alt"]').check();
+    await pageFeat.locator('#f-fields input[data-mod="shift"]').check();
+    await pageFeat.click('#pad-form button[type="submit"]');
+    await pageFeat.click('#btn-edit');
+
+    assert.ok((await pageFeat.locator('#grid .pad').nth(0).textContent()).includes('Ctrl+Alt+Shift+F7'), 'key sequence fallback label formatted');
+    featObs.state.triggeredKeySequences.length = 0;
+    await pageFeat.locator('#grid .pad').nth(0).click();
+    await pageFeat.waitForFunction(() => true);
+    await pageFeat.waitForTimeout(60);
+    assert.deepEqual(featObs.state.triggeredKeySequences, [{
+      keyId: 'OBS_KEY_F7',
+      keyModifiers: { control: true, alt: true, shift: true, command: false },
+    }], 'TriggerHotkeyByKeySequence called with exact keyId & keyModifiers');
+
+    // Macro step + PANIC step with hotkey keys mode
+    await pageFeat.evaluate(async () => {
+      await Deck.execAction({
+        type: 'hotkey',
+        mode: 'keys',
+        keyId: 'OBS_KEY_F8',
+        keyModifiers: { control: true, alt: true, shift: true, command: false },
+      });
+    });
+    assert.equal(featObs.state.triggeredKeySequences.length, 2);
+    assert.equal(featObs.state.triggeredKeySequences[1].keyId, 'OBS_KEY_F8');
+
+    // 18c. Macro cleanupOnAbort on re-click AND on PANIC (plus leading-wait guard)
+    await pageFeat.click('#btn-edit');
+    await pageFeat.locator('#grid .pad').nth(1).click();
+    await pageFeat.selectOption('#f-type', 'macro');
+    await pageFeat.check('#f-macro-cleanup');
+    await pageFeat.click('#pad-form button[type="submit"]');
+    await pageFeat.click('#btn-edit');
+
+    await pageFeat.evaluate(() => {
+      const p = Deck.getActivePads();
+      // Slot 1: [show Lower Third, enable Blur, wait 3000, hide Lower Third, disable Blur]
+      p[1] = Deck.normalizePad({
+        type: 'macro',
+        label: '5s Dance',
+        cleanupOnAbort: true,
+        steps: [
+          { type: 'source', sceneName: 'Main Cam', sourceName: 'Lower Third', mode: 'show' },
+          { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'enable' },
+          { type: 'wait', delayMs: 3000 },
+          { type: 'source', sceneName: 'Main Cam', sourceName: 'Lower Third', mode: 'hide' },
+          { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'disable' },
+        ],
+      });
+      // Slot 2: leading wait before step 0 action (aborting during leading wait must NOT run cleanup)
+      p[2] = Deck.normalizePad({
+        type: 'macro',
+        label: 'Lead Wait',
+        cleanupOnAbort: true,
+        steps: [
+          { type: 'wait', delayMs: 3000 },
+          { type: 'source', sceneName: 'Main Cam', sourceName: 'Lower Third', mode: 'show' },
+          { type: 'wait', delayMs: 1000 },
+          { type: 'source', sceneName: 'Main Cam', sourceName: 'Lower Third', mode: 'hide' },
+        ],
+      });
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+
+    // Re-click abort runs trailing cleanup steps
+    await pageFeat.locator('#grid .pad').nth(1).click();
+    await pageFeat.waitForFunction(() => document.querySelectorAll('#grid .pad')[1].className.includes('running'));
+    await pageFeat.waitForTimeout(80);
+    assert.equal(featObs.state.sceneItems['Main Cam'][1].sceneItemEnabled, true, 'macro step 0 showed source');
+    assert.equal(featObs.state.filters['Webcam'][0].filterEnabled, true, 'macro step 1 enabled filter');
+    await pageFeat.locator('#grid .pad').nth(1).click(); // abort via re-click
+    await pageFeat.waitForFunction(() => (
+      !document.querySelectorAll('#grid .pad')[1].className.includes('running')
+      && document.getElementById('msg-info').textContent.includes('Cancelled macro')
+    ));
+    assert.equal(featObs.state.sceneItems['Main Cam'][1].sceneItemEnabled, false, 'cleanupOnAbort hid source on re-click');
+    assert.equal(featObs.state.filters['Webcam'][0].filterEnabled, false, 'cleanupOnAbort disabled filter on re-click');
+
+    // PANIC abort runs trailing cleanup steps even for sources
+    await pageFeat.locator('#grid .pad').nth(1).click();
+    await pageFeat.waitForFunction(() => document.querySelectorAll('#grid .pad')[1].className.includes('running'));
+    await pageFeat.waitForTimeout(80);
+    assert.equal(featObs.state.sceneItems['Main Cam'][1].sceneItemEnabled, true);
+    await pageFeat.click('#btn-panic');
+    await pageFeat.waitForFunction(() => (
+      !document.querySelectorAll('#grid .pad')[1].className.includes('running')
+      && document.getElementById('msg-info').textContent.includes('PANIC executed')
+    ));
+    assert.equal(featObs.state.sceneItems['Main Cam'][1].sceneItemEnabled, false, 'PANIC ran macro cleanupOnAbort to hide source');
+    assert.equal(featObs.state.filters['Webcam'][0].filterEnabled, false, 'PANIC ran macro cleanupOnAbort to disable filter');
+
+    // Leading-wait abort before any step fired does NOT run trailing cleanup
+    featObs.state.calls.length = 0;
+    await pageFeat.locator('#grid .pad').nth(2).click();
+    await pageFeat.waitForFunction(() => document.querySelectorAll('#grid .pad')[2].className.includes('running'));
+    await pageFeat.locator('#grid .pad').nth(2).click();
+    await pageFeat.waitForFunction(() => !document.querySelectorAll('#grid .pad')[2].className.includes('running'));
+    assert.equal(featObs.state.calls.filter((c) => c.requestType === 'SetSceneItemEnabled').length, 0, 'no cleanup run before first action step fires');
+
+    // 18d. autoOffMs re-click & PANIC cleanup on source & media
+    await pageFeat.evaluate(() => {
+      const p = Deck.getActivePads();
+      p[3] = Deck.normalizePad({
+        type: 'source',
+        sceneName: 'Main Cam',
+        sourceName: 'Lower Third',
+        mode: 'show',
+        autoOffMs: 4000,
+        label: 'Timed Lower3',
+      });
+      p[4] = Deck.normalizePad({
+        type: 'media',
+        inputName: 'Intro Video',
+        mediaAction: 'play',
+        autoOffMs: 4000,
+        label: 'Timed Media',
+      });
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+    await pageFeat.locator('#grid .pad').nth(3).click();
+    await pageFeat.waitForFunction(() => document.querySelectorAll('#grid .pad')[3].className.includes('running'));
+    assert.equal(featObs.state.sceneItems['Main Cam'][1].sceneItemEnabled, true);
+    await pageFeat.locator('#grid .pad').nth(3).click(); // re-click cancels & hides
+    await pageFeat.waitForFunction(() => (
+      !document.querySelectorAll('#grid .pad')[3].className.includes('running')
+      && document.getElementById('msg-info').textContent.includes('Cancelled')
+    ));
+    assert.equal(featObs.state.sceneItems['Main Cam'][1].sceneItemEnabled, false, 're-clicking active autoOff source cancels & hides');
+
+    await pageFeat.locator('#grid .pad').nth(3).click();
+    await pageFeat.locator('#grid .pad').nth(4).click();
+    await pageFeat.waitForFunction(() => (
+      document.querySelectorAll('#grid .pad')[3].className.includes('running')
+      && document.querySelectorAll('#grid .pad')[4].className.includes('running')
+    ));
+    await pageFeat.click('#btn-panic');
+    await pageFeat.waitForFunction(() => (
+      !document.querySelectorAll('#grid .pad')[3].className.includes('running')
+      && document.getElementById('msg-info').textContent.includes('PANIC executed')
+    ));
+    assert.equal(featObs.state.sceneItems['Main Cam'][1].sceneItemEnabled, false, 'PANIC reverted active autoOff source');
+    assert.equal(featObs.state.mediaStates['Intro Video'], 'OBS_MEDIA_STATE_PAUSED', 'PANIC paused active autoOff media');
+
+    // 18e. HTTP / Webhook action (type: 'http', works disconnected, rejects unsafe protocols)
+    await pageFeat.click('#btn-conn-toggle');
+    await pageFeat.click('#btn-ws-disconnect');
+    await pageFeat.waitForFunction(() => document.getElementById('conn-text').textContent === 'Disconnected');
+    const badHttp = await pageFeat.evaluate(() => ({
+      js: Deck.normalizePad({ type: 'http', method: 'POST', url: 'javascript:alert(1)' }),
+      file: Deck.normalizePad({ type: 'http', method: 'GET', url: 'file:///C:/Windows/win.ini' }),
+      data: Deck.normalizePad({ type: 'http', method: 'POST', url: 'data:text/plain,hi' }),
+    }));
+    assert.equal(badHttp.js.url, undefined, 'javascript: URL rejected by normalizePad');
+    assert.equal(badHttp.file.url, undefined, 'file: URL rejected by normalizePad');
+    assert.equal(badHttp.data.url, undefined, 'data: URL rejected by normalizePad');
+
+    await pageFeat.click('#btn-edit');
+    await pageFeat.locator('#grid .pad').nth(5).click();
+    await pageFeat.selectOption('#f-type', 'http');
+    await pageFeat.locator('#f-fields select').nth(0).selectOption('POST');
+    await pageFeat.locator('#f-fields input[type="text"]').nth(0).fill(`http://127.0.0.1:${hookPort}/hotkey`);
+    await pageFeat.locator('#f-fields textarea').fill('{"key":"1","ctrl":true,"alt":true,"shift":true}');
+    await pageFeat.fill('#f-label', 'Avatar 1');
+    await pageFeat.click('#pad-form button[type="submit"]');
+    await pageFeat.click('#btn-edit');
+    assert.equal((await pageFeat.locator('#grid .pad').nth(5).locator('.tag').textContent()).trim(), 'API', 'HTTP pad has API badge');
+
+    await pageFeat.locator('#grid .pad').nth(5).click();
+    await pageFeat.waitForFunction(() => document.getElementById('msg-info').textContent.includes('Ran: Avatar 1'));
+    assert.equal(httpReqs.length, 1, 'HTTP pad executed fetch while OBS disconnected');
+    assert.equal(httpReqs[0].method, 'POST');
+    assert.equal(httpReqs[0].url, '/hotkey');
+    assert.equal(JSON.parse(httpReqs[0].body).key, '1');
+
+    // 18f. Merge Pages Import (appends pages with deduplicated IDs, preserves existing pages & ws config)
+    const beforeWsPort = await pageFeat.evaluate(() => Deck.cfg.ws.port);
+    const mergePayload = {
+      version: 2,
+      ws: { host: '9.9.9.9', port: 9999 },
+      pages: [
+        {
+          id: 'page-1',
+          name: 'MEMES',
+          cols: 8,
+          rows: 12,
+          pads: [
+            { type: 'page', mode: 'goto', pageId: 'page-sb', label: 'To SB' },
+            { type: 'http', method: 'POST', url: `http://127.0.0.1:${hookPort}/hotkey`, body: '{"key":"2"}', label: 'Avatar 2' },
+          ],
+        },
+        {
+          id: 'page-sb',
+          name: 'Soundboard',
+          cols: 6,
+          rows: 3,
+          pads: [{ type: 'none' }],
+        },
+      ],
+    };
+    fs.writeFileSync(mergeTmpPath, JSON.stringify(mergePayload, null, 2), 'utf8');
+    await pageFeat.setInputFiles('#file-merge-pages', mergeTmpPath);
+    await pageFeat.waitForFunction(() => Deck.cfg.pages.length === 3);
+
+    const mergedState = await pageFeat.evaluate(() => ({
+      pages: Deck.cfg.pages.map((p) => ({ id: p.id, name: p.name, cols: p.cols, rows: p.rows })),
+      activePageId: Deck.cfg.activePageId,
+      ws: Deck.cfg.ws,
+      gotoTarget: Deck.cfg.pages[1].pads[0].pageId,
+    }));
+    assert.equal(mergedState.pages[0].id, 'page-1', 'original page-1 preserved');
+    assert.equal(mergedState.pages[1].name, 'MEMES', 'MEMES page appended');
+    assert.notEqual(mergedState.pages[1].id, 'page-1', 'duplicate page-1 ID deduplicated');
+    assert.equal(mergedState.pages[1].cols, 8);
+    assert.equal(mergedState.pages[1].rows, 12);
+    assert.equal(mergedState.pages[2].name, 'Soundboard', 'second merged page appended');
+    assert.equal(mergedState.activePageId, mergedState.pages[1].id, 'switched to first newly merged page');
+    assert.equal(mergedState.ws.port, beforeWsPort, 'existing ws.port preserved on merge');
+    assert.equal(mergedState.ws.host, '127.0.0.1', 'existing ws.host preserved on merge');
+    assert.equal(mergedState.gotoTarget, mergedState.pages[2].id, 'internal page link preserved after deduplication');
+
+    assert.deepEqual(pageErrors, [], `unexpected page errors: ${pageErrors.join('; ')}`);
+    await ctxFeat.close();
+    console.log('  ✓ 8x12 grid, TriggerHotkeyByKeySequence, macro cleanupOnAbort, autoOff re-click/PANIC, http API & mergePages');
+  } finally {
+    try { fs.unlinkSync(mergeTmpPath); } catch {}
+    hookSrv.close();
+    featObs.wss.close();
+  }
   }
 
   console.log('\nPASS: all deck edge E2E checks succeeded.');

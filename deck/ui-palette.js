@@ -58,6 +58,7 @@
         { label: 'Profile', icon: '👤', tag: 'PRF', action: { type: 'profile', label: 'Profile', icon: '👤' } },
         { label: 'Scene Collection', icon: '📁', tag: 'COL', action: { type: 'collection', label: 'Collection', icon: '📁' } },
         { label: 'OBS Hotkey', icon: '⌨️', tag: 'KEY', action: { type: 'hotkey', label: 'Hotkey', icon: '⌨️' } },
+        { label: 'HTTP / Webhook', icon: '🔗', tag: 'API', action: { type: 'http', method: 'POST', url: '', label: 'Webhook', icon: '🔗' } },
         { label: 'Go to Page', icon: '📄', tag: 'PAG', action: { type: 'page', mode: 'goto', label: 'Go to Page', icon: '📄' } },
         { label: 'Timed Macro', icon: '⏱️', tag: 'MCR', action: { type: 'macro', label: 'Timed Macro', icon: '⏱️', steps: [] } },
       ],
@@ -73,6 +74,7 @@
     if (act.type === 'screenshot') return true;
     if (act.type === 'stats') return true;
     if (act.type === 'scene' && (act.mode === 'next' || act.mode === 'prev')) return true;
+    if (act.type === 'http') return Boolean(act.url);
     if (act.type === 'panic') return true;
     return false;
   }

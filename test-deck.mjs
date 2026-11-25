@@ -6,7 +6,7 @@ import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
-import { createFakeObs, PASSWORD } from './test-deck-fake-obs.mjs';
+import { createFakeObs, isolateBrowserFromLiveObs, PASSWORD } from './test-deck-fake-obs.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DECK_URL = pathToFileURL(join(__dirname, 'deck.html')).href;
@@ -20,7 +20,7 @@ const tmpDir = fs.mkdtempSync(join(os.tmpdir(), 'obs-deck-test-'));
 let browser;
 
 try {
-  browser = await chromium.launch({ headless: true });
+  browser = isolateBrowserFromLiveObs(await chromium.launch({ headless: true }));
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
   const pageErrors = [];
