@@ -5,3 +5,6 @@ Thumbs.db
 dist/
 layout.json
 semi-panel.json
+electron/node_modules/
+electron/dist/
+electron/.staged-app/

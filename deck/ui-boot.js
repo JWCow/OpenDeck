@@ -227,12 +227,78 @@
 
   $('btn-import').addEventListener('click', () => $('file-import').click());
   $('btn-merge-pages')?.addEventListener('click', () => $('file-merge-pages')?.click());
-  $('btn-import-link')?.addEventListener('click', async () => {
-    const url = prompt('Enter layout JSON URL (e.g. http://192.168.1.5:8080/layout.json):');
-    if (!url) return;
+  function openImportLinkDialog() {
+    const dlg = $('import-link-dlg');
+    const urlInput = $('import-link-url');
+    const errEl = $('import-link-err');
+    const submitBtn = $('btn-import-link-submit');
+    if (!dlg || !urlInput) return;
+    urlInput.value = '';
+    if (errEl) {
+      errEl.textContent = '';
+      errEl.hidden = true;
+    }
+    if (submitBtn) submitBtn.disabled = false;
+    if (!dlg.open) dlg.showModal();
+    urlInput.focus();
+  }
+
+  $('btn-import-link')?.addEventListener('click', openImportLinkDialog);
+  $('import-link-close')?.addEventListener('click', () => $('import-link-dlg')?.close());
+  $('btn-import-link-cancel')?.addEventListener('click', () => $('import-link-dlg')?.close());
+  $('import-link-url')?.addEventListener('input', () => {
+    const errEl = $('import-link-err');
+    if (errEl && !errEl.hidden) {
+      errEl.textContent = '';
+      errEl.hidden = true;
+    }
+  });
+  $('import-link-dlg')?.addEventListener('click', (e) => {
+    const dlg = $('import-link-dlg');
+    if (!dlg || e.target !== dlg) return;
+    const rect = dlg.getBoundingClientRect();
+    const inDialog = (
+      e.clientX >= rect.left && e.clientX <= rect.right
+      && e.clientY >= rect.top && e.clientY <= rect.bottom
+    );
+    if (!inDialog) dlg.close();
+  });
+  $('import-link-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const dlg = $('import-link-dlg');
+    const urlInput = $('import-link-url');
+    const errEl = $('import-link-err');
+    const submitBtn = $('btn-import-link-submit');
+    const showErr = (msg) => {
+      if (errEl) {
+        errEl.textContent = msg;
+        errEl.hidden = false;
+      }
+      urlInput?.focus();
+    };
+    const raw = String(urlInput?.value || '').trim();
+    if (!raw) {
+      showErr('Please enter a layout JSON URL.');
+      return;
+    }
+    const valid = Deck.isValidHttpUrl ? Deck.isValidHttpUrl(raw) : /^https?:\/\//i.test(raw);
+    if (!valid) {
+      showErr('Enter a valid http:// or https:// URL.');
+      return;
+    }
+    if (errEl) {
+      errEl.textContent = '';
+      errEl.hidden = true;
+    }
+    if (submitBtn) submitBtn.disabled = true;
     try {
-      await Deck.importFromLink(url);
-    } catch {}
+      await Deck.importFromLink(raw);
+      dlg?.close();
+    } catch (err) {
+      showErr('Import failed: ' + (err?.message || 'Unable to load URL'));
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
   });
   $('file-import').addEventListener('change', async (e) => {
     const file = e.target.files?.[0];

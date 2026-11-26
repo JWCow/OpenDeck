@@ -1,0 +1,77 @@
+{
+  "name": "opendeck",
+  "productName": "OpenDeck",
+  "version": "2.2.2",
+  "description": "OpenDeck desktop app — virtual Stream Deck for OBS Studio (obs-websocket v5)",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "stage": "node scripts/stage-app.mjs",
+    "pack": "node scripts/stage-app.mjs && electron-builder --dir",
+    "build": "node scripts/stage-app.mjs && electron-builder",
+    "build:mac": "node scripts/stage-app.mjs && electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "40.10.2",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.jwcow.opendeck",
+    "productName": "OpenDeck",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "obs-discovery.cjs",
+      "window-state.cjs",
+      "assets/**/*",
+      {
+        "from": ".staged-app",
+        "to": "app"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "category": "public.app-category.utilities",
+      "gatekeeperAssess": false,
+      "hardenedRuntime": false,
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "OpenDeck connects to OBS Studio over your local network or localhost via obs-websocket."
+      }
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "assets/icon.png",
+      "category": "Utility"
+    }
+  }
+}
