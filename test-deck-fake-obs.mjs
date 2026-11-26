@@ -625,3 +625,19 @@ export function isolateBrowserFromLiveObs(browser) {
   };
   return browser;
 }
+
+// v2 header: secondary actions sit behind the ⋯ menu (#btn-more). Open it when the target is not on screen, then click.
+export async function clickMenuItem(page, selector) {
+  if (!(await page.isVisible(selector))) await page.click('#btn-more');
+  await page.click(selector);
+  // Text size and theme keep the menu open for repeat taps; close it so it never covers later clicks.
+  if (await page.isVisible('#more-menu')) await page.keyboard.press('Escape');
+}
+
+export async function closeMoreMenu(page) {
+  if (await page.isVisible('#more-menu')) await page.keyboard.press('Escape');
+}
+
+export async function openMoreMenu(page) {
+  if (await page.isHidden('#more-menu')) await page.click('#btn-more');
+}

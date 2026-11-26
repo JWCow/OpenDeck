@@ -104,6 +104,34 @@
     $('btn-clean-panic')?.addEventListener('click', Deck.runPanic);
   }
 
+  // Overflow menu: secondary toolbar actions live behind the ⋯ button.
+  function setMoreMenu(open) {
+    const menu = $('more-menu');
+    const btn = $('btn-more');
+    if (!menu || !btn) return;
+    menu.hidden = !open;
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    btn.classList.toggle('on', open);
+  }
+  Deck.setMoreMenu = setMoreMenu;
+  $('btn-more')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setMoreMenu($('more-menu').hidden);
+  });
+  $('more-menu')?.addEventListener('click', (e) => {
+    // Menu items run and close the menu; the text-size and theme controls stay open for repeat taps.
+    if (e.target.closest('.menu-item')) setMoreMenu(false);
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.menu-wrap')) setMoreMenu(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('more-menu')?.hidden) {
+      setMoreMenu(false);
+      $('btn-more')?.focus();
+    }
+  });
+
   // Toolbar & WS
   $('btn-conn-toggle').addEventListener('click', () => $('conn-bar').classList.toggle('open'));
   $('btn-ws-connect').addEventListener('click', () => Deck.connectObs({ manual: true }));

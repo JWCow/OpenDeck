@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import zlib from 'node:zlib';
 import { chromium } from 'playwright';
-import { createFakeObs, isolateBrowserFromLiveObs, PASSWORD } from './test-deck-fake-obs.mjs';
+import { clickMenuItem, closeMoreMenu, createFakeObs, isolateBrowserFromLiveObs, openMoreMenu, PASSWORD } from './test-deck-fake-obs.mjs';
 import { createLanHelper } from './scripts/lan-helper.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -269,7 +269,7 @@ try {
   console.log('  ✓ v1, v2.0.0 & v2.2.0 -> OpenDeck v2.2.2 lossless localStorage migration');
 
   // 2. ws://host:port normalization + no-auth connect + dismiss auto-import prompt
-  await page.click('#btn-conn-toggle');
+  await clickMenuItem(page, '#btn-conn-toggle');
   await page.fill('#ws-host', `ws://127.0.0.1:${port}`);
   await page.fill('#ws-port', '9999');
   await page.click('#btn-ws-connect');
@@ -1311,7 +1311,7 @@ try {
 
     // AC 5: Manual Connect skips the wait
     const connsBeforeManual = recObs.state.connections;
-    await pageRec.click('#btn-conn-toggle');
+    await clickMenuItem(pageRec, '#btn-conn-toggle');
     await pageRec.click('#btn-ws-connect');
     await pageRec.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
     assert.equal(recObs.state.connections, connsBeforeManual + 1, 'manual Connect connected immediately without waiting for countdown');
@@ -1491,7 +1491,9 @@ try {
   await pageSnap.waitForSelector('#grid .pad');
 
   // Verify feature is available and #btn-snapshots exists
+  await openMoreMenu(pageSnap);
   assert.equal(await pageSnap.locator('#btn-snapshots').isVisible(), true, '#btn-snapshots is visible when IndexedDB is supported');
+  await closeMoreMenu(pageSnap);
 
   // Ensure password is set in Deck.cfg
   await pageSnap.evaluate(() => {
@@ -1542,7 +1544,7 @@ try {
 
   // Hook 2: Reset Deck creates a Snapshot first
   const countBeforeReset = snapsAfterDel.length;
-  await pageSnap.click('#btn-conn-toggle');
+  await clickMenuItem(pageSnap, '#btn-conn-toggle');
   await pageSnap.waitForSelector('#conn-bar');
   await pageSnap.click('#btn-reset-layout');
   await pageSnap.waitForFunction(async (expected) => (await Deck.listSnapshots()).length >= expected, countBeforeReset + 1);
@@ -1621,7 +1623,7 @@ try {
   assert.equal(snapsPruned.length, 20, 'only the newest 20 snapshots are kept');
 
   // Snapshots dialog UI: opens, lists snapshots with time and Page count, restores via UI
-  await pageSnap.click('#btn-snapshots');
+  await clickMenuItem(pageSnap, '#btn-snapshots');
   await pageSnap.waitForSelector('#snapshots-dlg[open]');
   assert.equal(await pageSnap.locator('#snapshots-list .snapshot-item').count(), 20, 'dialog lists 20 snapshot items');
   const firstItemText = await pageSnap.locator('#snapshots-list .snapshot-item').first().textContent();
@@ -1633,7 +1635,9 @@ try {
   await pageSnap.evaluate(() => {
     Deck.setSnapshotsAvailable(false);
   });
+  await openMoreMenu(pageSnap);
   assert.equal(await pageSnap.locator('#btn-snapshots').isVisible(), false, '#btn-snapshots is hidden when snapshots are unavailable');
+  await closeMoreMenu(pageSnap);
 
   // Snapshot write failure: show footer message "No snapshot was saved" and continue
   await pageSnap.evaluate(() => {
@@ -2012,7 +2016,7 @@ try {
     assert.equal(await pageUndo.evaluate(() => Deck.getActivePage().pads[0].label), '', 'Pad moved again after redo');
 
     // 7. PANIC steps save
-    await pageUndo.click('#btn-panic-cfg');
+    await clickMenuItem(pageUndo, '#btn-panic-cfg');
     await pageUndo.waitForSelector('#panic-dlg[open]');
     await pageUndo.click('#btn-panic-add');
     await pageUndo.click('#btn-panic-save');
@@ -2715,7 +2719,7 @@ try {
 
     // 2. An existing layout is never overwritten (append-vs-replace rule)
     // Apply "Talk + Slides" when deck already has a page
-    await pageStarter.click('#btn-auto-import');
+    await clickMenuItem(pageStarter, '#btn-auto-import');
     await pageStarter.waitForSelector('#import-wiz-dlg[open]');
     await pageStarter.click('#wiz-mode-starter');
     await pageStarter.selectOption('#wiz-starter-layout', 'Talk + Slides');
@@ -2738,7 +2742,7 @@ try {
     assert.ok(talkScenes.includes('Main Cam') && talkScenes.includes('Slides'), 'Talk + Slides scenes filled');
 
     // Apply "Podcast/Interview"
-    await pageStarter.click('#btn-auto-import');
+    await clickMenuItem(pageStarter, '#btn-auto-import');
     await pageStarter.waitForSelector('#import-wiz-dlg[open]');
     await pageStarter.click('#wiz-mode-starter');
     await pageStarter.selectOption('#wiz-starter-layout', 'Podcast/Interview');
@@ -2771,7 +2775,7 @@ try {
     assert.notEqual(await pageOffline.evaluate(() => Deck.obs.status), 'ok', 'Deck is disconnected');
 
     for (const tplName of templates) {
-      await pageOffline.click('#btn-auto-import');
+      await clickMenuItem(pageOffline, '#btn-auto-import');
       await pageOffline.waitForSelector('#import-wiz-dlg[open]');
       await pageOffline.click('#wiz-mode-starter');
       await pageOffline.selectOption('#wiz-starter-layout', tplName);
@@ -3322,7 +3326,7 @@ try {
     assert.equal(featObs.state.mediaStates['Intro Video'], 'OBS_MEDIA_STATE_PAUSED', 'PANIC paused active autoOff media');
 
     // 18e. HTTP / Webhook action (type: 'http', works disconnected, rejects unsafe protocols)
-    await pageFeat.click('#btn-conn-toggle');
+    await clickMenuItem(pageFeat, '#btn-conn-toggle');
     await pageFeat.click('#btn-ws-disconnect');
     await pageFeat.waitForFunction(() => document.getElementById('conn-text').textContent === 'Disconnected');
     const badHttp = await pageFeat.evaluate(() => ({
@@ -3400,7 +3404,7 @@ try {
 
     // 18g. Clean View toggle, restore button, localStorage persistence, and ?clean=1 URL override
     assert.equal(await pageFeat.isVisible('#top-bar'), true, 'top toolbar visible by default');
-    await pageFeat.click('#btn-clean-view');
+    await clickMenuItem(pageFeat, '#btn-clean-view');
     assert.equal(await pageFeat.evaluate(() => document.documentElement.dataset.clean), '1', 'Clean View sets data-clean=1');
     assert.equal(await pageFeat.evaluate(() => localStorage.getItem('opendeck_clean_view')), '1', 'Clean View persisted in localStorage');
     assert.equal(await pageFeat.isVisible('#top-bar'), false, 'top toolbar hidden in Clean View');
