@@ -482,7 +482,7 @@
     el._padSig = sig;
 
     el.className = 'pad'
-      + (p.type === 'none' ? ' empty' : '')
+      + (p.type === 'none' ? ' empty' : ` is-${p.type}`)
       + (p.type === 'stats' ? ' stats-pad' : '')
       + (Deck.editMode ? ' edit-mode' : '')
       + (isSelected ? ' selected' : '')
@@ -492,6 +492,7 @@
       + (isHeld ? ' held' : '')
       + (isHoldPad ? ' hold-pad' : '')
       + (isFullFace ? ' full-face' : '')
+      + (!isFullFace && p.color && p.type !== 'none' ? ' has-color' : '')
       + (p.hideLabel ? ' hide-label' : '')
       + (isDragOver ? ' drag-over' : '')
       + (isDraggingEl ? ' dragging' : '');
@@ -504,7 +505,7 @@
       el.style.backgroundImage = '';
       el.style.backgroundSize = '';
       el.style.backgroundPosition = '';
-      el.style.background = p.color && p.type !== 'none' ? p.color : '';
+      el.style.backgroundColor = p.color && p.type !== 'none' ? p.color : '';
     }
     el.draggable = Deck.editMode && p.type !== 'none';
     const tipParts = [lbl || `Pad ${i + 1}`];

@@ -71,3 +71,71 @@ jobs:
             dist/obs-virtual-deck.zip
             dist/obs-virtual-deck-latest.zip
             dist/obs-virtual-deck-v*.zip
+
+  build-desktop:
+    needs: build-and-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: macos-latest
+            platform: macos
+          - os: ubuntu-24.04
+            platform: linux
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - name: Install Electron dependencies
+        run: npm --prefix electron ci
+
+      - name: Build desktop installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm --prefix electron run build
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opendeck-desktop-${{ matrix.platform }}
+          path: |
+            electron/dist/*.exe
+            electron/dist/*.dmg
+            electron/dist/*.zip
+            electron/dist/*.AppImage
+          if-no-files-found: error
+
+  publish-desktop-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build-and-release
+      - build-desktop
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: opendeck-desktop-*
+          path: desktop-artifacts
+          merge-multiple: true
+
+      - name: Attach desktop binaries to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop-artifacts/*.exe
+            desktop-artifacts/*.dmg
+            desktop-artifacts/*.zip
+            desktop-artifacts/*.AppImage

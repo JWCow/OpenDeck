@@ -6,7 +6,7 @@ import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
-import { createFakeObs, isolateBrowserFromLiveObs, PASSWORD } from './test-deck-fake-obs.mjs';
+import { clickMenuItem, createFakeObs, isolateBrowserFromLiveObs, openMoreMenu, PASSWORD } from './test-deck-fake-obs.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DECK_URL = pathToFileURL(join(__dirname, 'deck.html')).href;
@@ -39,32 +39,32 @@ try {
 
   // Font Scaler: 5 levels (sm, md, lg, xl, xxl) with default xl (+4pt) and persistence
   assert.equal(await page.evaluate(() => document.documentElement.dataset.fontSize), 'xl', 'default font scale is xl (+4pt)');
-  await page.click('#btn-font-dec');
+  await clickMenuItem(page, '#btn-font-dec');
   assert.equal(await page.evaluate(() => document.documentElement.dataset.fontSize), 'lg', 'decremented font scale to lg');
-  await page.click('#btn-font-dec');
+  await clickMenuItem(page, '#btn-font-dec');
   assert.equal(await page.evaluate(() => document.documentElement.dataset.fontSize), 'md', 'decremented font scale to md');
-  await page.click('#btn-font-inc');
+  await clickMenuItem(page, '#btn-font-inc');
   assert.equal(await page.evaluate(() => document.documentElement.dataset.fontSize), 'lg', 'incremented font scale to lg');
-  await page.click('#btn-font-inc');
+  await clickMenuItem(page, '#btn-font-inc');
   assert.equal(await page.evaluate(() => document.documentElement.dataset.fontSize), 'xl', 'incremented font scale back to xl');
   assert.equal(await page.evaluate(() => localStorage.getItem('opendeck_font_scale')), 'xl', 'font scale saved in localStorage');
 
   // Theme Toggle: Dark <-> Light theme, colors, icon toggle & persistence
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark', 'default theme is dark');
   assert.equal((await page.textContent('#btn-theme')).trim(), '☀️', 'dark theme displays sun icon');
-  await page.click('#btn-theme');
+  await clickMenuItem(page, '#btn-theme');
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'light', 'toggled to light theme');
   assert.equal((await page.textContent('#btn-theme')).trim(), '🌙', 'light theme displays moon icon');
   assert.equal(await page.evaluate(() => localStorage.getItem('opendeck_theme')), 'light', 'theme saved to localStorage');
   const lightBg = await page.evaluate(() => window.getComputedStyle(document.body).backgroundColor);
   assert.equal(lightBg, 'rgb(248, 250, 252)', 'body background updated to light studio slate #f8fafc');
-  await page.click('#btn-theme');
+  await clickMenuItem(page, '#btn-theme');
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark', 'toggled back to dark theme');
   assert.equal((await page.textContent('#btn-theme')).trim(), '☀️', 'restored sun icon');
   console.log('  ✓ OpenDeck branding + font scaler (A-/A+ 5-level cycling) + dark/light studio theme');
 
   // 2. Wrong password -> 4009 Auth Failed (no tight reconnect loop)
-  await page.click('#btn-conn-toggle');
+  await clickMenuItem(page, '#btn-conn-toggle');
   await page.fill('#ws-host', '127.0.0.1');
   await page.fill('#ws-port', String(port));
   await page.fill('#ws-pass', 'wrong-pass');
@@ -289,7 +289,7 @@ try {
   console.log('  ✓ PANIC aborted timed macro & disabled active filter');
 
   // 9. Configure explicit PANIC steps via Panic modal
-  await page.click('#btn-panic-cfg');
+  await clickMenuItem(page, '#btn-panic-cfg');
   await page.click('#btn-panic-pull');
   await page.click('#btn-panic-save');
   await pad(2).click(); // enable Blur
@@ -907,7 +907,7 @@ try {
   assert.equal((await pad(0).textContent()).includes('Go Slides'), true, 'localStorage persisted v2.1.0 pages & pads');
   assert.equal(await page.locator('#deck-tabs .page-tab').count(), 2, 'localStorage persisted multiple pages');
 
-  const [download] = await Promise.all([page.waitForEvent('download'), page.click('#btn-export')]);
+  const [download] = await Promise.all([page.waitForEvent('download'), clickMenuItem(page, '#btn-export')]);
   const exportPath = join(tmpDir, 'deck-export.json');
   await download.saveAs(exportPath);
   const exported = JSON.parse(fs.readFileSync(exportPath, 'utf8'));
@@ -928,7 +928,7 @@ try {
   assert.equal((await pad(0).textContent()).includes('Go Slides'), true, 'invalid import preserves existing deck');
 
   if (!(await page.locator('#btn-reset-layout').isVisible())) {
-    await page.click('#btn-conn-toggle');
+    await clickMenuItem(page, '#btn-conn-toggle');
   }
   await page.click('#btn-reset-layout');
   await page.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0]?.textContent?.includes('Go Slides'));
@@ -937,7 +937,7 @@ try {
 
   // Test Auto-Import Wizard selective Page generation (uncheck Filters) + verify read-only against OBS
   const callsBeforeWiz = state.calls.length;
-  await page.click('#btn-auto-import');
+  await clickMenuItem(page, '#btn-auto-import');
   await page.waitForSelector('#import-wiz-dlg[open]');
   await page.uncheck('#wiz-filters');
   await page.click('#btn-wiz-apply');
@@ -1052,7 +1052,7 @@ try {
   await page.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
   assert.equal(await page.textContent('#scene-info'), 'Program: Slides | Preview: Slides', 'reconnected to password-protected OBS after import and reload');
   assert.equal(await page.evaluate(() => Deck.cfg.ws.password), PASSWORD, 'password preserved in Deck.cfg');
-  await page.click('#btn-conn-toggle');
+  await clickMenuItem(page, '#btn-conn-toggle');
   assert.equal(await page.inputValue('#ws-pass'), PASSWORD, 'password preserved in ws-pass input');
   console.log('  ✓ v2.1.0 localStorage + Export/Import + Auto-Import Wizard + v1 & v2.0.0 JSON migration');
 
