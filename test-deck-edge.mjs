@@ -20,6 +20,22 @@ const DECK_URL = pathToFileURL(join(__dirname, 'deck.html')).href;
 const PKG = JSON.parse(fs.readFileSync(join(__dirname, 'package.json'), 'utf8'));
 const ONLY_SECTION = process.argv.find((a) => a.startsWith('--section='))?.split('=')[1] || '';
 
+async function waitConnectedAndDismissAutoImport(page) {
+  await page.waitForFunction(() => (
+    document.getElementById('conn-text')?.textContent === 'Connected'
+    && !Deck.obs.activeSync
+    && (
+      document.getElementById('import-wiz-dlg')?.open
+      || !Deck.isStarterDeck()
+      || (!Deck.obs.scenes.length && !Deck.obs.inputs.length)
+    )
+  ));
+  if (await page.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
+    await page.click('#btn-wiz-cancel');
+    await page.waitForFunction(() => !document.getElementById('import-wiz-dlg')?.open);
+  }
+}
+
 function parseZipEntries(buf) {
   // Locate End of Central Directory (PK\x05\x06)
   let eocdOffset = -1;
@@ -273,13 +289,9 @@ try {
   await page.fill('#ws-host', `ws://127.0.0.1:${port}`);
   await page.fill('#ws-port', '9999');
   await page.click('#btn-ws-connect');
-  await page.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
+  await waitConnectedAndDismissAutoImport(page);
   assert.equal(await page.inputValue('#ws-host'), '127.0.0.1');
   assert.equal(await page.inputValue('#ws-port'), String(port));
-  await page.waitForTimeout(80);
-  if (await page.evaluate(() => document.getElementById('import-wiz-dlg').open)) {
-    await page.click('#btn-wiz-cancel');
-  }
   console.log('  ✓ ws://host:port normalization');
 
   const pad = (i) => page.locator('#grid .pad').nth(i);
@@ -751,10 +763,7 @@ try {
   pageRenames.on('pageerror', (e) => pageErrors.push(e.message));
   try {
     await pageRenames.goto(`${DECK_URL}?port=${port}`);
-    await pageRenames.waitForFunction(() => document.getElementById('conn-text')?.textContent === 'Connected');
-    if (await pageRenames.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
-      await pageRenames.click('#btn-wiz-cancel');
-    }
+    await waitConnectedAndDismissAutoImport(pageRenames);
 
     // 16a. Scene renames update Scene, Source, Transform, Studio preview, Macro and PANIC steps + label preservation
     await pageRenames.evaluate(() => {
@@ -1102,11 +1111,7 @@ try {
     const pageOut = await ctxOut.newPage();
     pageOut.on('pageerror', (e) => pageErrors.push(e.message));
     await pageOut.goto(`${DECK_URL}?port=${outPort}`);
-    await pageOut.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
-    await pageOut.waitForTimeout(100);
-    if (await pageOut.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
-      await pageOut.click('#btn-wiz-cancel');
-    }
+    await waitConnectedAndDismissAutoImport(pageOut);
 
     // Configure pads for testing:
     // Slot 0: Stream toggle
@@ -1292,10 +1297,7 @@ try {
     pageRec.on('pageerror', (e) => pageErrors.push(e.message));
 
     await pageRec.goto(`${DECK_URL}?port=${recPort}`);
-    await pageRec.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
-    if (await pageRec.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
-      await pageRec.click('#btn-wiz-cancel');
-    }
+    await waitConnectedAndDismissAutoImport(pageRec);
 
     // AC 1: The status shows the close reason and a live countdown
     recObs.closeAll(1000, 'Server restarting');
@@ -1385,11 +1387,7 @@ try {
     page12.on('pageerror', (e) => pageErrors.push(e.message));
     await page12.goto(`${DECK_URL}?port=${port12}`);
     await page12.waitForSelector('#grid .pad');
-    await page12.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
-    await page12.waitForTimeout(100);
-    if (await page12.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
-      await page12.click('#btn-wiz-cancel');
-    }
+    await waitConnectedAndDismissAutoImport(page12);
 
     // AC 1: A media pause event from OBS turns the Media Pad off
     await page12.evaluate(() => {
@@ -1661,10 +1659,7 @@ try {
     const pageBurst = await ctxBurst.newPage();
     pageBurst.on('pageerror', (e) => pageErrors.push(e.message));
     await pageBurst.goto(`${DECK_URL}?port=${burstPort}`);
-    await pageBurst.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
-    if (await pageBurst.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
-      await pageBurst.click('#btn-wiz-cancel');
-    }
+    await waitConnectedAndDismissAutoImport(pageBurst);
 
     const TEST_IMG_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
@@ -1809,11 +1804,7 @@ try {
     pageUndo.on('pageerror', (e) => pageErrors.push(e.message));
     pageUndo.on('dialog', (dlg) => dlg.accept());
     await pageUndo.goto(`${DECK_URL}?port=${undoPort}`);
-    await pageUndo.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
-    await pageUndo.waitForTimeout(100);
-    if (await pageUndo.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
-      await pageUndo.click('#btn-wiz-cancel');
-    }
+    await waitConnectedAndDismissAutoImport(pageUndo);
 
     // Enter Edit Mode
     await pageUndo.click('#btn-edit');
@@ -2168,10 +2159,7 @@ try {
       const ctxHold = await browser.newContext();
       const pageHold = await ctxHold.newPage();
       await pageHold.goto(`${DECK_URL}?port=${holdPort}`);
-      await pageHold.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
-      if (await pageHold.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
-        await pageHold.click('#btn-wiz-cancel');
-      }
+      await waitConnectedAndDismissAutoImport(pageHold);
 
       // Configure pads via Deck API
       await pageHold.evaluate(() => {
@@ -2442,10 +2430,7 @@ try {
     pageReadout.on('pageerror', (e) => pageErrors.push(e.message));
     pageReadout.on('dialog', (dlg) => dlg.accept());
     await pageReadout.goto(`${DECK_URL}?port=${readoutPort}`);
-    await pageReadout.waitForFunction(() => document.getElementById('conn-text')?.textContent === 'Connected');
-    if (await pageReadout.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
-      await pageReadout.click('#btn-wiz-cancel');
-    }
+    await waitConnectedAndDismissAutoImport(pageReadout);
 
     // Set up Pages: Page 1 with Readout Pads, Page 2 with Scenes only
     await pageReadout.evaluate(() => {
@@ -2822,11 +2807,7 @@ try {
     pageScene.on('pageerror', (e) => pageErrors.push(e.message));
     pageScene.on('dialog', (dlg) => dlg.accept());
     await pageScene.goto(`${DECK_URL}?port=${scenePort}`);
-    await pageScene.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
-    await pageScene.waitForTimeout(100);
-    if (await pageScene.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
-      await pageScene.click('#btn-wiz-cancel');
-    }
+    await waitConnectedAndDismissAutoImport(pageScene);
 
     // 1. Link active page ("Main") to "Main Cam" via Page Dialog
     await pageScene.click('#btn-deck-cfg');
@@ -3018,11 +2999,7 @@ try {
     // Connect with password entered once on the device
     await pagePhone.fill('#ws-pass', PASSWORD);
     await pagePhone.click('#btn-ws-connect');
-    await pagePhone.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
-    await pagePhone.waitForSelector('#import-wiz-dlg[open]', { timeout: 3000 }).catch(() => {});
-    if (await pagePhone.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
-      await pagePhone.click('#btn-wiz-cancel');
-    }
+    await waitConnectedAndDismissAutoImport(pagePhone);
 
     // AC 3: Pads are at least 44px and nothing overflows; 360x420 dock is unchanged
     const phoneLayout = await pagePhone.evaluate(() => {
@@ -3163,11 +3140,7 @@ try {
     pageFeat.on('dialog', (d) => d.accept());
 
     await pageFeat.goto(`${DECK_URL}?port=${featPort}`);
-    await pageFeat.waitForFunction(() => document.getElementById('conn-text').textContent === 'Connected');
-    await pageFeat.waitForTimeout(80);
-    if (await pageFeat.evaluate(() => document.getElementById('import-wiz-dlg')?.open)) {
-      await pageFeat.click('#btn-wiz-cancel');
-    }
+    await waitConnectedAndDismissAutoImport(pageFeat);
 
     // 18a. 8x12 Grid via Page & Grid Settings dialog + narrow 360x420 overflow check
     await pageFeat.click('#btn-deck-cfg');
