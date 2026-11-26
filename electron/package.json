@@ -1,7 +1,7 @@
 {
   "name": "opendeck",
   "productName": "OpenDeck",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "description": "OpenDeck desktop app — virtual Stream Deck for OBS Studio (obs-websocket v5)",
   "private": true,
   "main": "main.cjs",

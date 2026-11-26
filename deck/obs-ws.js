@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.2.2';
+  const VERSION = '2.2.3';
   const STORAGE_KEY = 'opendeck_config';
   const LEGACY_STORAGE_KEYS = ['obs_virtual_deck_v2', 'obs_deck_config_v2', 'obs_virtual_deck_v1'];
   let initialSaveFailed = false;

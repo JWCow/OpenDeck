@@ -282,7 +282,7 @@ try {
   });
   await page.reload();
   await page.waitForSelector('#grid .pad');
-  console.log('  ✓ v1, v2.0.0 & v2.2.0 -> OpenDeck v2.2.2 lossless localStorage migration');
+  console.log('  ✓ v1, v2.0.0 & v2.2.0 -> OpenDeck v2.2.3 lossless localStorage migration');
 
   // 2. ws://host:port normalization + no-auth connect + dismiss auto-import prompt
   await clickMenuItem(page, '#btn-conn-toggle');
@@ -604,8 +604,8 @@ try {
   assert.deepEqual(pageErrors, [], `unexpected page errors: ${pageErrors.join('; ')}`);
   await page.close();
 
-  // 13. Release build check: npm run build:release produces clean valid ZIPs for OpenDeck v2.2.2
-  assert.equal(PKG.version, '2.2.2', 'package.json version is 2.2.2');
+  // 13. Release build check: npm run build:release produces clean valid ZIPs for OpenDeck v2.2.3
+  assert.equal(PKG.version, '2.2.3', 'package.json version is 2.2.3');
   execFileSync(process.execPath, [join(__dirname, 'scripts', 'build-release.mjs')], { cwd: __dirname, stdio: 'pipe' });
   const zipPath = join(__dirname, 'dist', 'opendeck.zip');
   const latestZipPath = join(__dirname, 'dist', 'opendeck-latest.zip');
