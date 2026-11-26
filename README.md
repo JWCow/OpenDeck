@@ -91,6 +91,16 @@ Drop `deck.html` into an OBS Custom Browser Dock — no plugins, no server, no b
 
 <br>
 
+## 🖥️ Desktop App (Electron)
+
+Prefer a standalone window instead of an OBS dock? Download the desktop installer (Windows `.exe`, macOS Apple Silicon `arm64` & Intel `x64` `.dmg`/`.zip`, Linux `.AppImage`) from [Releases](https://github.com/JWCow/obs-virtual-deck/releases) or run it from source.
+
+- **Stable storage & tray controls:** Serves the deck from a fixed `app://opendeck/` origin (preserving layouts across updates and Linux AppImage mounts) with window state persistence, Always on Top (`Ctrl/Cmd+Shift+T`), and system tray controls.
+- **Auto port discovery (ADR-0002):** Reads OBS `obs-websocket/config.json` read-only for `server_port` on launch and never reads or persists passwords.
+- **macOS first launch:** Builds are currently unsigned — Right-click `OpenDeck.app` → **Open** (or run `xattr -cr /Applications/OpenDeck.app`), and allow the **Local Network** prompt on macOS Sequoia so OpenDeck can connect to OBS (`ws://127.0.0.1` or LAN). Building macOS `.dmg`/`.zip` targets locally requires a Mac (CI builds them on `macos-latest`).
+
+<br>
+
 ## 📱 Phone Deck
 
 Control OBS from a phone or tablet on the same Wi-Fi. Needs [Node.js](https://nodejs.org) on the OBS computer.
@@ -144,4 +154,8 @@ npm install && npx playwright install chromium
 npm run check          # Static syntax, version & PAD_TYPES parity checks
 npm test               # Playwright E2E suites (--section=18 for feature subset)
 npm run build:release  # Build release ZIPs in dist/
+npm --prefix electron install  # Install isolated Electron desktop dependencies
+npm run desktop                # Launch the Electron desktop app
+npm run build:desktop          # Build desktop installers in electron/dist/
+npm run build:desktop:mac      # Build macOS arm64 + x64 .dmg/.zip (requires macOS)
 ```

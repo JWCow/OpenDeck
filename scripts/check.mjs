@@ -14,6 +14,10 @@ function listFiles(dir, ext) {
     .sort();
 }
 
+function listOptionalFiles(dir, ext) {
+  return fs.existsSync(dir) ? listFiles(dir, ext) : [];
+}
+
 function fail(msg) {
   console.error(`CHECK FAILED: ${msg}`);
   process.exit(1);
@@ -23,6 +27,8 @@ function fail(msg) {
 const jsFiles = [
   ...listFiles(path.join(ROOT, 'deck'), '.js'),
   ...listFiles(path.join(ROOT, 'scripts'), '.mjs'),
+  ...listOptionalFiles(path.join(ROOT, 'electron'), '.cjs'),
+  ...listOptionalFiles(path.join(ROOT, 'electron', 'scripts'), '.mjs'),
   ...fs
     .readdirSync(ROOT)
     .filter((n) => n.startsWith('test-') && n.endsWith('.mjs'))
@@ -47,6 +53,13 @@ if (!verMatch || verMatch[1] !== pkg.version) {
 const badgeMatch = deckHtml.match(/id="version-badge"[^>]*>v([^<]+)</);
 if (!badgeMatch || badgeMatch[1] !== pkg.version) {
   fail(`#version-badge mismatch: package.json=${pkg.version} vs deck.html=${badgeMatch?.[1]}`);
+}
+const electronPkgPath = path.join(ROOT, 'electron', 'package.json');
+if (fs.existsSync(electronPkgPath)) {
+  const electronPkg = JSON.parse(fs.readFileSync(electronPkgPath, 'utf8'));
+  if (electronPkg.version !== pkg.version) {
+    fail(`version mismatch: package.json=${pkg.version} vs electron/package.json=${electronPkg.version}`);
+  }
 }
 
 // 3. file:// compatibility checks
@@ -109,4 +122,4 @@ if (fs.existsSync(psScript)) {
   }
 }
 
-console.log(`CHECK OK: ${jsFiles.length} JS/MJS files, ${padTypes.length} PAD_TYPES in sync, version ${pkg.version}, file:// safe.`);
+console.log(`CHECK OK: ${jsFiles.length} JS/MJS/CJS files, ${padTypes.length} PAD_TYPES in sync, version ${pkg.version}, file:// safe.`);

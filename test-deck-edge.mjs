@@ -3136,6 +3136,15 @@ try {
       res.end();
       return;
     }
+    if (req.method === 'GET' && req.url === '/test-link-layout.json') {
+      res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        version: 2,
+        ws: { host: '9.9.9.9', port: 9999, password: 'SHOULD_BE_STRIPPED' },
+        pages: [{ id: 'link-page-1', name: 'Link Imported', cols: 4, rows: 2, pads: [{ type: 'none' }] }],
+      }));
+      return;
+    }
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
@@ -3421,6 +3430,33 @@ try {
     assert.equal(await pageCleanUrl.isVisible('#top-bar'), false, '?clean=1 hides top toolbar on boot');
     assert.equal(await pageCleanUrl.isVisible('#deck-bar'), true, 'page tabs remain visible in Clean View');
     await pageCleanUrl.close();
+
+    // 18h. Import from Link dialog (#btn-import-link / #import-link-dlg): cancel, Escape, validation & Enter submit
+    const pagesBeforeLink = await pageFeat.evaluate(() => Deck.cfg.pages.map((p) => p.name));
+    await clickMenuItem(pageFeat, '#btn-import-link');
+    await pageFeat.waitForSelector('#import-link-dlg[open]');
+    assert.equal(await pageFeat.evaluate(() => document.activeElement?.id), 'import-link-url', 'URL input focused on open');
+    await pageFeat.click('#btn-import-link-cancel');
+    await pageFeat.waitForFunction(() => !document.getElementById('import-link-dlg').open);
+    assert.deepEqual(await pageFeat.evaluate(() => Deck.cfg.pages.map((p) => p.name)), pagesBeforeLink, 'Cancel preserves pages');
+
+    await clickMenuItem(pageFeat, '#btn-import-link');
+    await pageFeat.waitForSelector('#import-link-dlg[open]');
+    await pageFeat.keyboard.press('Escape');
+    await pageFeat.waitForFunction(() => !document.getElementById('import-link-dlg').open);
+
+    await clickMenuItem(pageFeat, '#btn-import-link');
+    await pageFeat.waitForSelector('#import-link-dlg[open]');
+    await pageFeat.fill('#import-link-url', 'javascript:alert(1)');
+    await pageFeat.click('#btn-import-link-submit');
+    assert.equal(await pageFeat.evaluate(() => document.getElementById('import-link-dlg').open), true, 'invalid URL keeps dialog open');
+    assert.equal(await pageFeat.isVisible('#import-link-err'), true, 'invalid URL shows error message');
+
+    await pageFeat.fill('#import-link-url', `  http://127.0.0.1:${hookPort}/test-link-layout.json  `);
+    await pageFeat.press('#import-link-url', 'Enter');
+    await pageFeat.waitForFunction(() => !document.getElementById('import-link-dlg').open && Deck.getActivePage().name === 'Link Imported');
+    const linkImportedPass = await pageFeat.evaluate(() => Deck.cfg.ws.password || '');
+    assert.notEqual(linkImportedPass, 'SHOULD_BE_STRIPPED', 'import-link dialog strips password from imported JSON');
 
     assert.deepEqual(pageErrors, [], `unexpected page errors: ${pageErrors.join('; ')}`);
     await ctxFeat.close();

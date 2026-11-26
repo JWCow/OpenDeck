@@ -300,5 +300,22 @@
     </div>
   </div>
 </dialog>
+
+<dialog id="import-link-dlg">
+  <div class="dlg-h"><span>Import from Link</span><button id="import-link-close" type="button" class="btn sm" aria-label="Close">✕</button></div>
+  <form id="import-link-form" class="frm" method="dialog" novalidate>
+    <div class="row">
+      <label for="import-link-url">Layout JSON URL</label>
+      <input id="import-link-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://192.168.1.5:8080/layout.json">
+    </div>
+    <div class="hint">Enter an <code>http://</code> or <code>https://</code> link to a layout JSON file.</div>
+    <div id="import-link-err" class="hint" style="color:var(--bad)" role="alert" hidden></div>
+    <div class="dlg-f">
+      <button type="button" id="btn-import-link-cancel" class="btn sm">Cancel</button>
+      <div class="spacer"></div>
+      <button type="submit" id="btn-import-link-submit" class="btn sm on">Import</button>
+    </div>
+  </form>
+</dialog>
 </body>
 </html>
