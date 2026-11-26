@@ -21,7 +21,7 @@ const pkg = require('./package.json');
 const { discoverObsPort } = require('./obs-discovery.cjs');
 const { MIN_WIDTH, MIN_HEIGHT, loadWindowState, trackWindowState } = require('./window-state.cjs');
 
-const RELEASES_URL = 'https://github.com/JWCow/obs-virtual-deck/releases';
+const RELEASES_URL = 'https://github.com/JWCow/OpenDeck/releases';
 const APP_ORIGIN = 'app://opendeck';
 const APP_ROOT = app.isPackaged ? path.join(__dirname, 'app') : path.resolve(__dirname, '..');
 

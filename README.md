@@ -1,17 +1,17 @@
-# 🎛️ OpenDeck
+# <img src="electron/assets/icon.png" width="32" height="32" align="absmiddle" alt="OpenDeck" /> OpenDeck
 
-[![Latest Release](https://img.shields.io/github/v/release/JWCow/obs-virtual-deck?label=Release&color=2563eb)](https://github.com/JWCow/obs-virtual-deck/releases/latest)
-[![Download ZIP](https://img.shields.io/badge/Download-opendeck.zip-16a34a?logo=github)](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck.zip)
+[![Latest Release](https://img.shields.io/github/v/release/JWCow/OpenDeck?label=Release&color=2563eb)](https://github.com/JWCow/OpenDeck/releases/latest)
+[![Download ZIP](https://img.shields.io/badge/Download-opendeck.zip-16a34a?logo=github)](https://github.com/JWCow/OpenDeck/releases/latest/download/opendeck.zip)
 [![Platforms](https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux%20%C2%B7%20Phone-OBS%2028%2B-334155)](#quick-start-obs-custom-browser-dock)
 
 **Virtual Stream Deck for OBS Studio (`obs-websocket` v5) — zero-backend UI v2.**  
 Run it three ways with the exact same Deck, Pages, and Pads:
 
 - 🖥️ **[Desktop App](#%EF%B8%8F-desktop-app-electron)** — Standalone Electron app for **Windows** (`.exe`), **macOS** (`arm64`/`x64` `.dmg`/`.zip`), and **Linux** (`.AppImage`) with tray controls & Always on Top
-- 🔌 **[OBS Browser Dock](#quick-start-obs-custom-browser-dock)** — Drop `deck.html` from [`opendeck.zip`](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck.zip) into an OBS Custom Browser Dock (no plugins, no server)
+- 🔌 **[OBS Browser Dock](#quick-start-obs-custom-browser-dock)** — Drop `deck.html` from [`opendeck.zip`](https://github.com/JWCow/OpenDeck/releases/latest/download/opendeck.zip) into an OBS Custom Browser Dock (no plugins, no server)
 - 📱 **[Phone / Tablet Deck](#-phone-deck)** — Control OBS from any phone on Wi-Fi via `Phone Helper` + QR code
 
-**[⬇️ All Desktop & Dock Downloads](https://github.com/JWCow/obs-virtual-deck/releases)** · **[⬇️ Latest opendeck.zip](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck.zip)**
+**[⬇️ All Desktop & Dock Downloads](https://github.com/JWCow/OpenDeck/releases)** · **[⬇️ Latest opendeck.zip](https://github.com/JWCow/OpenDeck/releases/latest/download/opendeck.zip)**
 
 <br>
 
@@ -83,7 +83,7 @@ Run it three ways with the exact same Deck, Pages, and Pads:
 
 ## 🖥️ Desktop App (Electron)
 
-Prefer a standalone window instead of an OBS dock? Download the desktop installer (**Windows** `.exe`, **macOS** Apple Silicon `arm64` & Intel `x64` `.dmg`/`.zip`, **Linux** `.AppImage`) from [Releases](https://github.com/JWCow/obs-virtual-deck/releases) or run it from source.
+Prefer a standalone window instead of an OBS dock? Download the desktop installer (**Windows** `.exe`, **macOS** Apple Silicon `arm64` & Intel `x64` `.dmg`/`.zip`, **Linux** `.AppImage`) from [Releases](https://github.com/JWCow/OpenDeck/releases) or run it from source.
 
 ![OpenDeck Standalone Desktop App](docs/screenshots/opendeck-desktop.png)
 
@@ -95,7 +95,7 @@ Prefer a standalone window instead of an OBS dock? Download the desktop installe
 
 ## 🚀 Quick Start (OBS Custom Browser Dock)
 
-**1. 📦 Install** — Download & extract [`opendeck.zip`](https://github.com/JWCow/obs-virtual-deck/releases/latest/download/opendeck.zip) (it unpacks to an `obs-virtual-deck` folder), then run the setup helper inside. It copies OpenDeck to `Documents/obs-virtual-deck` and **copies the dock URL to your clipboard**:
+**1. 📦 Install** — Download & extract [`opendeck.zip`](https://github.com/JWCow/OpenDeck/releases/latest/download/opendeck.zip) (it unpacks to an `obs-virtual-deck` folder), then run the setup helper inside. It copies OpenDeck to `Documents/obs-virtual-deck` and **copies the dock URL to your clipboard**:
 - 🪟 **Windows:** `Install-Windows.bat` *(SmartScreen: More info → Run anyway)*
 - 🍎 **macOS:** `Install-Mac.command` *(Right-click → Open, or run `bash ~/Downloads/obs-virtual-deck/Install-Mac.command` if extracted in Downloads)*
 
