@@ -2185,14 +2185,14 @@ try {
       // 1. Mute pad (cough button: unmuted -> hold mutes -> release unmutes)
       holdObs.state.calls.length = 0;
       await pad0.dispatchEvent('pointerdown', { button: 0 });
-      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === true), 'press sent mute on request');
       assert.equal(await pad0.evaluate((el) => el.classList.contains('held')), true, 'pad 0 has held class on press');
       assert.equal(await pad0.evaluate((el) => el.classList.contains('active')), true, 'pad 0 has active tally on press');
 
       holdObs.state.calls.length = 0;
       await pad0.dispatchEvent('pointerup', { button: 0 });
-      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'release sent mute restore request');
       assert.equal(await pad0.evaluate((el) => el.classList.contains('held')), false, 'pad 0 cleared held class on release');
       assert.equal(await pad0.evaluate((el) => el.classList.contains('active')), false, 'pad 0 cleared active tally on release');
@@ -2200,66 +2200,66 @@ try {
       // 2. Mute push-to-talk (muted -> hold unmutes -> release remutes)
       holdObs.state.calls.length = 0;
       await pad1.dispatchEvent('pointerdown', { button: 0 });
-      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[1].classList.contains('held'));
+      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[1].classList.contains('held') && !Deck.getPadRuntime(1).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'PTT press sent unmute request');
 
       holdObs.state.calls.length = 0;
       await pad1.dispatchEvent('pointerup', { button: 0 });
-      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[1].classList.contains('held'));
+      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[1].classList.contains('held') && !Deck.getPadRuntime(1).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === true), 'PTT release sent remute restore request');
 
       // 3. Source pad (hidden -> hold shows -> release hides)
       holdObs.state.calls.length = 0;
       await pad2.dispatchEvent('pointerdown', { button: 0 });
-      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[2].classList.contains('held'));
+      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[2].classList.contains('held') && !Deck.getPadRuntime(2).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetSceneItemEnabled' && c.requestData.sceneItemEnabled === true), 'source press sent show request');
 
       holdObs.state.calls.length = 0;
       await pad2.dispatchEvent('pointerup', { button: 0 });
-      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[2].classList.contains('held'));
+      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[2].classList.contains('held') && !Deck.getPadRuntime(2).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetSceneItemEnabled' && c.requestData.sceneItemEnabled === false), 'source release sent hide restore request');
 
       // 4. Filter pad (disabled -> hold enables -> release disables)
       holdObs.state.calls.length = 0;
       await pad3.dispatchEvent('pointerdown', { button: 0 });
-      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[3].classList.contains('held'));
+      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[3].classList.contains('held') && !Deck.getPadRuntime(3).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetSourceFilterEnabled' && c.requestData.filterEnabled === true), 'filter press sent enable request');
 
       holdObs.state.calls.length = 0;
       await pad3.dispatchEvent('pointerup', { button: 0 });
-      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[3].classList.contains('held'));
+      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[3].classList.contains('held') && !Deck.getPadRuntime(3).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetSourceFilterEnabled' && c.requestData.filterEnabled === false), 'filter release sent disable restore request');
 
       // 5. Release trigger: pointerleave & pointercancel
       holdObs.state.calls.length = 0;
       await pad0.dispatchEvent('pointerdown', { button: 0 });
-      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       holdObs.state.calls.length = 0;
       await pad0.dispatchEvent('pointerleave');
-      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'pointerleave released and restored');
 
       await pad0.dispatchEvent('pointerdown', { button: 0 });
-      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       holdObs.state.calls.length = 0;
       await pad0.dispatchEvent('pointercancel');
-      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'pointercancel released and restored');
 
       // 6. Release trigger: window blur
       await pad0.dispatchEvent('pointerdown', { button: 0 });
-      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       holdObs.state.calls.length = 0;
       await pageHold.evaluate(() => window.dispatchEvent(new Event('blur')));
-      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'blur released and restored');
 
       // 7. Release trigger: PANIC
       await pad0.dispatchEvent('pointerdown', { button: 0 });
-      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       holdObs.state.calls.length = 0;
       await pageHold.evaluate(() => Deck.runPanic());
-      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'PANIC released and restored');
 
       // 8. Release trigger: page switch
@@ -2267,7 +2267,7 @@ try {
         Deck.addPage({ name: 'Page 2', cols: 3, rows: 2, switchTo: false });
       });
       await pad0.dispatchEvent('pointerdown', { button: 0 });
-      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       holdObs.state.calls.length = 0;
       await pageHold.evaluate(() => Deck.setActivePage(Deck.cfg.pages[1].id));
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'page switch released and restored');
@@ -2314,14 +2314,14 @@ try {
 
       // Release triggers: resize, move, clear
       await pad0.dispatchEvent('pointerdown', { button: 0 });
-      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       holdObs.state.calls.length = 0;
       await pageHold.evaluate(() => Deck.resizePage(Deck.cfg.activePageId, 4, 3));
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'grid resize released and restored');
       assert.equal(await pageHold.evaluate(() => Deck.isPadHeld(0)), false, 'held state cleared on resize');
 
       await pad0.dispatchEvent('pointerdown', { button: 0 });
-      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       holdObs.state.calls.length = 0;
       await pageHold.evaluate(() => Deck.movePadToPage(0, Deck.cfg.pages[1].id));
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'pad move released and restored');
@@ -2330,7 +2330,7 @@ try {
       await pageHold.evaluate(() => Deck.setActivePage(Deck.cfg.pages[1].id));
       const padOnP2 = pageHold.locator('#grid .pad').nth(0);
       await padOnP2.dispatchEvent('pointerdown', { button: 0 });
-      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       holdObs.state.calls.length = 0;
       await pageHold.evaluate(() => Deck.clearPads([0]));
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'clear pad released and restored');
@@ -2355,12 +2355,12 @@ try {
       // Touch events work
       holdObs.state.calls.length = 0;
       await pad0.dispatchEvent('pointerdown', { pointerType: 'touch', button: 0 });
-      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === true), 'touch pointerdown sent mute on request');
 
       holdObs.state.calls.length = 0;
       await pad0.dispatchEvent('pointerup', { pointerType: 'touch', button: 0 });
-      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held'));
+      await pageHold.waitForFunction(() => !document.querySelectorAll('#grid .pad')[0].classList.contains('held') && !Deck.getPadRuntime(0).busy);
       assert.ok(holdObs.state.calls.some((c) => c.requestType === 'SetInputMute' && c.requestData.inputMuted === false), 'touch pointerup sent mute restore request');
 
       // 10. Hold in-flight guard: press while pad action in-flight is ignored
