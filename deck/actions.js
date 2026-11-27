@@ -35,9 +35,10 @@
     const grid = Deck.$ ? Deck.$('grid') : document.getElementById('grid');
     const btn = grid?.querySelector(`.pad[data-idx="${idxStr}"]`);
     if (!btn) return;
+    const isBusy = busyPads.has(key);
     btn.dataset.padState = state;
-    btn.classList.toggle('busy', state === 'busy');
-    if (state === 'busy') btn.setAttribute('aria-busy', 'true');
+    btn.classList.toggle('busy', isBusy);
+    if (isBusy) btn.setAttribute('aria-busy', 'true');
     else btn.removeAttribute('aria-busy');
   }
 
@@ -52,13 +53,17 @@
   function addBusy(key, event = 'EXEC_START') {
     const prev = resolvePadState(key);
     busyPads.add(key);
-    logPadTransition(key, prev, resolvePadState(key), event);
+    const next = resolvePadState(key);
+    logPadTransition(key, prev, next, event);
+    syncPadDomState(key, next);
   }
 
   function removeBusy(key, event = 'EXEC_END') {
     const prev = resolvePadState(key);
     busyPads.delete(key);
-    logPadTransition(key, prev, resolvePadState(key), event);
+    const next = resolvePadState(key);
+    logPadTransition(key, prev, next, event);
+    syncPadDomState(key, next);
   }
 
   function isPadActive(p) {
