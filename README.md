@@ -179,8 +179,8 @@ npm run build:desktop:mac      # Build macOS arm64 + x64 .dmg/.zip (requires mac
 
 <br>
 
-## 🔐 Code Signing Policy & Privacy
+## 🔐 Security, Code Signing & Privacy
 
-- **Code signing:** Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/) *(pending application / configuration for Windows `.exe` release builds; `opendeck.zip`, macOS, and Linux builds are distributed without SignPath signatures)*.
-- **Project team roles:** [JWCow](https://github.com/JWCow) — Author, Reviewer, and Release Approver.
-- **Privacy:** OpenDeck is 100% local and zero-backend. It collects no analytics or telemetry and communicates only with your local/LAN OBS Studio (`obs-websocket`) instance and any URLs you explicitly configure in `API` / `http` pads. Licensed under the [MIT License](LICENSE).
+- **Code signing status:** Desktop installers (Windows `.exe`, macOS `.dmg`/`.zip`, Linux `.AppImage`) are currently **unsigned** (built directly by GitHub Actions from tagged releases). See the [Desktop App](#%EF%B8%8F-desktop-app-electron) notes above for first-launch SmartScreen / Gatekeeper steps.
+- **Privacy:** OpenDeck is 100% local and zero-backend. It collects no analytics or telemetry and communicates only with your local/LAN OBS Studio (`obs-websocket`) instance and any URLs you explicitly configure in `API` / `http` pads.
+- **License:** Open-source software licensed under the [MIT License](LICENSE).
