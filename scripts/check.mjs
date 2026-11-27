@@ -61,6 +61,29 @@ if (fs.existsSync(electronPkgPath)) {
     fail(`version mismatch: package.json=${pkg.version} vs electron/package.json=${electronPkg.version}`);
   }
 }
+const rootLockPath = path.join(ROOT, 'package-lock.json');
+if (fs.existsSync(rootLockPath)) {
+  const rootLock = JSON.parse(fs.readFileSync(rootLockPath, 'utf8'));
+  if (rootLock.version !== pkg.version) {
+    fail(`version mismatch: package.json=${pkg.version} vs package-lock.json=${rootLock.version}`);
+  }
+  if (rootLock.packages?.['']?.version !== pkg.version) {
+    fail(`version mismatch: package.json=${pkg.version} vs package-lock.json packages[''].version=${rootLock.packages?.['']?.version}`);
+  }
+}
+const electronLockPath = path.join(ROOT, 'electron', 'package-lock.json');
+if (fs.existsSync(electronLockPath)) {
+  const electronLock = JSON.parse(fs.readFileSync(electronLockPath, 'utf8'));
+  if (electronLock.version !== pkg.version) {
+    fail(`version mismatch: package.json=${pkg.version} vs electron/package-lock.json=${electronLock.version}`);
+  }
+  if (electronLock.packages?.['']?.version !== pkg.version) {
+    fail(`version mismatch: package.json=${pkg.version} vs electron/package-lock.json packages[''].version=${electronLock.packages?.['']?.version}`);
+  }
+  if (electronLock.packages?.['..'] && electronLock.packages['..'].version !== pkg.version) {
+    fail(`version mismatch: package.json=${pkg.version} vs electron/package-lock.json packages['..'].version=${electronLock.packages['..'].version}`);
+  }
+}
 
 // 3. file:// compatibility checks
 if (/<script[^>]+type\s*=\s*["']module["']/i.test(deckHtml)) {
@@ -100,7 +123,97 @@ for (const opt of optionValues) {
   }
 }
 
-// 5. Optional PowerShell syntax check when pwsh/powershell is installed
+// 5. Zero orphan assets in deck/ and stage-app.mjs CANONICAL_FILES parity
+const deckDir = path.join(ROOT, 'deck');
+const deckFiles = [
+  ...listFiles(deckDir, '.js'),
+  ...listFiles(deckDir, '.css'),
+]
+  .map((f) => path.relative(ROOT, f).replace(/\\/g, '/'))
+  .sort();
+
+const htmlDeckRefs = new Set(
+  [...deckHtml.matchAll(/(?:src|href)=["'](deck\/[^"']+)["']/g)].map((m) => m[1])
+);
+for (const rel of deckFiles) {
+  if (!htmlDeckRefs.has(rel)) {
+    fail(`Orphan asset '${rel}' in deck/ is not referenced in deck.html`);
+  }
+}
+for (const ref of htmlDeckRefs) {
+  if (!deckFiles.includes(ref)) {
+    fail(`deck.html references missing deck asset '${ref}'`);
+  }
+}
+
+const stageAppPath = path.join(ROOT, 'electron', 'scripts', 'stage-app.mjs');
+if (fs.existsSync(stageAppPath)) {
+  const stageSrc = fs.readFileSync(stageAppPath, 'utf8');
+  const canonMatch = stageSrc.match(/const\s+CANONICAL_FILES\s*=\s*\[([\s\S]*?)\];/);
+  if (!canonMatch) fail('Could not locate CANONICAL_FILES in electron/scripts/stage-app.mjs');
+  const stagedFiles = [...canonMatch[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]).sort();
+  const expectedCanonical = ['deck.html', ...deckFiles].sort();
+  for (const rel of expectedCanonical) {
+    if (!stagedFiles.includes(rel)) {
+      fail(`electron/scripts/stage-app.mjs CANONICAL_FILES is missing '${rel}'`);
+    }
+  }
+  for (const rel of stagedFiles) {
+    if (!expectedCanonical.includes(rel)) {
+      fail(`electron/scripts/stage-app.mjs CANONICAL_FILES has unexpected entry '${rel}'`);
+    }
+  }
+}
+
+// 6. ADR-0001 read-only Auto-Import check (buildAutoImportPages must not issue Create* requests)
+function extractArrowFnBody(src, anchor) {
+  const idx = src.indexOf(anchor);
+  if (idx < 0) return null;
+  const arrowIdx = src.indexOf('=>', idx);
+  const openIdx = arrowIdx >= 0 ? src.indexOf('{', arrowIdx) : -1;
+  if (openIdx < 0) return null;
+  let depth = 0;
+  let quote = '';
+  let inLineComment = false;
+  let inBlockComment = false;
+  for (let i = openIdx; i < src.length; i++) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (inLineComment) {
+      if (ch === '\n') inLineComment = false;
+      continue;
+    }
+    if (inBlockComment) {
+      if (ch === '*' && next === '/') { inBlockComment = false; i++; }
+      continue;
+    }
+    if (quote) {
+      if (ch === '\\') { i++; continue; }
+      if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === '/' && next === '/') { inLineComment = true; i++; continue; }
+    if (ch === '/' && next === '*') { inBlockComment = true; i++; continue; }
+    if (ch === "'" || ch === '"' || ch === '`') { quote = ch; continue; }
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return src.slice(openIdx, i + 1);
+    }
+  }
+  return null;
+}
+
+const autoImportBody = extractArrowFnBody(obsWsSrc, 'Deck.buildAutoImportPages');
+if (!autoImportBody) {
+  fail('Could not locate Deck.buildAutoImportPages body in deck/obs-ws.js');
+}
+const createReqMatch = autoImportBody.match(/['"`]Create[A-Z][A-Za-z0-9_]*['"`]/);
+if (createReqMatch) {
+  fail(`ADR-0001 violation: Deck.buildAutoImportPages contains forbidden OBS mutation ${createReqMatch[0]}`);
+}
+
+// 7. Optional PowerShell syntax check when pwsh/powershell is installed
 const psScript = path.join(ROOT, 'scripts', 'hotkey-bridge.ps1');
 if (fs.existsSync(psScript)) {
   for (const shell of ['pwsh', 'powershell']) {

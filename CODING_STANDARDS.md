@@ -14,5 +14,5 @@ Judgement rules for code reviews in this repository (mechanical syntax, version 
 - **Keep narrow docks usable.** Changes to layout or pad styling must preserve `scrollWidth <= clientWidth` at `360×420` across grids up to `12×12` while keeping pads tappable (`>= 44px`).
 
 ## Verification
-- Run `npm run check`, `npm test`, and `npm run build:release` before finishing a change, and never weaken or skip existing assertions.
+- Run `npm run check`, `npm test`, and `npm run build:release` before finishing a change, and never weaken or skip existing assertions to hide regressions. When an existing action intentionally gains a new capability (for example, adding an action type to `HOLD_TYPES`), update any negative capability test that previously used that action to assert against a remaining non-supporting type instead.
 - Enable the local pre-commit hook with `git config core.hooksPath .githooks`.

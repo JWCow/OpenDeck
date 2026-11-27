@@ -714,7 +714,7 @@
       if (obj.volumeDb == null) obj.volumeDb = obj.mode === 'step' ? -3 : 0;
       const dbRow = document.createElement('div');
       dbRow.className = 'row';
-      dbRow.innerHTML = `<label>Volume (dB, -100 to +26)</label><input type="number" min="-100" max="26" step="any">`;
+      dbRow.innerHTML = `<label for="f-vol-db">Volume (dB, -100 to +26)</label><input id="f-vol-db" type="number" min="-100" max="26" step="any">`;
       const dbInp = dbRow.querySelector('input');
       dbInp.value = String(obj.volumeDb);
       dbInp.addEventListener('input', () => {
