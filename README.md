@@ -89,6 +89,7 @@ Prefer a standalone window instead of an OBS dock? Download the desktop installe
 
 - **Stable storage & tray controls:** Serves the Deck from a fixed `app://opendeck/` origin (preserving layouts across updates and Linux AppImage mounts) with window state persistence, Always on Top (`Ctrl/Cmd+Shift+T`), and system tray controls.
 - **Auto port discovery (ADR-0002):** Reads OBS `obs-websocket/config.json` read-only for `server_port` on launch and never reads or persists passwords.
+- **Windows download choice & first launch:** Use **`OpenDeck.Setup.<version>.exe`** (recommended) for daily use — it installs once and opens right away, whereas the portable **`OpenDeck.<version>.exe`** re-extracts into `%TEMP%` on every launch. Until Windows code signing is active, Windows SmartScreen or third-party antivirus (e.g., Avast AutoSandbox) may briefly scan or prompt on first launch (`More info` → `Run anyway`, or allow the installed binary).
 - **macOS first launch:** Builds are currently unsigned — Right-click `OpenDeck.app` → **Open** (or run `xattr -cr /Applications/OpenDeck.app`), and allow the **Local Network** prompt on macOS Sequoia so OpenDeck can connect to OBS (`ws://127.0.0.1` or LAN). Building macOS `.dmg`/`.zip` targets locally requires a Mac (CI builds them on `macos-latest`).
 
 <br>
@@ -175,3 +176,11 @@ npm run desktop                # Launch the Electron desktop app
 npm run build:desktop          # Build desktop installers in electron/dist/
 npm run build:desktop:mac      # Build macOS arm64 + x64 .dmg/.zip (requires macOS)
 ```
+
+<br>
+
+## 🔐 Code Signing Policy & Privacy
+
+- **Code signing:** Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/) *(pending application / configuration for Windows `.exe` release builds; `opendeck.zip`, macOS, and Linux builds are distributed without SignPath signatures)*.
+- **Project team roles:** [JWCow](https://github.com/JWCow) — Author, Reviewer, and Release Approver.
+- **Privacy:** OpenDeck is 100% local and zero-backend. It collects no analytics or telemetry and communicates only with your local/LAN OBS Studio (`obs-websocket`) instance and any URLs you explicitly configure in `API` / `http` pads. Licensed under the [MIT License](LICENSE).

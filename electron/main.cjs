@@ -29,6 +29,7 @@ const APP_ROOT = app.isPackaged ? path.join(__dirname, 'app') : path.resolve(__d
 const OBS_POLL_INTERVAL_MS = 5000;
 
 let mainWindow = null;
+let splashWindow = null;
 let tray = null;
 let stateTracker = null;
 let isQuitting = false;
@@ -284,6 +285,11 @@ function syncObsPoller() {
 }
 
 function focusMainWindow() {
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    if (splashWindow.isMinimized()) splashWindow.restore();
+    splashWindow.focus();
+    return;
+  }
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (!mainWindow.isVisible()) mainWindow.show();
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -701,11 +707,110 @@ function registerIpcHandlers() {
   });
 }
 
+function closeSplashWindow() {
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.close();
+  }
+  splashWindow = null;
+}
+
+function createSplashWindow(iconPath) {
+  if (splashWindow && !splashWindow.isDestroyed()) return;
+
+  const safeVersion = String(pkg.version || '').replace(/[^0-9A-Za-z._-]/g, '');
+  const splashHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #0b0c0f; color: #f3f4f6;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    user-select: none; -webkit-app-region: drag;
+  }
+  .wrap {
+    width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px; border: 1px solid #22252e; border-radius: 10px;
+  }
+  .title { font-size: 16px; font-weight: 700; letter-spacing: 0.2px; }
+  .ver { font-size: 11px; color: #8e96a8; }
+  .status { font-size: 12px; color: #a8b0c0; margin-top: 2px; }
+  .bar {
+    width: 140px; height: 3px; border-radius: 2px;
+    background: #1c2029; overflow: hidden; margin-top: 4px;
+  }
+  .bar::after {
+    content: ""; display: block; width: 45%; height: 100%;
+    background: #ff4d3d; border-radius: 2px;
+    animation: slide 1.1s ease-in-out infinite;
+  }
+  @keyframes slide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(240%); }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <svg width="36" height="36" viewBox="0 0 22 22" aria-hidden="true">
+      <rect x="1" y="1" width="9" height="9" rx="2.5" fill="#f3f4f6"/>
+      <rect x="12" y="1" width="9" height="9" rx="2.5" fill="#f3f4f6" opacity=".3"/>
+      <rect x="1" y="12" width="9" height="9" rx="2.5" fill="#f3f4f6" opacity=".3"/>
+      <rect x="12" y="12" width="9" height="9" rx="2.5" fill="#ff4d3d"/>
+    </svg>
+    <div class="title">OpenDeck</div>
+    ${safeVersion ? `<div class="ver">v${safeVersion}</div>` : ''}
+    <div class="status">Starting OpenDeck…</div>
+    <div class="bar"></div>
+  </div>
+</body>
+</html>`;
+
+  const splashOptions = {
+    width: 300,
+    height: 190,
+    frame: false,
+    resizable: false,
+    movable: true,
+    minimizable: false,
+    maximizable: false,
+    skipTaskbar: false,
+    center: true,
+    backgroundColor: '#0b0c0f',
+    show: true,
+    title: 'OpenDeck',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  };
+  if (iconPath) {
+    splashOptions.icon = iconPath;
+  }
+
+  splashWindow = new BrowserWindow(splashOptions);
+  splashWindow.setMenuBarVisibility(false);
+  splashWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  splashWindow.webContents.on('will-navigate', (event) => {
+    event.preventDefault();
+  });
+  splashWindow.on('closed', () => {
+    splashWindow = null;
+  });
+  splashWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(splashHtml)}`);
+}
+
 function createWindow() {
   const initialState = loadWindowState(app, screen);
   const iconPath = resolveAssetPath(
     process.platform === 'win32' ? ['icon.ico', 'icon.png'] : ['icon.png']
   );
+
+  createSplashWindow(iconPath);
 
   const windowOptions = {
     width: initialState.width,
@@ -761,13 +866,24 @@ function createWindow() {
   });
 
   mainWindow.once('ready-to-show', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      closeSplashWindow();
+      return;
+    }
     if (initialState.isMaximized) {
       mainWindow.maximize();
     }
     mainWindow.show();
+    closeSplashWindow();
     refreshMenus();
     syncObsPoller();
+  });
+
+  mainWindow.webContents.once('did-fail-load', () => {
+    closeSplashWindow();
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      mainWindow.show();
+    }
   });
 
   mainWindow.on('minimize', (event) => {
@@ -780,6 +896,7 @@ function createWindow() {
   mainWindow.on('show', refreshMenus);
   mainWindow.on('hide', refreshMenus);
   mainWindow.on('closed', () => {
+    closeSplashWindow();
     stateTracker = null;
     mainWindow = null;
     syncObsPoller();
@@ -813,7 +930,7 @@ if (gotSingleInstanceLock) {
     refreshMenus();
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
+      if (!mainWindow || mainWindow.isDestroyed()) {
         createWindow();
       } else {
         focusMainWindow();
@@ -823,6 +940,7 @@ if (gotSingleInstanceLock) {
 
   app.on('before-quit', () => {
     isQuitting = true;
+    closeSplashWindow();
     if (obsPollTimer) {
       clearInterval(obsPollTimer);
       obsPollTimer = null;
