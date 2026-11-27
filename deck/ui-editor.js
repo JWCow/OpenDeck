@@ -169,6 +169,24 @@
     return wrap;
   }
 
+  function makeMeterField(obj, onChange) {
+    const wrap = document.createElement('div');
+    wrap.className = 'row';
+    const lbl = document.createElement('label');
+    lbl.className = 'chk-label';
+    const inp = document.createElement('input');
+    inp.type = 'checkbox';
+    inp.checked = Boolean(obj.showMeter);
+    inp.addEventListener('change', () => {
+      if (inp.checked) obj.showMeter = true;
+      else delete obj.showMeter;
+      if (onChange) onChange();
+    });
+    lbl.append(inp, document.createTextNode(' Show live audio peak meter'));
+    wrap.appendChild(lbl);
+    return wrap;
+  }
+
   function makeAutoOffField(obj, onChange) {
     const wrap = document.createElement('div');
     wrap.className = 'row';
@@ -270,6 +288,7 @@
           ['prev', 'Previous Scene'],
         ], (v) => { obj.mode = v; syncVis(); })
       );
+      if (!allowWait) container.appendChild(makeAutoOffField(obj));
       syncVis();
     } else if (t === 'source') {
       let srcPick;
@@ -353,7 +372,10 @@
           ['toggle', 'Toggle'], ['mute', 'Mute'], ['unmute', 'Unmute'],
         ], (v) => { obj.mode = v; })
       );
-      if (!allowWait) attachHoldAndAutoOff(container, obj);
+      if (!allowWait) {
+        container.appendChild(makeMeterField(obj));
+        attachHoldAndAutoOff(container, obj);
+      }
     } else if (t === 'monitor') {
       if (!obj.monitorType) obj.monitorType = 'cycle';
       container.append(
@@ -423,6 +445,8 @@
           ['cpu', 'CPU Usage (%)'],
           ['fps', 'Active FPS'],
           ['dropped', 'Dropped / Skipped Frames'],
+          ['stream', 'Stream Bitrate & Congestion'],
+          ['mem', 'Memory & Frame Time'],
         ], (v) => { obj.mode = v; })
       );
     } else if (t === 'hotkey') {
@@ -567,6 +591,104 @@
         fileRow
       );
       syncVis();
+    } else if (t === 'text') {
+      if (!['set', 'cycle', 'counter'].includes(obj.mode)) obj.mode = 'set';
+      const textOpts = obs.textInputs?.length ? obs.textInputs : obs.inputs;
+
+      const textRow = document.createElement('div');
+      textRow.className = 'row';
+      const textLbl = document.createElement('label');
+      textLbl.textContent = 'Text Content';
+      const textInp = document.createElement('textarea');
+      textInp.rows = 2;
+      textInp.placeholder = 'Lower third or ticker text (blank clears)';
+      textInp.value = obj.text || '';
+      textInp.addEventListener('input', () => { obj.text = textInp.value; });
+      textRow.append(textLbl, textInp);
+
+      const presetsRow = document.createElement('div');
+      presetsRow.className = 'row';
+      const presetsLbl = document.createElement('label');
+      presetsLbl.textContent = 'Preset Lines (one per line)';
+      const presetsInp = document.createElement('textarea');
+      presetsInp.rows = 3;
+      presetsInp.placeholder = 'Topic 1: Intro\nTopic 2: Demo\nTopic 3: Q&A';
+      presetsInp.value = Array.isArray(obj.presets) ? obj.presets.join('\n') : (obj.presets || '');
+      presetsInp.addEventListener('input', () => {
+        obj.presets = presetsInp.value.split(/\r?\n/).filter((s) => s.length > 0);
+      });
+      presetsRow.append(presetsLbl, presetsInp);
+
+      const counterWrap = document.createElement('div');
+      counterWrap.className = 'frm step-row-full';
+
+      const deltaRow = document.createElement('div');
+      deltaRow.className = 'row';
+      const deltaLbl = document.createElement('label');
+      deltaLbl.textContent = 'Step Delta (0 = Reset to 0)';
+      const deltaInp = document.createElement('input');
+      deltaInp.type = 'number';
+      deltaInp.step = 'any';
+      deltaInp.value = String(Number.isFinite(Number(obj.delta)) ? Number(obj.delta) : 1);
+      deltaInp.addEventListener('input', () => {
+        const n = Number(deltaInp.value);
+        if (Number.isFinite(n)) obj.delta = n;
+      });
+      deltaRow.append(deltaLbl, deltaInp);
+
+      const tplRow = makeTextInput('Template ({{n}} = value)', obj.template || '', 'Score: {{n}}', (v) => {
+        if (v) obj.template = v;
+        else delete obj.template;
+      });
+
+      const curRow = document.createElement('div');
+      curRow.className = 'row';
+      const curLbl = document.createElement('label');
+      curLbl.textContent = 'Current Value';
+      const curBox = document.createElement('div');
+      curBox.className = 'auto-off-wrap';
+      const curInp = document.createElement('input');
+      curInp.type = 'number';
+      curInp.step = 'any';
+      curInp.value = String(Number.isFinite(Number(obj.counterVal)) ? Number(obj.counterVal) : 0);
+      curInp.addEventListener('input', () => {
+        const n = Number(curInp.value);
+        if (Number.isFinite(n)) obj.counterVal = n;
+      });
+      const resetBtn = document.createElement('button');
+      resetBtn.type = 'button';
+      resetBtn.className = 'btn sm';
+      resetBtn.textContent = 'Reset (0)';
+      resetBtn.addEventListener('click', () => {
+        obj.counterVal = 0;
+        curInp.value = '0';
+        curInp.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      curBox.append(curInp, resetBtn);
+      curRow.append(curLbl, curBox);
+
+      counterWrap.append(deltaRow, tplRow, curRow);
+
+      const syncVis = () => {
+        const m = obj.mode || 'set';
+        textRow.hidden = m !== 'set';
+        presetsRow.hidden = m !== 'cycle';
+        counterWrap.hidden = m !== 'counter';
+      };
+
+      container.append(
+        makeObsSelect('Text Source', obj.inputName, textOpts, (v) => { obj.inputName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select text source…').el,
+        makeSelect('Mode', obj.mode, [
+          ['set', 'Set Text'],
+          ['cycle', 'Cycle Presets'],
+          ['counter', 'Counter (+/- or Reset)'],
+        ], (v) => { obj.mode = v; syncVis(); }),
+        textRow,
+        presetsRow,
+        counterWrap
+      );
+      if (!allowWait) container.appendChild(makeAutoOffField(obj));
+      syncVis();
     } else if (t === 'screenshot') {
       container.append(
         makeObsSelect('Source / Scene (blank = Program)', obj.sourceName, allFilterSources(), (v) => { obj.sourceName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Current Program Scene').el,
@@ -606,6 +728,10 @@
         ], (v) => { obj.mode = v; }),
         dbRow
       );
+      if (!allowWait) {
+        container.appendChild(makeMeterField(obj));
+        attachHoldAndAutoOff(container, obj);
+      }
     } else if (t === 'profile') {
       container.appendChild(makeObsSelect('OBS Profile', obj.profileName, obs.profiles || [], (v) => { obj.profileName = v; if (!allowWait) maybeAutoSyncLabel(v); }, 'Select profile…').el);
     } else if (t === 'collection') {
@@ -648,6 +774,54 @@
         obj.delayMs = Number.isFinite(n) ? Math.max(0, n) : 0;
       });
       container.appendChild(row);
+    } else if (t === 'wait_event' && allowWait) {
+      const evTypes = Deck.WAIT_EVENT_TYPES || ['MediaInputPlaybackEnded', 'SceneTransitionEnded', 'CurrentProgramSceneChanged'];
+      if (!evTypes.includes(obj.eventType)) obj.eventType = evTypes[0];
+      const timeoutVal = Number.isFinite(Number(obj.timeoutMs)) ? Number(obj.timeoutMs) : 15000;
+      obj.timeoutMs = timeoutVal;
+
+      const targetOptsFor = (evType) => {
+        if (evType === 'SceneTransitionEnded') return obs.transitions || [];
+        if (evType === 'CurrentProgramSceneChanged') return obs.scenes || [];
+        return obs.mediaInputs?.length ? obs.mediaInputs : (obs.inputs || []);
+      };
+
+      const targetPick = makeObsSelect(
+        'Target Name (blank = any)',
+        obj.targetName || '',
+        targetOptsFor(obj.eventType),
+        (v) => {
+          if (v) obj.targetName = v;
+          else delete obj.targetName;
+        },
+        'Any matching target'
+      );
+
+      const evSel = makeSelect('OBS Event', obj.eventType, [
+        ['MediaInputPlaybackEnded', 'Media Playback Ended'],
+        ['SceneTransitionEnded', 'Scene Transition Ended'],
+        ['CurrentProgramSceneChanged', 'Program Scene Changed'],
+      ], (v) => {
+        obj.eventType = v;
+        targetPick.fill(targetOptsFor(v), obj.targetName || '');
+      });
+
+      const timeoutRow = document.createElement('div');
+      timeoutRow.className = 'row';
+      const tLbl = document.createElement('label');
+      tLbl.textContent = 'Timeout Fallback (ms)';
+      const tInp = document.createElement('input');
+      tInp.type = 'number';
+      tInp.min = '0';
+      tInp.step = '500';
+      tInp.value = String(timeoutVal);
+      tInp.addEventListener('input', () => {
+        const n = Number(tInp.value);
+        obj.timeoutMs = Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+      });
+      timeoutRow.append(tLbl, tInp);
+
+      container.append(evSel, targetPick.el, timeoutRow);
     }
   }
 
@@ -664,6 +838,7 @@
     ['chapter', 'Recording Chapter'],
     ['media', 'Media'],
     ['image', 'Image / Slideshow'],
+    ['text', 'Text / Counter'],
     ['browser', 'Browser Source'],
     ['screenshot', 'Screenshot'],
     ['hotkey', 'OBS Hotkey'],
@@ -687,6 +862,7 @@
     chapter: 'Chapter',
     media: 'Media',
     image: 'Image',
+    text: 'Text',
     browser: 'Browser',
     screenshot: 'Screenshot',
     hotkey: 'Hotkey',
@@ -696,6 +872,7 @@
     collection: 'Collection',
     page: 'Page',
     wait: 'Wait',
+    wait_event: 'Wait Event',
   };
 
   const MODE_LABELS = {
@@ -722,6 +899,17 @@
     if (t === 'wait') {
       const ms = Math.max(0, Number(st.delayMs ?? 1000) || 0);
       return { kind, target: `${ms}ms` };
+    }
+    if (t === 'wait_event') {
+      const evLabels = {
+        MediaInputPlaybackEnded: 'Media End',
+        SceneTransitionEnded: 'Transition End',
+        CurrentProgramSceneChanged: 'Scene Change',
+      };
+      const evLbl = evLabels[st.eventType || 'MediaInputPlaybackEnded'] || (st.eventType || 'Event');
+      const ms = Math.max(0, Number.isFinite(Number(st.timeoutMs)) ? Number(st.timeoutMs) : 15000);
+      const tgt = st.targetName ? `${evLbl} · ${st.targetName}` : evLbl;
+      return { kind, target: `${tgt} (${ms}ms max)` };
     }
     if (t === 'scene') {
       if (st.mode === 'next') return { kind, target: 'Next Scene' };
@@ -814,6 +1002,19 @@
       const acts = { set_file: 'Set File', next: 'Next Slide', previous: 'Prev Slide', restart: 'Restart' };
       const act = acts[st.mode || 'set_file'] || 'Set File';
       return { kind, target: st.inputName ? `${act} · ${st.inputName}` : act };
+    }
+    if (t === 'text') {
+      const m = st.mode || 'set';
+      if (m === 'cycle') {
+        const cnt = Array.isArray(st.presets) ? st.presets.length : 0;
+        return { kind, target: `Cycle (${cnt}) · ${st.inputName || 'select text…'}` };
+      }
+      if (m === 'counter') {
+        const d = Number.isFinite(Number(st.delta)) ? Number(st.delta) : 1;
+        const stepTxt = d === 0 ? 'Reset' : (d > 0 ? `+${d}` : `${d}`);
+        return { kind, target: `Counter (${stepTxt}) · ${st.inputName || 'select text…'}` };
+      }
+      return { kind, target: st.inputName ? `Set · ${st.inputName}` : 'Set — select text…' };
     }
     if (t === 'browser') {
       const act = st.mode === 'set_url' ? 'Set URL' : 'Refresh Cache';
@@ -908,7 +1109,7 @@
       const box = document.createElement('div');
       box.className = 'step'
         + (isExpanded ? '' : ' collapsed')
-        + (st.type === 'wait' ? ' step-wait' : '');
+        + ((st.type === 'wait' || st.type === 'wait_event') ? ' step-wait' : '');
 
       const top = document.createElement('div');
       top.className = 'step-top';
@@ -929,7 +1130,7 @@
         const { kind, target } = describeStep(st);
         kindEl.textContent = kind;
         targetEl.textContent = target;
-        box.classList.toggle('step-wait', st.type === 'wait');
+        box.classList.toggle('step-wait', st.type === 'wait' || st.type === 'wait_event');
       };
       updateSummary();
 
@@ -1000,7 +1201,9 @@
       const typeLbl = document.createElement('label');
       typeLbl.textContent = 'Step Action';
       const sel = document.createElement('select');
-      const types = allowWait ? [...STEP_TYPES, ['wait', 'Wait (ms)']] : STEP_TYPES;
+      const types = allowWait
+        ? [...STEP_TYPES, ['wait', 'Wait (ms)'], ['wait_event', 'Wait for OBS Event']]
+        : STEP_TYPES;
       for (const [v, t] of types) {
         const o = document.createElement('option');
         o.value = v;
@@ -1018,6 +1221,10 @@
         }
         st.type = nextType;
         if (st.type === 'wait') st.delayMs = 2000;
+        if (st.type === 'wait_event') {
+          st.eventType = 'MediaInputPlaybackEnded';
+          st.timeoutMs = 15000;
+        }
         renderActionFields(body, st, allowWait);
         updateSummary();
         notifyChange();
@@ -1034,6 +1241,65 @@
       box.append(top, body);
       container.appendChild(box);
     });
+  }
+
+  function updatePadPreview() {
+    const previewEl = $('pad-preview');
+    if (!previewEl || !draftPad) return;
+    const esc = Deck.esc;
+    const page = Deck.cfg.pages.find((d) => d.id === editingPageId) || Deck.getActivePage();
+    const cols = page?.cols || 8;
+    const idx = editingIdx >= 0 ? editingIdx : 0;
+
+    const previewPad = {
+      ...draftPad,
+      type: $('f-type') ? $('f-type').value : (draftPad.type || 'none'),
+      label: $('f-label') ? $('f-label').value.trim() : (draftPad.label || ''),
+      icon: $('f-icon') ? $('f-icon').value.trim() : (draftPad.icon || ''),
+      imageFit: $('f-image-fit') ? $('f-image-fit').value : (draftPad.imageFit || 'icon'),
+      hideLabel: $('f-image-hidelabel') ? $('f-image-hidelabel').checked : Boolean(draftPad.hideLabel),
+    };
+
+    const isFullFace = Boolean(previewPad.image && previewPad.imageFit === 'fill');
+    const isHoldPad = Boolean(previewPad.hold && Deck.HOLD_TYPES && Deck.HOLD_TYPES.has(previewPad.type));
+    const hasColor = Boolean(!isFullFace && previewPad.color && previewPad.type !== 'none');
+    const lbl = previewPad.label || (Deck.padFallbackLabel ? Deck.padFallbackLabel(previewPad, idx, cols) : '');
+    const ctxText = Deck.getPadContextSubtitle ? Deck.getPadContextSubtitle(previewPad) : '';
+    const tag = Deck.TAGS?.[previewPad.type] || '';
+
+    previewEl.className = 'pad'
+      + (previewPad.type === 'none' ? ' empty' : ` is-${previewPad.type}`)
+      + (previewPad.type === 'stats' ? ' stats-pad' : '')
+      + (isHoldPad ? ' hold-pad' : '')
+      + (isFullFace ? ' full-face' : '')
+      + (hasColor ? ' has-color' : '')
+      + (previewPad.hideLabel ? ' hide-label' : '');
+
+    if (isFullFace && String(previewPad.image).startsWith('data:image/')) {
+      previewEl.style.backgroundColor = previewPad.color && previewPad.type !== 'none' ? previewPad.color : '';
+      previewEl.style.backgroundImage = `url("${previewPad.image}")`;
+      previewEl.style.backgroundSize = 'cover';
+      previewEl.style.backgroundPosition = 'center';
+    } else {
+      previewEl.style.backgroundImage = '';
+      previewEl.style.backgroundSize = '';
+      previewEl.style.backgroundPosition = '';
+      previewEl.style.backgroundColor = previewPad.color && previewPad.type !== 'none' ? previewPad.color : '';
+    }
+
+    let iconHtml = '';
+    if (previewPad.image && previewPad.imageFit !== 'fill') {
+      iconHtml = `<img class="pad-icon-img" src="${esc(previewPad.image)}" alt="">`;
+    } else if (!previewPad.image && previewPad.icon) {
+      iconHtml = `<span class="ico">${esc(previewPad.icon)}</span>`;
+    }
+    const lblHtml = `<span class="lbl"${previewPad.hideLabel ? ' style="display:none"' : ''}>${esc(lbl)}</span>`;
+    const ctxHtml = ctxText ? `<span class="ctx"${previewPad.hideLabel ? ' style="display:none"' : ''}>${esc(ctxText)}</span>` : '';
+
+    previewEl.innerHTML = `<i class="led"></i>${tag ? `<span class="tag">${esc(tag)}</span>` : ''}`
+      + iconHtml
+      + lblHtml
+      + ctxHtml;
   }
 
   function drawPadFields() {
@@ -1093,6 +1359,7 @@
     } else {
       renderActionFields(f, draftPad, false);
     }
+    updatePadPreview();
   }
 
   Deck.openPadEditor = (idx, pageId, prefillAction) => {
@@ -1135,7 +1402,10 @@
         b.className = 'ico-chip';
         b.textContent = emo;
         b.title = `Use ${emo}`;
-        b.addEventListener('click', () => { $('f-icon').value = emo; });
+        b.addEventListener('click', () => {
+          $('f-icon').value = emo;
+          updatePadPreview();
+        });
         icoBox.appendChild(b);
       }
     }
@@ -1152,9 +1422,23 @@
         draftPad.color = c;
         sw.querySelectorAll('.sw').forEach((x) => x.classList.remove('sel'));
         b.classList.add('sel');
+        updatePadPreview();
       });
       sw.appendChild(b);
     });
+    const clrCol = document.createElement('button');
+    clrCol.type = 'button';
+    clrCol.id = 'btn-color-clear';
+    clrCol.className = 'btn sm';
+    clrCol.textContent = 'Clear Color';
+    clrCol.title = 'Reset pad color to default';
+    clrCol.addEventListener('click', () => {
+      draftPad.color = COLORS[0];
+      sw.querySelectorAll('.sw').forEach((x) => x.classList.toggle('sel', x.title === COLORS[0]));
+      updatePadPreview();
+    });
+    sw.appendChild(clrCol);
+
     drawPadFields();
     $('pad-dlg').showModal();
   };
@@ -1176,7 +1460,11 @@
 
   $('f-label')?.addEventListener('input', () => {
     labelTouched = Boolean($('f-label').value.trim());
+    updatePadPreview();
   });
+  $('f-icon')?.addEventListener('input', updatePadPreview);
+  $('f-fields')?.addEventListener('input', updatePadPreview);
+  $('f-fields')?.addEventListener('change', updatePadPreview);
 
   $('btn-upload-image')?.addEventListener('click', () => {
     $('f-image-file')?.click();
@@ -1214,6 +1502,7 @@
         }
         if ($('btn-remove-image')) $('btn-remove-image').hidden = false;
         e.target.value = '';
+        updatePadPreview();
       };
       img.src = ev.target.result;
     };
@@ -1227,18 +1516,21 @@
     }
     if ($('btn-remove-image')) $('btn-remove-image').hidden = true;
     if ($('f-image-file')) $('f-image-file').value = '';
+    updatePadPreview();
   });
 
   $('f-image-fit')?.addEventListener('change', (e) => {
     if (draftPad) {
       draftPad.imageFit = e.target.value;
     }
+    updatePadPreview();
   });
 
   $('f-image-hidelabel')?.addEventListener('change', (e) => {
     if (draftPad) {
       draftPad.hideLabel = e.target.checked;
     }
+    updatePadPreview();
   });
 
   $('dlg-close').addEventListener('click', () => $('pad-dlg').close());
@@ -1278,11 +1570,7 @@
     }
     const saved = Deck.normalizePad(draftPad);
     if (saved.type === 'macro') {
-      saved.steps = (draftPad.steps || []).map((st) => (
-        st.type === 'wait'
-          ? { type: 'wait', delayMs: Math.max(0, Number(st.delayMs) || 0) }
-          : Deck.normalizePad(st)
-      ));
+      saved.steps = (draftPad.steps || []).map(Deck.normalizeStep).filter((st) => st.type !== 'none');
     }
     const page = Deck.cfg.pages.find((d) => d.id === editingPageId) || Deck.getActivePage();
     Deck.pushHistory(() => {
@@ -1297,6 +1585,7 @@
         if (st.type === 'volume' && st.inputName && Deck.fetchVolume) Deck.fetchVolume(st.inputName).then(Deck.renderGrid);
         if (st.type === 'media' && st.inputName && Deck.fetchMediaState) Deck.fetchMediaState(st.inputName).then(Deck.renderGrid);
         if (st.type === 'monitor' && st.inputName && Deck.fetchMonitorType) Deck.fetchMonitorType(st.inputName).then(Deck.renderGrid);
+        if (st.type === 'text' && st.inputName && Deck.fetchTextSettings) Deck.fetchTextSettings(st.inputName).then(Deck.renderGrid);
         if (st.type === 'stats' && Deck.fetchStats) Deck.fetchStats();
       };
       syncStep(saved);

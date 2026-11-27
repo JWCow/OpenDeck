@@ -6,13 +6,43 @@
 
   let dragIdx = null;
   let dragSourcePageId = '';
+  let dragPageId = '';
   let paletteDragItem = null;
   let justDroppedAt = 0;
 
   function clearDragHighlights() {
-    document.querySelectorAll('.pad.drag-over, .pad.dragging, .page-tab.drag-over').forEach((el) => {
+    document.querySelectorAll('.pad.drag-over, .pad.dragging, .page-tab.drag-over, .page-tab.dragging').forEach((el) => {
       el.classList.remove('drag-over', 'dragging');
     });
+  }
+
+  function movePage(pageId, delta) {
+    const pages = Deck.cfg?.pages;
+    if (!Array.isArray(pages) || pages.length < 2) return false;
+    const fromIdx = pages.findIndex((p) => p.id === pageId);
+    if (fromIdx < 0) return false;
+    const toIdx = Math.max(0, Math.min(pages.length - 1, fromIdx + Number(delta || 0)));
+    if (toIdx === fromIdx) return false;
+    Deck.pushHistory(() => {
+      const [moved] = pages.splice(fromIdx, 1);
+      pages.splice(toIdx, 0, moved);
+      Deck.saveCfg();
+      Deck.renderPageBar();
+    });
+    return true;
+  }
+
+  function syncPageLockButton() {
+    const lockBtn = $('btn-page-lock');
+    if (!lockBtn) return;
+    const hasLinked = (Deck.cfg?.pages || []).some((p) => Boolean(p.sceneName));
+    const locked = typeof Deck.isPageLocked === 'function' ? Boolean(Deck.isPageLocked()) : false;
+    lockBtn.hidden = !hasLinked && !locked;
+    lockBtn.classList.toggle('on', locked);
+    lockBtn.setAttribute('aria-pressed', locked ? 'true' : 'false');
+    lockBtn.title = locked
+      ? 'Page locked (Scene-Linked auto-switching paused) — click to unlock'
+      : 'Lock current Page (pause Scene-Linked auto-switching)';
   }
 
   function renderPageBar() {
@@ -27,6 +57,7 @@
       b.setAttribute('role', 'tab');
       b.setAttribute('aria-selected', String(d.id === active.id));
       b.dataset.pageId = d.id;
+      b.draggable = Boolean(Deck.editMode);
       if (d.sceneName) {
         b.dataset.scene = d.sceneName;
         b.innerHTML = `<span class="page-tab-name">${Deck.esc(d.name || 'Page')}</span> <span class="page-tab-scene">${Deck.esc(d.sceneName)}</span>`;
@@ -36,11 +67,31 @@
         b.title = `${d.name} (${d.cols}×${d.rows})`;
       }
       b.addEventListener('click', () => {
+        if (Date.now() - justDroppedAt < 250) return;
         Deck.clearSelection();
         Deck.setActivePage(d.id);
       });
+      b.addEventListener('dragstart', (e) => {
+        if (!Deck.editMode) { e.preventDefault(); return; }
+        dragPageId = d.id;
+        dragIdx = null;
+        dragSourcePageId = '';
+        b.classList.add('dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/opendeck-page', d.id);
+        }
+      });
+      b.addEventListener('dragend', () => {
+        if (dragPageId) justDroppedAt = Date.now();
+        dragPageId = '';
+        clearDragHighlights();
+      });
       b.addEventListener('dragover', (e) => {
-        if (!Deck.editMode || dragIdx === null || d.id === Deck.getActivePage().id) return;
+        if (!Deck.editMode) return;
+        const isPageDrag = Boolean(dragPageId && dragPageId !== d.id);
+        const isPadDrag = dragIdx !== null && d.id !== Deck.getActivePage().id;
+        if (!isPageDrag && !isPadDrag) return;
         e.preventDefault();
         if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
         b.classList.add('drag-over');
@@ -51,7 +102,25 @@
       b.addEventListener('drop', (e) => {
         e.preventDefault();
         clearDragHighlights();
-        if (!Deck.editMode || dragIdx === null) return;
+        if (!Deck.editMode) return;
+        if (dragPageId && dragPageId !== d.id) {
+          const srcId = dragPageId;
+          dragPageId = '';
+          justDroppedAt = Date.now();
+          const pages = Deck.cfg.pages;
+          const fromIdx = pages.findIndex((p) => p.id === srcId);
+          const toIdx = pages.findIndex((p) => p.id === d.id);
+          if (fromIdx >= 0 && toIdx >= 0 && fromIdx !== toIdx) {
+            Deck.pushHistory(() => {
+              const [moved] = pages.splice(fromIdx, 1);
+              pages.splice(toIdx, 0, moved);
+              Deck.saveCfg();
+              Deck.renderPageBar();
+            });
+          }
+          return;
+        }
+        if (dragIdx === null) return;
         const from = dragIdx;
         const srcPageId = dragSourcePageId;
         dragIdx = null;
@@ -63,9 +132,18 @@
       });
       tabs.appendChild(b);
     }
+    syncPageLockButton();
     const cfgBtn = $('btn-deck-cfg');
     if (cfgBtn) cfgBtn.textContent = `${active.cols}×${active.rows} ⚙`;
   }
+
+  $('btn-page-lock')?.addEventListener('click', () => {
+    const cur = typeof Deck.isPageLocked === 'function' ? Boolean(Deck.isPageLocked()) : false;
+    const next = !cur;
+    if (typeof Deck.setPageLock === 'function') Deck.setPageLock(next);
+    syncPageLockButton();
+    Deck.setMsg?.(next ? 'Page locked — auto-switching paused' : 'Page unlocked — auto-switching active');
+  });
 
   const MAX_HISTORY = 50;
   const undoStack = [];
@@ -174,6 +252,8 @@
 
   Deck.clearDragHighlights = clearDragHighlights;
   Deck.renderPageBar = renderPageBar;
+  Deck.movePage = movePage;
+  Deck.syncPageLockButton = syncPageLockButton;
   Deck.getDragState = () => ({ dragIdx, dragSourcePageId, paletteDragItem, justDroppedAt });
   Deck.setDragState = (patch) => {
     if ('dragIdx' in patch) dragIdx = patch.dragIdx;

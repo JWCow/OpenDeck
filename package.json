@@ -1,6 +1,6 @@
 {
   "name": "obs-virtual-deck",
-  "version": "2.2.3",
+  "version": "2.3.4",
   "description": "OpenDeck — zero-backend virtual Stream Deck for OBS Studio (obs-websocket v5) with stepped font scaler, resizable palette splitter, dark/light studio theme, custom pad images, dropdown auto-labeling, command palette drag-and-drop, multi-select editing, context subtitles, red scenes, multiple pages, custom grids, timed toggles, and macros — runs in an OBS Custom Browser Dock or any browser",
   "type": "module",
   "scripts": {

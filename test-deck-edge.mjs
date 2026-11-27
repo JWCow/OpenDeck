@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
+import { createRequire } from 'node:module';
 import net from 'node:net';
 import os from 'node:os';
 import { dirname, join } from 'node:path';
@@ -282,7 +283,7 @@ try {
   });
   await page.reload();
   await page.waitForSelector('#grid .pad');
-  console.log('  ✓ v1, v2.0.0 & v2.2.0 -> OpenDeck v2.2.3 lossless localStorage migration');
+  console.log('  ✓ v1, v2.0.0 & v2.2.0 -> OpenDeck v2.3.4 lossless localStorage migration');
 
   // 2. ws://host:port normalization + no-auth connect + dismiss auto-import prompt
   await clickMenuItem(page, '#btn-conn-toggle');
@@ -604,8 +605,8 @@ try {
   assert.deepEqual(pageErrors, [], `unexpected page errors: ${pageErrors.join('; ')}`);
   await page.close();
 
-  // 13. Release build check: npm run build:release produces clean valid ZIPs for OpenDeck v2.2.3
-  assert.equal(PKG.version, '2.2.3', 'package.json version is 2.2.3');
+  // 13. Release build check: npm run build:release produces clean valid ZIPs for OpenDeck v2.3.4
+  assert.equal(PKG.version, '2.3.4', 'package.json version is 2.3.4');
   execFileSync(process.execPath, [join(__dirname, 'scripts', 'build-release.mjs')], { cwd: __dirname, stdio: 'pipe' });
   const zipPath = join(__dirname, 'dist', 'opendeck.zip');
   const latestZipPath = join(__dirname, 'dist', 'opendeck-latest.zip');
@@ -3438,6 +3439,306 @@ try {
     try { fs.unlinkSync(mergeTmpPath); } catch {}
     hookSrv.close();
     featObs.wss.close();
+  }
+  }
+
+  // 19. Wave 1-2 features: sync fixes, text/counter, volume/scene Hold & Auto-Off, stats v2 delta alerts,
+  // wait_event macros, opt-in meters, fallback/lock/reorder pages, Tap-to-Assign, #clean-toast, a11y & Desktop Phone Host
+  if (!ONLY_SECTION || ONLY_SECTION === '19') {
+  const require = createRequire(import.meta.url);
+  const { createPhoneHost } = require('./electron/phone-host.cjs');
+  const w2Obs = createFakeObs(false);
+  await new Promise((r) => w2Obs.wss.once('listening', r));
+  const w2Port = w2Obs.wss.address().port;
+  const phoneHost = createPhoneHost({ rootDir: __dirname, preferredPort: 0 });
+  const lanTmpDir = fs.mkdtempSync(join(os.tmpdir(), 'opendeck-lan-'));
+  let lanHelper = null;
+
+  try {
+    const ctxW2 = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const pageW2 = await ctxW2.newPage();
+    pageW2.on('pageerror', (e) => pageErrors.push(e.message));
+    pageW2.on('dialog', (d) => d.accept());
+
+    // Configure initial layout with image pad, filter pad, metered mute pad, stats stream pad, and scene-linked page BEFORE connecting
+    await pageW2.goto(DECK_URL);
+    await pageW2.waitForSelector('#grid .pad');
+    await pageW2.evaluate((p) => {
+      const p1Pads = Deck.defaultPads(4, 3, false);
+      p1Pads[0] = { type: 'image', mode: 'set_file', inputName: 'Slide Image', filePath: '/img/slide1.png', label: 'Slide 1', icon: '🖼️', color: '#222733' };
+      p1Pads[1] = { type: 'filter', sourceName: 'Webcam', filterName: 'Blur', mode: 'toggle', label: 'Blur', icon: '✨', color: '#222733' };
+      p1Pads[2] = { type: 'mute', inputName: 'Mic/Aux', mode: 'toggle', showMeter: true, label: 'Mic Meter', icon: '🎙️', color: '#222733' };
+      p1Pads[3] = { type: 'stats', mode: 'stream', label: 'Stream Health', icon: '📊', color: '#222733' };
+      p1Pads[4] = { type: 'volume', inputName: 'Mic/Aux', mode: 'step', volumeDb: -12, hold: true, label: 'Duck Mic', icon: '🔊', color: '#222733' };
+      p1Pads[5] = { type: 'scene', mode: 'named', sceneName: 'BRB', autoOffMs: 120, label: 'Quick BRB', icon: '☕', color: '#991b1b' };
+      p1Pads[6] = {
+        type: 'macro',
+        label: 'Event Macro',
+        cleanupOnAbort: true,
+        steps: [
+          { type: 'source', sceneName: 'Main Cam', sourceName: 'Lower Third', mode: 'show' },
+          { type: 'wait_event', eventType: 'SceneTransitionEnded', targetName: 'Fade', timeoutMs: 3000 },
+          { type: 'source', sceneName: 'Main Cam', sourceName: 'Lower Third', mode: 'hide' },
+        ],
+      };
+      p1Pads[7] = { type: 'text', mode: 'set', inputName: 'Ticker File', text: 'Override', label: 'Ticker', icon: '🔤', color: '#222733' };
+      p1Pads[8] = { type: 'panic', label: 'PANIC', icon: '🚨', color: '#991b1b' };
+
+      const p2Pads = Deck.defaultPads(4, 3, false);
+      p2Pads[0] = { type: 'scene', mode: 'named', sceneName: 'Main Cam', label: 'Back Main', icon: '🎬', color: '#991b1b' };
+
+      localStorage.setItem('opendeck_config', JSON.stringify({
+        version: 2,
+        ws: { host: '127.0.0.1', port: p, password: '' },
+        activePageId: 'page-1',
+        pages: [
+          { id: 'page-1', name: 'Main', cols: 4, rows: 3, isFallback: true, pads: p1Pads },
+          { id: 'page-2', name: 'BRB Deck', cols: 4, rows: 3, sceneName: 'BRB', pads: p2Pads },
+        ],
+        panicSteps: [],
+      }));
+    }, w2Port);
+
+    await pageW2.reload();
+    await pageW2.waitForFunction(() => document.getElementById('conn-text')?.textContent === 'Connected' && !Deck.obs.activeSync);
+
+    // 19a. Sync bug fixes: obs.imageFiles populated on connect, SourceFilterNameChanged renames filter pad, snapshots preserve sceneName & per-page restore
+    assert.equal(await pageW2.evaluate(() => Deck.obs.imageFiles['Slide Image']), '/img/slide1.png', 'performSync populates obs.imageFiles');
+    assert.ok(await pageW2.locator('#grid .pad').nth(0).evaluate((el) => el.classList.contains('active')), 'image set_file pad active immediately after connect');
+
+    w2Obs.broadcast('SourceFilterNameChanged', { sourceName: 'Webcam', oldFilterName: 'Blur', filterName: 'Gaussian Blur' });
+    await pageW2.waitForFunction(() => Deck.cfg.pages[0].pads[1].filterName === 'Gaussian Blur');
+    assert.equal(await pageW2.evaluate(() => Deck.cfg.pages[0].pads[1].label), 'Gaussian Blur', 'SourceFilterNameChanged updated filter pad label & filterName');
+
+    // Snapshot sceneName preservation + per-page restore
+    await pageW2.evaluate(async () => { await Deck.createSnapshot('With Scene Link'); });
+    const snapsBefore = await pageW2.evaluate(async () => Deck.listSnapshots());
+    const snapTs = snapsBefore[0].timestamp;
+    assert.equal(snapsBefore[0].pages[1].sceneName, 'BRB', 'snapshot stored sceneName');
+    await pageW2.evaluate(() => {
+      Deck.cfg.pages[1].sceneName = '';
+      Deck.saveCfg();
+    });
+    await pageW2.evaluate(async (ts) => { await Deck.restoreSnapshot(ts); }, snapTs);
+    assert.equal(await pageW2.evaluate(() => Deck.cfg.pages[1].sceneName), 'BRB', 'restoreSnapshot preserved sceneName');
+    await clickMenuItem(pageW2, '#btn-snapshots');
+    await pageW2.waitForSelector('#snapshots-dlg[open] .btn-snapshot-restore-page');
+    const prevPageCount = await pageW2.evaluate(() => Deck.cfg.pages.length);
+    await pageW2.locator('#snapshots-dlg .btn-snapshot-restore-page').nth(1).click();
+    await pageW2.waitForFunction((n) => Deck.cfg.pages.length === n + 1 && !document.getElementById('snapshots-dlg').open, prevPageCount);
+    // Delete the extra restored page to return to 2 pages cleanly
+    await pageW2.evaluate(async () => {
+      const extra = Deck.cfg.pages[2];
+      if (extra) await Deck.deletePage(extra.id);
+      await Deck.setActivePage('page-1');
+    });
+
+    // 19b. Dynamic Text & Counter Pad (set, cycle, counter + {{n}}, autoOffMs, read_from_file warning, XSS escaping) + Live Preview & Clear Color
+    await pageW2.locator('#grid .pad').nth(7).click(); // Ticker File (read_from_file: true)
+    await pageW2.waitForFunction(() => document.getElementById('msg-info')?.textContent.includes('Read from file'));
+
+    await pageW2.click('#btn-edit');
+    await pageW2.locator('#grid .pad').nth(9).click();
+    await pageW2.selectOption('#f-type', 'text');
+    await pageW2.fill('#f-label', '<img src=x onerror="window.__xss=1">');
+    await pageW2.locator('#f-colors .sw').nth(1).click();
+    assert.ok((await pageW2.locator('#pad-preview').evaluate((el) => el.style.backgroundColor)), 'Live Pad Preview updates color');
+    await pageW2.click('#btn-color-clear');
+    assert.equal(await pageW2.evaluate(() => document.querySelector('#f-colors .sw.sel')?.title), '#222733', 'Clear Color resets to default swatch');
+
+    // Configure counter mode via Pad Editor
+    await pageW2.locator('#f-fields select').nth(0).selectOption('Title Text');
+    await pageW2.locator('#f-fields select').nth(1).selectOption('counter');
+    await pageW2.locator('#f-fields input[type="text"]').last().fill('Pts: {{n}}');
+    await pageW2.click('#pad-form button[type="submit"]');
+    await pageW2.click('#btn-edit');
+
+    assert.equal(await pageW2.evaluate(() => Boolean(window.__xss)), false, 'XSS payload in text pad label never executed');
+    await pageW2.locator('#grid .pad').nth(9).click();
+    await pageW2.waitForFunction(() => Deck.obs.textValues['Title Text'] === 'Pts: 1');
+    await pageW2.locator('#grid .pad').nth(9).click();
+    await pageW2.waitForFunction(() => Deck.obs.textValues['Title Text'] === 'Pts: 2');
+
+    // Cycle + Auto-Off revert
+    await pageW2.evaluate(() => {
+      const p = Deck.getActivePads();
+      p[10] = Deck.normalizePad({ type: 'text', mode: 'cycle', inputName: 'Title Text', presets: ['Alpha', 'Beta'], autoOffMs: 120, label: 'Cycle Txt' });
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+    await pageW2.locator('#grid .pad').nth(10).click();
+    await pageW2.waitForFunction(() => Deck.obs.textValues['Title Text'] === 'Alpha');
+    await pageW2.waitForFunction(() => Deck.obs.textValues['Title Text'] === 'Pts: 2', { timeout: 2000 });
+
+    // 19c. Volume Hold & Scene Auto-Off pre-trigger restore
+    const holdBtn = pageW2.locator('#grid .pad').nth(4);
+    await holdBtn.dispatchEvent('pointerdown', { button: 0 });
+    await pageW2.waitForFunction(() => Deck.obs.volumes['Mic/Aux'] === -18);
+    await holdBtn.dispatchEvent('pointercancel');
+    await pageW2.waitForFunction(() => Deck.obs.volumes['Mic/Aux'] === -6);
+
+    await pageW2.locator('#grid .pad').nth(5).click(); // Quick BRB (autoOffMs: 120)
+    await pageW2.waitForFunction(() => Deck.obs.programScene === 'BRB');
+    await pageW2.waitForFunction(() => Deck.obs.programScene === 'Main Cam', { timeout: 2000 });
+
+    // 19d. Stats v2 (stream + mem + delta alerts) in place without rebuilding #grid
+    await pageW2.evaluate(() => { window.__statsPadEl = document.querySelectorAll('#grid .pad')[3]; });
+    w2Obs.state.outputs.stream = true;
+    w2Obs.state.streamStatus = { outputActive: true, outputCongestion: 0.25, outputBytes: 100000, outputSkippedFrames: 0 };
+    await pageW2.evaluate(() => Deck.fetchStats());
+    assert.ok(await pageW2.evaluate(() => document.querySelectorAll('#grid .pad')[3] === window.__statsPadEl), 'stats pad DOM node preserved (no #grid rebuild)');
+    assert.ok(await pageW2.locator('#grid .pad').nth(3).evaluate((el) => el.classList.contains('warn')), 'stream congestion 0.25 sets .warn class');
+    w2Obs.state.outputs.stream = false;
+    w2Obs.state.streamStatus = null;
+
+    // 19e. Macro wait_event step (SceneTransitionEnded resumes; PANIC aborts clean)
+    await pageW2.locator('#grid .pad').nth(6).click();
+    await pageW2.waitForFunction(() => Deck.activeMacros.size === 1 && Deck.obs.eventWaiters.size === 1);
+    assert.equal(w2Obs.state.sceneItems['Main Cam'][1].sceneItemEnabled, true);
+    w2Obs.broadcast('SceneTransitionEnded', { transitionName: 'Fade' });
+    await pageW2.waitForFunction(() => Deck.activeMacros.size === 0 && Deck.obs.eventWaiters.size === 0);
+    assert.equal(w2Obs.state.sceneItems['Main Cam'][1].sceneItemEnabled, false, 'wait_event resumed macro on SceneTransitionEnded');
+
+    // PANIC aborts pending wait_event cleanly
+    await pageW2.locator('#grid .pad').nth(6).click();
+    await pageW2.waitForFunction(() => Deck.activeMacros.size === 1 && Deck.obs.eventWaiters.size === 1);
+    await pageW2.click('#btn-panic');
+    await pageW2.waitForFunction(() => Deck.activeMacros.size === 0 && Deck.obs.eventWaiters.size === 0);
+    assert.equal(w2Obs.state.sceneItems['Main Cam'][1].sceneItemEnabled, false, 'PANIC aborted wait_event macro and ran cleanup');
+
+    // 19f. Opt-in showMeter (Reidentify 2047|65536 + .pad-meter/.clip + revert to 2047 on page switch)
+    assert.ok(w2Obs.state.reidentifies.includes(2047 | 65536), 'Reidentify enabled bit 65536 on page with metered pad');
+    w2Obs.broadcast('InputVolumeMeters', { inputs: [{ inputName: 'Mic/Aux', inputLevelsMul: [[0.5, 0.99, 1.0]] }] });
+    await pageW2.waitForFunction(() => document.querySelectorAll('#grid .pad')[2].querySelector('.pad-meter.clip') !== null);
+    await pageW2.locator('#deck-tabs .page-tab').nth(1).click();
+    await pageW2.waitForFunction(() => Deck.getActivePage().id === 'page-2');
+    assert.equal(w2Obs.state.reidentifies[w2Obs.state.reidentifies.length - 1], 2047, 'Reidentify reverted to 2047 when switching off metered page');
+    await pageW2.locator('#deck-tabs .page-tab').nth(0).click();
+    await pageW2.waitForFunction(() => Deck.getActivePage().id === 'page-1');
+
+    // 19g. Page reorder, isFallback + Page Lock (#btn-page-lock)
+    await pageW2.click('#btn-deck-cfg');
+    await pageW2.click('#btn-page-right');
+    await pageW2.waitForFunction(() => Deck.cfg.pages[0].id === 'page-2');
+    await pageW2.click('#btn-page-left');
+    await pageW2.waitForFunction(() => Deck.cfg.pages[0].id === 'page-1');
+    assert.equal(await pageW2.isChecked('#d-fallback'), true, '#d-fallback reflects page.isFallback');
+    await pageW2.click('#btn-deck-cancel');
+
+    assert.equal(await pageW2.isVisible('#btn-page-lock'), true, '#btn-page-lock shown when a scene-linked page exists');
+    await pageW2.click('#btn-page-lock');
+    assert.equal(await pageW2.evaluate(() => Deck.isPageLocked()), true, '#btn-page-lock engages Page Lock');
+    w2Obs.broadcast('CurrentProgramSceneChanged', { sceneName: 'BRB' });
+    await pageW2.waitForTimeout(80);
+    assert.equal(await pageW2.evaluate(() => Deck.getActivePage().id), 'page-1', 'Page Lock prevents Scene-Linked auto-switch');
+    await pageW2.click('#btn-page-lock');
+    await pageW2.waitForFunction(() => Deck.getActivePage().id === 'page-2');
+    w2Obs.broadcast('CurrentProgramSceneChanged', { sceneName: 'Main Cam' }); // unlinked -> fallback page-1
+    await pageW2.waitForFunction(() => Deck.getActivePage().id === 'page-1');
+
+    // 19h. Tap-to-Assign, Clean View #clean-toast, aria-pressed, roving tabindex + Arrow navigation, 360x420 >=54x54 invariant
+    await pageW2.click('#btn-edit');
+    const firstPal = pageW2.locator('#palette-list .palette-item').first();
+    await firstPal.click();
+    assert.ok(await firstPal.evaluate((el) => el.classList.contains('armed')), 'Tap-to-Assign arms palette item');
+    await pageW2.locator('#grid .pad').nth(11).click();
+    await pageW2.waitForFunction(() => Deck.getActivePads()[11].type === 'output');
+    await pageW2.click('#btn-edit');
+
+    assert.equal(await pageW2.locator('#grid .pad').nth(2).getAttribute('aria-pressed'), 'false', 'toggle mute pad exposes aria-pressed');
+    await pageW2.locator('#grid .pad').nth(0).focus();
+    await pageW2.keyboard.press('ArrowRight');
+    assert.equal(await pageW2.evaluate(() => document.activeElement?.dataset?.idx), '1', 'ArrowRight moves roving focus to pad 1');
+    await pageW2.keyboard.press('ArrowDown');
+    assert.equal(await pageW2.evaluate(() => document.activeElement?.dataset?.idx), '5', 'ArrowDown moves roving focus down one row');
+
+    await clickMenuItem(pageW2, '#btn-clean-view');
+    await pageW2.evaluate(() => Deck.setMsg('Clean Toast Visible'));
+    assert.equal(await pageW2.isVisible('#clean-toast'), true, '#clean-toast visible in Clean View');
+    await pageW2.click('#btn-clean-exit');
+
+    await pageW2.setViewportSize({ width: 360, height: 420 });
+    const dockMetrics = await pageW2.evaluate(() => {
+      const rects = [...document.querySelectorAll('#grid .pad')].map((el) => el.getBoundingClientRect());
+      return {
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        minW: Math.min(...rects.map((r) => r.width)),
+        minH: Math.min(...rects.map((r) => r.height)),
+      };
+    });
+    assert.equal(dockMetrics.overflow, false, 'no horizontal overflow at 360x420');
+    assert.ok(dockMetrics.minW >= 54 && dockMetrics.minH >= 54, `360x420 pads >= 54x54 (got ${dockMetrics.minW}x${dockMetrics.minH})`);
+
+    // 19i. Mock window.opendeckDesktop E2E + phone-host.cjs / lan-helper.mjs ETag & /layout-version
+    const hostStarted = await phoneHost.start(JSON.stringify({ version: 2, ws: { host: '127.0.0.1', port: w2Port, password: 'LEAK' }, pages: [{ id: 'p1', name: 'P1', cols: 2, rows: 2, pads: [] }] }), w2Port);
+    assert.equal(hostStarted.running, true);
+    assert.ok(hostStarted.qrSvg.startsWith('<svg') && !hostStarted.primaryUrl.includes('LEAK'), 'phoneHost generates SVG QR without password');
+
+    const resVer = await fetch(`http://127.0.0.1:${hostStarted.port}/layout-version`);
+    const verJson = await resVer.json();
+    assert.equal(verJson.available, true);
+    assert.equal(verJson.version, hostStarted.layoutVersion);
+
+    const resLayout1 = await fetch(`http://127.0.0.1:${hostStarted.port}/layout.json`);
+    const etag = resLayout1.headers.get('etag');
+    const layoutText = await resLayout1.text();
+    assert.equal(layoutText.includes('LEAK'), false, 'phoneHost scrubs ws.password from /layout.json');
+    const resLayout304 = await fetch(`http://127.0.0.1:${hostStarted.port}/layout.json`, { headers: { 'If-None-Match': etag } });
+    assert.equal(resLayout304.status, 304, 'phoneHost returns 304 on matching ETag');
+
+    fs.writeFileSync(join(lanTmpDir, 'layout.json'), JSON.stringify({ version: 2, pages: [{ id: 'p1', name: 'LAN1', cols: 2, rows: 2, pads: [] }] }));
+    lanHelper = await createLanHelper({ rootDir: lanTmpDir, port: 0, obsPort: w2Port, watchDownloads: false });
+    const lanVerRes = await fetch(`http://127.0.0.1:${lanHelper.port}/layout-version`);
+    const lanVer = await lanVerRes.json();
+    assert.equal(lanVer.available, true, 'lan-helper serves /layout-version');
+
+    const pageDesk = await ctxW2.newPage();
+    pageDesk.on('pageerror', (e) => pageErrors.push(e.message));
+    await pageDesk.addInitScript((statusObj) => {
+      window.__aotSet = [];
+      window.opendeckDesktop = {
+        version: '2.3.4',
+        platform: 'win32',
+        getAlwaysOnTop: async () => false,
+        setAlwaysOnTop: async (v) => { window.__aotSet.push(v); return v; },
+        onAlwaysOnTopChange: () => () => {},
+        getObsPortInfo: async () => ({ port: null, enabled: true, source: null }),
+        rediscoverObsPort: async () => ({ port: null, enabled: true, source: null }),
+        onObsPortChanged: () => () => {},
+        updateStatus: () => {},
+        onTriggerPanic: () => () => {},
+        onTriggerPad: () => () => {},
+        onSwitchPage: () => () => {},
+        startPhoneHost: async () => statusObj,
+        stopPhoneHost: async () => ({ ...statusObj, running: false }),
+        updatePhoneHostLayout: async () => statusObj,
+        getPhoneHostStatus: async () => statusObj,
+      };
+    }, hostStarted);
+    await pageDesk.goto(DECK_URL);
+    await pageDesk.waitForSelector('#grid .pad');
+
+    await openMoreMenu(pageDesk);
+    assert.equal(await pageDesk.isVisible('#btn-desktop-aot'), true, 'opendeckDesktop unhides Always on Top menu item');
+    assert.equal(await pageDesk.isVisible('#btn-phone-host'), true, 'opendeckDesktop unhides Phone Deck (QR) menu item');
+    await pageDesk.click('#btn-desktop-aot');
+    await pageDesk.waitForFunction(() => window.__aotSet.length === 1 && window.__aotSet[0] === true);
+    await openMoreMenu(pageDesk);
+    await pageDesk.click('#btn-phone-host');
+    await pageDesk.waitForSelector('#phone-host-dlg[open]');
+    assert.ok(await pageDesk.locator('#phone-host-qr svg').count() > 0, '#phone-host-qr renders SVG QR code');
+    assert.equal((await pageDesk.inputValue('#phone-host-url')).includes(String(hostStarted.port)), true, '#phone-host-url displays host URL');
+    await pageDesk.click('#btn-phone-done');
+    await pageDesk.close();
+
+    assert.deepEqual(pageErrors, [], `unexpected page errors: ${pageErrors.join('; ')}`);
+    await ctxW2.close();
+    console.log('  ✓ Wave 1-3 features (sync fixes, text/counter, hold/auto-off, stats v2, wait_event, meters, fallback/lock, Tap-to-Assign, a11y, Desktop Phone Host)');
+  } finally {
+    if (lanHelper) await lanHelper.close();
+    await phoneHost.stop();
+    try { fs.rmSync(lanTmpDir, { recursive: true, force: true }); } catch {}
+    w2Obs.wss.close();
   }
   }
 

@@ -8,6 +8,17 @@
   const MIN_PALETTE_W = 260;
   const MAX_PALETTE_W = 550;
 
+  let armedPaletteItem = null;
+
+  function clearArmedPaletteItem() {
+    armedPaletteItem = null;
+    document.querySelectorAll('.palette-item.armed').forEach((el) => el.classList.remove('armed'));
+  }
+
+  function getArmedPaletteItem() {
+    return armedPaletteItem;
+  }
+
   const PALETTE_CATEGORIES = [
     {
       id: 'cat-broadcast',
@@ -54,6 +65,7 @@
         { label: 'Media Source Control', icon: '🎵', tag: 'MED', action: { type: 'media', mediaAction: 'play_pause', label: 'Media', icon: '🎵' } },
         { label: 'Browser Source', icon: '🌐', tag: 'WEB', action: { type: 'browser', mode: 'refresh', label: 'Browser Source', icon: '🌐' } },
         { label: 'Image Swap', icon: '🖼️', tag: 'IMG', action: { type: 'image', mode: 'set_file', label: 'Image Swap', icon: '🖼️' } },
+        { label: 'Text / Counter', icon: '📝', tag: 'TXT', action: { type: 'text', mode: 'set', label: 'Text', icon: '📝' } },
         { label: 'Scene Transition', icon: '✂️', tag: 'TRN', action: { type: 'transition', label: 'Transition', icon: '✂️' } },
         { label: 'Profile', icon: '👤', tag: 'PRF', action: { type: 'profile', label: 'Profile', icon: '👤' } },
         { label: 'Scene Collection', icon: '📁', tag: 'COL', action: { type: 'collection', label: 'Collection', icon: '📁' } },
@@ -146,12 +158,38 @@
     const el = document.createElement('div');
     el.className = 'palette-item';
     el.draggable = true;
+    el.tabIndex = 0;
+    el.setAttribute('role', 'button');
     el.title = it.label || '';
     el.innerHTML = `<span class="pal-ico">${esc(it.icon || '⚡')}</span>`
       + `<span class="pal-lbl">${esc(it.label)}</span>`
       + `<span class="pal-tag">${esc(it.tag || 'ACT')}</span>`;
 
+    const toggleArm = () => {
+      const wasArmed = el.classList.contains('armed');
+      clearArmedPaletteItem();
+      if (wasArmed) {
+        Deck.setMsg?.('Cancelled command placement');
+        return;
+      }
+      armedPaletteItem = it.action;
+      el.classList.add('armed');
+      if (window.innerWidth <= 600) {
+        $('palette')?.classList.remove('open');
+      }
+      Deck.setMsg?.(`Armed "${it.label}" — tap a Pad to assign`);
+    };
+
+    el.addEventListener('click', toggleArm);
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        toggleArm();
+      }
+    });
+
     el.addEventListener('dragstart', (e) => {
+      clearArmedPaletteItem();
       Deck.setDragState({ paletteDragItem: it.action });
       if (e.dataTransfer) {
         e.dataTransfer.effectAllowed = 'copy';
@@ -186,6 +224,7 @@
   function renderPalette() {
     const container = $('palette-list');
     if (!container) return;
+    armedPaletteItem = null;
     container.innerHTML = '';
 
     for (const cat of PALETTE_CATEGORIES) {
@@ -272,6 +311,50 @@
         }));
       });
 
+      // Live Media Inputs
+      (obs.mediaInputs || []).forEach((inp) => {
+        hasLive = true;
+        liveWrap.appendChild(createPaletteItemEl({
+          label: inp,
+          icon: '🎵',
+          tag: 'MED',
+          action: { type: 'media', inputName: inp, mediaAction: 'play_pause', label: inp, icon: '🎵', isLive: true },
+        }));
+      });
+
+      // Live Browser Inputs
+      (obs.browserInputs || []).forEach((inp) => {
+        hasLive = true;
+        liveWrap.appendChild(createPaletteItemEl({
+          label: inp,
+          icon: '🌐',
+          tag: 'WEB',
+          action: { type: 'browser', inputName: inp, mode: 'refresh', label: inp, icon: '🌐', isLive: true },
+        }));
+      });
+
+      // Live Image Inputs
+      (obs.imageInputs || []).forEach((inp) => {
+        hasLive = true;
+        liveWrap.appendChild(createPaletteItemEl({
+          label: inp,
+          icon: '🖼️',
+          tag: 'IMG',
+          action: { type: 'image', inputName: inp, mode: 'set_file', label: inp, icon: '🖼️' },
+        }));
+      });
+
+      // Live Text Inputs
+      (obs.textInputs || []).forEach((inp) => {
+        hasLive = true;
+        liveWrap.appendChild(createPaletteItemEl({
+          label: inp,
+          icon: '📝',
+          tag: 'TXT',
+          action: { type: 'text', inputName: inp, mode: 'set', label: inp, icon: '📝' },
+        }));
+      });
+
       if (!hasLive) {
         const hint = document.createElement('div');
         hint.className = 'palette-hint';
@@ -310,4 +393,6 @@
   Deck.isSelfContained = isSelfContained;
   Deck.initPaletteResizer = initPaletteResizer;
   Deck.renderPalette = renderPalette;
+  Deck.getArmedPaletteItem = getArmedPaletteItem;
+  Deck.clearArmedPaletteItem = clearArmedPaletteItem;
 })();

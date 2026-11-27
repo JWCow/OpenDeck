@@ -6,6 +6,17 @@
 
   let draftPanic = [];
   let promptedAutoImportThisSession = false;
+  let phoneHostRunning = false;
+
+  function syncPageOrderButtons() {
+    const pages = Deck.cfg?.pages || [];
+    const cur = Deck.getActivePage();
+    const idx = pages.findIndex((p) => p.id === cur.id);
+    const leftBtn = $('btn-page-left');
+    const rightBtn = $('btn-page-right');
+    if (leftBtn) leftBtn.disabled = idx <= 0;
+    if (rightBtn) rightBtn.disabled = idx < 0 || idx >= pages.length - 1;
+  }
 
   function syncPagePresetHighlight() {
     const c = Number($('d-cols').value);
@@ -45,7 +56,9 @@
     $('d-name').value = page.name || 'Main';
     $('d-cols').value = page.cols;
     $('d-rows').value = page.rows;
+    if ($('d-fallback')) $('d-fallback').checked = Boolean(page.isFallback);
     $('btn-deck-del').disabled = Deck.cfg.pages.length <= 1;
+    syncPageOrderButtons();
 
     const sel = $('d-scene');
     if (sel) {
@@ -168,6 +181,14 @@
   $('btn-deck-cfg').addEventListener('click', openPageDialog);
   $('deck-dlg-close').addEventListener('click', () => $('deck-dlg').close());
   $('btn-deck-cancel').addEventListener('click', () => $('deck-dlg').close());
+  $('btn-page-left')?.addEventListener('click', () => {
+    const cur = Deck.getActivePage();
+    if (Deck.movePage?.(cur.id, -1)) syncPageOrderButtons();
+  });
+  $('btn-page-right')?.addEventListener('click', () => {
+    const cur = Deck.getActivePage();
+    if (Deck.movePage?.(cur.id, 1)) syncPageOrderButtons();
+  });
   $('d-cols').addEventListener('input', syncPagePresetHighlight);
   $('d-rows').addEventListener('input', syncPagePresetHighlight);
   $('d-scene')?.addEventListener('change', syncSceneWarning);
@@ -212,10 +233,18 @@
     const name = $('d-name').value.trim() || cur.name;
     const cols = Number($('d-cols').value) || cur.cols;
     const rows = Number($('d-rows').value) || cur.rows;
+    const wantFallback = Boolean($('d-fallback')?.checked);
+    const wasFallback = Boolean(cur.isFallback);
     Deck.pushHistory(() => {
       Deck.renamePage(cur.id, name);
       Deck.resizePage(cur.id, cols, rows);
       Deck.setPageScene(cur.id, selScene);
+      if (wantFallback) {
+        Deck.setFallbackPage?.(cur.id);
+      } else if (wasFallback) {
+        Deck.setFallbackPage?.(null);
+      }
+      Deck.syncPageLockButton?.();
       const updated = Deck.getActivePage();
       Deck.setMsg(`Page "${updated.name}" (${updated.cols}×${updated.rows})`);
     });
@@ -289,7 +318,155 @@
     Deck.setMsg(`Saved ${Deck.cfg.panicSteps.length} PANIC step(s)`);
   });
 
+  // Phone Deck Host Dialog (Desktop App only)
+  function renderQrSvgSafely(container, svgStr) {
+    if (!container) return false;
+    container.replaceChildren();
+    if (typeof svgStr !== 'string') return false;
+    const trimmed = svgStr.trim();
+    if (!trimmed.startsWith('<svg ') || !trimmed.endsWith('</svg>')) return false;
+    try {
+      const doc = new DOMParser().parseFromString(trimmed, 'image/svg+xml');
+      const root = doc.documentElement;
+      if (!root || root.tagName.toLowerCase() !== 'svg' || doc.querySelector('parsererror')) {
+        return false;
+      }
+      const allowed = new Set(['svg', 'rect', 'path']);
+      const allEls = [root, ...root.querySelectorAll('*')];
+      for (const el of allEls) {
+        if (!allowed.has(el.tagName.toLowerCase())) return false;
+        for (const attr of el.attributes) {
+          if (attr.name.toLowerCase().startsWith('on')) return false;
+        }
+      }
+      container.appendChild(document.importNode(root, true));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function applyPhoneHostState(status) {
+    phoneHostRunning = Boolean(status?.running);
+    const statusEl = $('phone-host-status');
+    const qrEl = $('phone-host-qr');
+    const urlEl = $('phone-host-url');
+    const toggleBtn = $('btn-phone-toggle');
+    const copyBtn = $('btn-phone-copy');
+
+    if (phoneHostRunning) {
+      const extraIps = Array.isArray(status.urls) && status.urls.length > 1
+        ? ` (${status.urls.length} network addresses available)`
+        : '';
+      if (statusEl) {
+        statusEl.textContent = `Serving Phone Deck on port ${status.port} (OBS WebSocket port ${status.obsPort})${extraIps}`;
+      }
+      const primaryUrl = String(status.primaryUrl || '');
+      if (urlEl) {
+        if ('value' in urlEl) urlEl.value = primaryUrl;
+        else urlEl.textContent = primaryUrl;
+      }
+      const qrOk = renderQrSvgSafely(qrEl, status.qrSvg);
+      if (qrEl) qrEl.hidden = !qrOk;
+      if (toggleBtn) toggleBtn.textContent = 'Stop Host';
+      if (copyBtn) copyBtn.disabled = !primaryUrl;
+    } else {
+      if (statusEl) statusEl.textContent = 'Phone Deck host is stopped.';
+      if (urlEl) {
+        if ('value' in urlEl) urlEl.value = '';
+        else urlEl.textContent = '';
+      }
+      if (qrEl) {
+        qrEl.replaceChildren();
+        qrEl.hidden = true;
+      }
+      if (toggleBtn) toggleBtn.textContent = 'Start Host';
+      if (copyBtn) copyBtn.disabled = true;
+    }
+  }
+
+  async function startDesktopPhoneHost() {
+    const api = window.opendeckDesktop;
+    if (!api?.startPhoneHost) return null;
+    const obsPort = Number(Deck.cfg?.ws?.port) || 4455;
+    const layoutJson = JSON.stringify(Deck.exportConfig());
+    const status = await api.startPhoneHost(layoutJson, obsPort);
+    applyPhoneHostState(status);
+    return status;
+  }
+
+  async function openPhoneHostDialog() {
+    const api = window.opendeckDesktop;
+    const dlg = $('phone-host-dlg');
+    if (!api?.startPhoneHost || !dlg) return;
+    if ($('phone-host-status')) $('phone-host-status').textContent = 'Starting local Phone Deck host…';
+    if ($('phone-host-qr')) $('phone-host-qr').hidden = true;
+    if (!dlg.open) dlg.showModal();
+    try {
+      const current = await api.getPhoneHostStatus?.();
+      if (current?.running) {
+        const obsPort = Number(Deck.cfg?.ws?.port) || 4455;
+        const updated = await api.updatePhoneHostLayout?.(JSON.stringify(Deck.exportConfig()), obsPort);
+        applyPhoneHostState(updated || current);
+      } else {
+        await startDesktopPhoneHost();
+      }
+    } catch (err) {
+      if ($('phone-host-status')) $('phone-host-status').textContent = `Unable to start Phone Deck host: ${err?.message || 'Error'}`;
+    }
+  }
+
+  async function syncPhoneHostLayout() {
+    const api = window.opendeckDesktop;
+    if (!phoneHostRunning || !api?.updatePhoneHostLayout) return;
+    try {
+      const obsPort = Number(Deck.cfg?.ws?.port) || 4455;
+      const status = await api.updatePhoneHostLayout(JSON.stringify(Deck.exportConfig()), obsPort);
+      phoneHostRunning = Boolean(status?.running);
+      if ($('phone-host-dlg')?.open) applyPhoneHostState(status);
+    } catch {}
+  }
+
+  $('phone-host-close')?.addEventListener('click', () => $('phone-host-dlg')?.close());
+  $('btn-phone-done')?.addEventListener('click', () => $('phone-host-dlg')?.close());
+  $('btn-phone-toggle')?.addEventListener('click', async () => {
+    const api = window.opendeckDesktop;
+    if (!api) return;
+    const toggleBtn = $('btn-phone-toggle');
+    if (toggleBtn) toggleBtn.disabled = true;
+    try {
+      if (phoneHostRunning) {
+        const status = await api.stopPhoneHost?.();
+        applyPhoneHostState(status);
+      } else {
+        await startDesktopPhoneHost();
+      }
+    } catch (err) {
+      if ($('phone-host-status')) $('phone-host-status').textContent = `Phone Deck host error: ${err?.message || 'Error'}`;
+    } finally {
+      if (toggleBtn) toggleBtn.disabled = false;
+    }
+  });
+  $('btn-phone-copy')?.addEventListener('click', async () => {
+    const urlEl = $('phone-host-url');
+    const url = String(urlEl && ('value' in urlEl ? urlEl.value : urlEl.textContent) || '').trim();
+    if (!url) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else if (urlEl && typeof urlEl.select === 'function') {
+        urlEl.select();
+        document.execCommand?.('copy');
+      }
+      Deck.setMsg('Copied Phone Deck URL');
+    } catch {
+      Deck.setMsg('Select and copy the URL manually');
+    }
+  });
+
   Deck.openPageDialog = openPageDialog;
   Deck.openPanicDialog = openPanicDialog;
   Deck.openAutoImportWizard = openAutoImportWizard;
+  Deck.openPhoneHostDialog = openPhoneHostDialog;
+  Deck.syncPhoneHostLayout = syncPhoneHostLayout;
 })();

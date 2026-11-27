@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>OpenDeck - Virtual Deck for OBS Studio</title>
 <link rel="stylesheet" href="deck/deck.css">
 <script defer src="deck/obs-ws.js"></script>
@@ -61,6 +63,11 @@
         <button id="btn-merge-pages" class="menu-item" type="button" title="Append Pages from a layout JSON onto your current Deck">Import Pages…</button>
         <button id="btn-import-link" class="menu-item" type="button" title="Import Deck configuration from link or URL">Import from Link…</button>
       </div>
+      <div class="menu-group">
+        <button id="btn-desktop-aot" class="menu-item" type="button" hidden title="Toggle Always on Top">Always on Top: Off</button>
+        <button id="btn-desktop-redetect" class="menu-item" type="button" hidden title="Re-detect local OBS WebSocket port (read-only)">Re-detect OBS Port</button>
+        <button id="btn-phone-host" class="menu-item" type="button" hidden title="Start local Phone Deck QR host">Phone Deck (QR)…</button>
+      </div>
     </div>
   </div>
   <button id="btn-panic" class="btn sm panic" title="Abort running Timed Macros &amp; Auto-Off timers and run PANIC reset">PANIC</button>
@@ -80,6 +87,7 @@
 <div id="deck-bar" class="bar page-bar">
   <span id="clean-conn-dot" class="clean-conn-dot bad" title="OBS: Disconnected" aria-hidden="true"></span>
   <div id="deck-tabs" class="page-tabs" role="tablist" aria-label="Deck Pages"></div>
+  <button id="btn-page-lock" class="btn sm page-lock-btn" type="button" aria-pressed="false" hidden title="Lock current Page (pause Scene-Linked auto-switching)">🔒</button>
   <button id="btn-deck-add" class="btn sm" title="Add new Page">+ Page</button>
   <button id="btn-deck-dup" class="btn sm" title="Duplicate current Page">⎘</button>
   <button id="btn-deck-cfg" class="btn sm" title="Rename Page, resize grid, or delete Page">8×8 ⚙</button>
@@ -109,6 +117,13 @@
   <button type="button" id="btn-redo" class="btn sm" title="Redo last edit (Ctrl/Cmd+Shift+Z)" disabled>↷ Redo</button>
 </div>
 
+<div id="layout-update-banner" class="layout-banner" hidden>
+  <span id="layout-update-text">Updated Deck layout available</span>
+  <button type="button" id="btn-layout-reload" class="btn sm on">Load</button>
+  <button type="button" id="btn-layout-merge" class="btn sm">Merge Pages</button>
+  <button type="button" id="btn-layout-dismiss" class="btn sm" aria-label="Dismiss">✕</button>
+</div>
+
 <div id="deck-body" class="deck-body">
   <div id="grid" class="grid" aria-label="8 by 8 OBS Deck Page"></div>
   <div id="palette-resizer" class="palette-resizer" title="Drag to resize palette (double-click to reset)"></div>
@@ -123,15 +138,17 @@
 
 <div class="status">
   <span id="scene-info">Program: —</span>
-  <span id="msg-info">Ready</span>
+  <span id="msg-info" aria-live="polite">Ready</span>
   <span id="save-warning" class="save-warning" hidden title="Save failed: Export layout and use fewer or smaller Pad Graphics"></span>
-  <a id="version-badge" class="ver" href="https://github.com/JWCow/OpenDeck/releases" target="_blank" rel="noopener noreferrer" title="View OpenDeck releases on GitHub">v2.2.3</a>
+  <a id="version-badge" class="ver" href="https://github.com/JWCow/OpenDeck/releases" target="_blank" rel="noopener noreferrer" title="View OpenDeck releases on GitHub">v2.3.4</a>
 </div>
+<div id="clean-toast" class="clean-toast" role="status" aria-live="polite" hidden></div>
 
 <dialog id="pad-dlg">
   <div class="dlg-h"><span id="dlg-title">Edit Pad</span><button id="dlg-close" type="button" class="btn sm" aria-label="Close">✕</button></div>
   <form id="pad-form" class="frm" method="dialog">
     <div class="pad-meta">
+    <div class="pad-preview-wrap"><div id="pad-preview" class="pad" aria-hidden="true"></div></div>
     <div class="row2">
       <div class="row"><label for="f-label">Label</label><input id="f-label" maxlength="32" placeholder="Cam Blur"></div>
       <div class="row"><label for="f-icon">Icon</label><input id="f-icon" maxlength="8" placeholder="🎬"></div>
@@ -164,6 +181,7 @@
           <option value="transform">Source Transform / PiP</option>
           <option value="media">Media Playback</option>
           <option value="image">Image / Slideshow</option>
+          <option value="text">Text / Counter</option>
           <option value="browser">Browser Source</option>
           <option value="screenshot">Take Screenshot</option>
         </optgroup>
@@ -215,6 +233,16 @@
       </select>
     </div>
     <div id="d-scene-warn" class="warn" hidden></div>
+    <div class="row">
+      <label class="chk-label"><input type="checkbox" id="d-fallback"> Default Fallback Page (unlinked scenes)</label>
+    </div>
+    <div class="row">
+      <label>Tab Order</label>
+      <div class="presets">
+        <button type="button" id="btn-page-left" class="btn sm" title="Move Page tab left">← Move Left</button>
+        <button type="button" id="btn-page-right" class="btn sm" title="Move Page tab right">Move Right →</button>
+      </div>
+    </div>
     <div class="row">
       <label>Page Grid Size Presets</label>
       <div id="d-presets" class="presets">
@@ -316,6 +344,24 @@
       <button type="submit" id="btn-import-link-submit" class="btn sm on">Import</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="phone-host-dlg">
+  <div class="dlg-h"><span>Phone Deck (QR)</span><button id="phone-host-close" type="button" class="btn sm" aria-label="Close">✕</button></div>
+  <div class="frm phone-host-body">
+    <div id="phone-host-status" class="hint">Starting local Phone Deck host…</div>
+    <div id="phone-host-qr" class="phone-host-qr" hidden></div>
+    <div class="phone-host-url">
+      <input id="phone-host-url" type="text" readonly aria-label="Phone Deck URL">
+      <button type="button" id="btn-phone-copy" class="btn sm">Copy</button>
+    </div>
+    <div class="hint">Connect your phone to the same Wi-Fi and scan the QR code. Passwords are never included in URLs.</div>
+    <div class="dlg-f" style="width:100%">
+      <button type="button" id="btn-phone-toggle" class="btn sm">Stop Host</button>
+      <div class="spacer"></div>
+      <button type="button" id="btn-phone-done" class="btn sm on">Done</button>
+    </div>
+  </div>
 </dialog>
 </body>
 </html>

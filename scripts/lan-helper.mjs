@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -83,8 +84,93 @@ export function formatPhoneUrls(addresses, httpPort, obsPort = 4455, layout = ''
   return addresses.map((ip) => `http://${ip}:${httpPort}/deck.html?host=${ip}&port=${obsPort}${extra}`);
 }
 
-export function createLanHelper({ rootDir, port = 0, obsPort = 4455 } = {}) {
+function scrubLayoutText(rawText) {
+  let text = rawText;
+  try {
+    const parsed = JSON.parse(rawText);
+    if (parsed && typeof parsed === 'object') {
+      if (parsed.ws && typeof parsed.ws === 'object') {
+        delete parsed.ws.password;
+      }
+      text = JSON.stringify(parsed, null, 2);
+    }
+  } catch {
+    return null;
+  }
+  const hash = crypto.createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 16);
+  return {
+    text,
+    etag: `"od-${hash}"`,
+  };
+}
+
+function findNewestLayoutCandidate({ resolvedRoot, layoutFile, watchDownloads, downloadsDir }) {
+  const candidates = [];
+
+  const localLayout = layoutFile ? path.resolve(layoutFile) : path.join(resolvedRoot, 'layout.json');
+  try {
+    const st = fs.statSync(localLayout);
+    if (st.isFile()) {
+      candidates.push({ filePath: localLayout, mtimeMs: st.mtimeMs });
+    }
+  } catch {}
+
+  const dlDir = downloadsDir ? path.resolve(downloadsDir) : (watchDownloads ? path.join(os.homedir(), 'Downloads') : null);
+  if (dlDir) {
+    try {
+      for (const entry of fs.readdirSync(dlDir, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        if (!/^obs-virtual-deck.*\.json$/i.test(entry.name)) continue;
+        const full = path.join(dlDir, entry.name);
+        try {
+          const st = fs.statSync(full);
+          if (st.isFile()) {
+            candidates.push({ filePath: full, mtimeMs: st.mtimeMs });
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates[0];
+}
+
+export function resolveDynamicLayout(options) {
+  const hit = findNewestLayoutCandidate(options);
+  if (!hit) {
+    return { available: false, version: null, source: null, updatedAt: null };
+  }
+  try {
+    const raw = fs.readFileSync(hit.filePath, 'utf8');
+    const scrubbed = scrubLayoutText(raw);
+    if (!scrubbed) {
+      return { available: false, version: null, source: null, updatedAt: null };
+    }
+    return {
+      available: true,
+      version: scrubbed.etag,
+      etag: scrubbed.etag,
+      text: scrubbed.text,
+      source: path.basename(hit.filePath),
+      updatedAt: Math.round(hit.mtimeMs),
+    };
+  } catch {
+    return { available: false, version: null, source: null, updatedAt: null };
+  }
+}
+
+export function createLanHelper({
+  rootDir,
+  port = 0,
+  obsPort = 4455,
+  layoutFile = null,
+  watchDownloads = false,
+  downloadsDir = null,
+} = {}) {
   const resolvedRoot = path.resolve(rootDir || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
+  const layoutOpts = { resolvedRoot, layoutFile, watchDownloads, downloadsDir };
 
   const server = http.createServer((req, res) => {
     // Zero-backend file server: only GET and HEAD
@@ -125,6 +211,54 @@ export function createLanHelper({ rootDir, port = 0, obsPort = 4455 } = {}) {
     } catch {
       res.writeHead(400, { 'Content-Type': 'text/plain' });
       res.end('Bad Request');
+      return;
+    }
+
+    if (filePath === '/layout-version') {
+      const info = resolveDynamicLayout(layoutOpts);
+      const body = JSON.stringify({
+        available: info.available,
+        version: info.version,
+        source: info.source,
+        updatedAt: info.updatedAt,
+      });
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Length': Buffer.byteLength(body, 'utf8'),
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache',
+      });
+      if (req.method === 'HEAD') res.end();
+      else res.end(body);
+      return;
+    }
+
+    if (filePath === '/layout.json') {
+      const info = resolveDynamicLayout(layoutOpts);
+      if (!info.available) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not Found');
+        return;
+      }
+      if (req.headers['if-none-match'] === info.etag) {
+        res.writeHead(304, {
+          ETag: info.etag,
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'no-cache',
+        });
+        res.end();
+        return;
+      }
+      const bytes = Buffer.from(info.text, 'utf8');
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Length': bytes.length,
+        ETag: info.etag,
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache',
+      });
+      if (req.method === 'HEAD') res.end();
+      else res.end(bytes);
       return;
     }
 
@@ -189,8 +323,8 @@ export function createLanHelper({ rootDir, port = 0, obsPort = 4455 } = {}) {
     server.listen(port, () => {
       const actualPort = server.address().port;
       const addresses = getLanAddresses();
-      const hasLayout = fs.existsSync(path.join(resolvedRoot, 'layout.json'));
-      const phoneUrls = formatPhoneUrls(addresses, actualPort, obsPort, hasLayout ? 'layout.json' : '');
+      const layoutInfo = resolveDynamicLayout(layoutOpts);
+      const phoneUrls = formatPhoneUrls(addresses, actualPort, obsPort, layoutInfo.available ? 'layout.json' : '');
       resolve({
         server,
         port: actualPort,
@@ -198,6 +332,15 @@ export function createLanHelper({ rootDir, port = 0, obsPort = 4455 } = {}) {
         rootDir: resolvedRoot,
         addresses,
         phoneUrls,
+        getLayoutInfo: () => {
+          const info = resolveDynamicLayout(layoutOpts);
+          return {
+            available: info.available,
+            version: info.version,
+            source: info.source,
+            updatedAt: info.updatedAt,
+          };
+        },
         close: () => new Promise((r) => server.close(r)),
       });
     });
@@ -210,6 +353,7 @@ function parseCliArgs() {
   let obsPort = process.env.OBS_PORT != null ? Number(process.env.OBS_PORT) : 4455;
   let obsPortExplicit = process.env.OBS_PORT != null;
   let rootDir = null;
+  let downloadsDir = null;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -224,16 +368,18 @@ function parseCliArgs() {
       if (!Number.isNaN(p)) { obsPort = p; obsPortExplicit = true; }
     } else if (arg.startsWith('--dir=')) {
       rootDir = arg.slice(6);
+    } else if (arg.startsWith('--downloads-dir=')) {
+      downloadsDir = arg.slice(16);
     }
   }
 
-  return { port, obsPort, obsPortExplicit, rootDir };
+  return { port, obsPort, obsPortExplicit, rootDir, downloadsDir };
 }
 
 // When run directly from CLI
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) {
-  const { port, obsPort: configuredObsPort, obsPortExplicit, rootDir } = parseCliArgs();
+  const { port, obsPort: configuredObsPort, obsPortExplicit, rootDir, downloadsDir } = parseCliArgs();
   let obsPort = configuredObsPort;
   let obsNote = '';
   if (!obsPortExplicit) {
@@ -241,7 +387,7 @@ if (isMain) {
     obsPort = det.port;
     obsNote = det.found ? ' (detected from running OBS)' : ' (OBS not found: start OBS and enable Tools > WebSocket Server Settings; using the default)';
   }
-  createLanHelper({ rootDir, port, obsPort })
+  createLanHelper({ rootDir, port, obsPort, watchDownloads: true, downloadsDir })
     .then((helper) => {
       console.log('============================================================');
       console.log('  OpenDeck LAN Helper (Phone Deck)');
