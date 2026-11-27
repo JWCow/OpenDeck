@@ -453,6 +453,7 @@
       el.addEventListener('dragstart', (e) => {
         if (!Deck.editMode) { e.preventDefault(); return; }
         Deck.setDragState({ dragIdx: i, dragSourcePageId: Deck.getActivePage().id });
+        Deck.machines?.workspace?.send('DRAG_START', { kind: 'pad', idx: i });
         if (e.dataTransfer) {
           e.dataTransfer.effectAllowed = 'move';
           e.dataTransfer.setData('text/plain', String(i));
@@ -463,6 +464,7 @@
         const { dragIdx } = Deck.getDragState();
         if (dragIdx !== null) Deck.setDragState({ justDroppedAt: Date.now() });
         Deck.setDragState({ dragIdx: null, dragSourcePageId: '' });
+        Deck.machines?.workspace?.send('DRAG_END');
         Deck.clearDragHighlights();
       });
       el.addEventListener('dragover', (e) => {
@@ -480,6 +482,7 @@
       el.addEventListener('drop', (e) => {
         e.preventDefault();
         Deck.clearDragHighlights();
+        Deck.machines?.workspace?.send('DRAG_END');
         if (!Deck.editMode) return;
         const activePage = Deck.getActivePage();
         const pads = activePage.pads;
@@ -541,10 +544,12 @@
     if (!el || !page) return;
     i = idx;
     const rt = Deck.getPadRuntime(i, page.id);
+    const padState = rt.state || 'idle';
     const active = Deck.isPadActive(p);
     const isRunning = Boolean(rt.running);
     const isArmed = Boolean(Deck.isPadArmed && Deck.isPadArmed(i, page.id));
     const isHeld = Boolean(Deck.isPadHeld && Deck.isPadHeld(i, page.id));
+    const isBusy = Boolean(rt.busy);
     const isHoldPad = Boolean(p.hold && Deck.HOLD_TYPES && Deck.HOLD_TYPES.has(p.type));
     const isFullFace = Boolean(p.image && p.imageFit === 'fill');
     const isDragOver = el.classList.contains('drag-over');
@@ -571,11 +576,13 @@
       page.cols,
       i,
       p.type,
+      padState,
       active ? 1 : 0,
       ariaPressed,
       isRunning ? 1 : 0,
       isArmed ? 1 : 0,
       isHeld ? 1 : 0,
+      isBusy ? 1 : 0,
       isHoldPad ? 1 : 0,
       isFullFace ? 1 : 0,
       isDragOver ? 1 : 0,
@@ -607,6 +614,7 @@
       + (isRunning ? ' running' : '')
       + (isArmed ? ' armed' : '')
       + (isHeld ? ' held' : '')
+      + (isBusy ? ' busy' : '')
       + (isHoldPad ? ' hold-pad' : '')
       + (isFullFace ? ' full-face' : '')
       + (!isFullFace && p.color && p.type !== 'none' ? ' has-color' : '')
@@ -614,6 +622,9 @@
       + (alertLvl === 'warn' ? ' warn' : alertLvl === 'crit' ? ' crit' : '')
       + (isDragOver ? ' drag-over' : '')
       + (isDraggingEl ? ' dragging' : '');
+    el.dataset.padState = padState;
+    if (isBusy) el.setAttribute('aria-busy', 'true');
+    else el.removeAttribute('aria-busy');
     if (ariaPressed) el.setAttribute('aria-pressed', ariaPressed);
     else el.removeAttribute('aria-pressed');
     if (isFullFace) {

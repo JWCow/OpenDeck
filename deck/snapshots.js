@@ -15,6 +15,39 @@
   let debounceTimer = null;
   let isAvailable = true;
 
+  const snapshotMachine = Deck.createMachine({
+    id: 'snapshots',
+    initial: 'checking',
+    context: { availability: 'checking', saveCycle: 'idle' },
+    transitions: {
+      '*': {
+        SET_AVAILABLE: {
+          target: 'available',
+          action: (ctx) => { ctx.availability = 'available'; },
+        },
+        SET_UNAVAILABLE: {
+          target: 'unavailable',
+          action: (ctx) => { ctx.availability = 'unavailable'; ctx.saveCycle = 'idle'; },
+        },
+        SCHEDULE: {
+          target: 'available',
+          guard: (ctx) => ctx.availability === 'available',
+          action: (ctx) => { ctx.saveCycle = 'scheduled'; },
+        },
+        SAVE_START: {
+          target: 'available',
+          guard: (ctx) => ctx.availability === 'available',
+          action: (ctx) => { ctx.saveCycle = 'saving'; },
+        },
+        SAVE_DONE: {
+          target: 'available',
+          guard: (ctx) => ctx.availability === 'available',
+          action: (ctx) => { ctx.saveCycle = 'idle'; },
+        },
+      },
+    },
+  });
+
   function nextTimestamp() {
     let now = Date.now();
     if (now <= lastTimestamp) {
@@ -51,6 +84,7 @@
   function setSnapshotsAvailable(avail) {
     isAvailable = Boolean(avail);
     Deck.snapshotsAvailable = isAvailable;
+    snapshotMachine.send(isAvailable ? 'SET_AVAILABLE' : 'SET_UNAVAILABLE');
     const btn = $('btn-snapshots');
     if (btn) btn.hidden = !isAvailable;
     const dlg = $('snapshots-dlg');
@@ -129,9 +163,12 @@
     }
 
     try {
+      snapshotMachine.send('SAVE_START');
       const saved = await putSnapshot(snapshot);
+      snapshotMachine.send('SAVE_DONE');
       return saved;
     } catch (err) {
+      snapshotMachine.send('SAVE_DONE');
       console.warn('Failed to save snapshot:', err);
       Deck.setMsg?.('No snapshot was saved');
       return null;
@@ -305,6 +342,7 @@
   function scheduleDebouncedSnapshot() {
     if (!isAvailable) return;
     if (debounceTimer) clearTimeout(debounceTimer);
+    snapshotMachine.send('SCHEDULE');
     const delay = Deck.SNAPSHOT_DEBOUNCE_MS ?? DEFAULT_DEBOUNCE_MS;
     debounceTimer = setTimeout(() => {
       debounceTimer = null;

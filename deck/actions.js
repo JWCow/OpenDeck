@@ -16,6 +16,51 @@
     return `${pageId}:${idx}`;
   }
 
+  function resolvePadState(key) {
+    if (Deck.activeMacros.has(key)) return 'macro_running';
+    if (Deck.activeAutoOffs.has(key)) return 'auto_off';
+    if (Deck.heldPads && Deck.heldPads.has(key)) return 'held';
+    if (armedPads.has(key)) return 'armed';
+    if (busyPads.has(key)) return 'busy';
+    return 'idle';
+  }
+
+  function syncPadDomState(key, state) {
+    if (typeof document === 'undefined') return;
+    const sep = key.lastIndexOf(':');
+    if (sep < 0) return;
+    const pageId = key.slice(0, sep);
+    const idxStr = key.slice(sep + 1);
+    if (Deck.cfg?.activePageId !== pageId) return;
+    const grid = Deck.$ ? Deck.$('grid') : document.getElementById('grid');
+    const btn = grid?.querySelector(`.pad[data-idx="${idxStr}"]`);
+    if (!btn) return;
+    btn.dataset.padState = state;
+    btn.classList.toggle('busy', state === 'busy');
+    if (state === 'busy') btn.setAttribute('aria-busy', 'true');
+    else btn.removeAttribute('aria-busy');
+  }
+
+  function logPadTransition(key, from, to, event) {
+    if (from === to) return;
+    if (typeof Deck.recordPadTransition === 'function') {
+      Deck.recordPadTransition({ key, from, to, event });
+    }
+    syncPadDomState(key, to);
+  }
+
+  function addBusy(key, event = 'EXEC_START') {
+    const prev = resolvePadState(key);
+    busyPads.add(key);
+    logPadTransition(key, prev, resolvePadState(key), event);
+  }
+
+  function removeBusy(key, event = 'EXEC_END') {
+    const prev = resolvePadState(key);
+    busyPads.delete(key);
+    logPadTransition(key, prev, resolvePadState(key), event);
+  }
+
   function isPadActive(p) {
     const { obs, cfg } = Deck;
     if (!p || p.type === 'none') return false;
@@ -720,10 +765,12 @@
   function abortAutoOff(key) {
     const t = Deck.activeAutoOffs.get(key);
     if (!t) return false;
+    const prev = resolvePadState(key);
     t.aborted = true;
     clearTimeout(t.waitTimer);
     clearInterval(t.tickTimer);
     Deck.activeAutoOffs.delete(key);
+    logPadTransition(key, prev, resolvePadState(key), 'AUTO_OFF_ABORT');
     return true;
   }
 
@@ -732,6 +779,7 @@
     const ms = Math.max(1, Number(pad.autoOffMs) || 0);
     const reverse = buildAutoOffReverse(pad, stateInfo.prevState);
     if (!reverse) return;
+    const prev = resolvePadState(key);
     const ctx = {
       pageId,
       idx,
@@ -744,11 +792,16 @@
       tickTimer: null,
     };
     Deck.activeAutoOffs.set(key, ctx);
+    logPadTransition(key, prev, resolvePadState(key), 'AUTO_OFF_START');
     Deck.updateMacroTicks();
     ctx.tickTimer = setInterval(() => Deck.updateMacroTicks(), 200);
     ctx.waitTimer = setTimeout(async () => {
       clearInterval(ctx.tickTimer);
-      if (Deck.activeAutoOffs.get(key) === ctx) Deck.activeAutoOffs.delete(key);
+      if (Deck.activeAutoOffs.get(key) === ctx) {
+        const beforeEnd = resolvePadState(key);
+        Deck.activeAutoOffs.delete(key);
+        logPadTransition(key, beforeEnd, resolvePadState(key), 'AUTO_OFF_FIRE');
+      }
       if (ctx.aborted) return;
       if (['volume', 'scene', 'text'].includes(pad.type) && !isStateStillOwnedByPad(pad.type, pad, ctx.expectedState)) {
         Deck.setMsg(`Auto-off skipped: ${pad.label || pad.sceneName || pad.inputName || pad.type} changed in OBS`);
@@ -782,11 +835,13 @@
   function abortMacro(key, opts = {}) {
     const m = Deck.activeMacros.get(key);
     if (!m) return opts.collectCleanup ? [] : false;
+    const prev = resolvePadState(key);
     m.aborted = true;
     clearTimeout(m.waitTimer);
     clearInterval(m.tickTimer);
     if (m.resolveWait) m.resolveWait();
     Deck.activeMacros.delete(key);
+    logPadTransition(key, prev, resolvePadState(key), 'MACRO_ABORT');
     if (opts.collectCleanup) {
       return (m.pad?.cleanupOnAbort && m.hasFired) ? getMacroTrailingCleanupSteps(m.pad) : [];
     }
@@ -815,8 +870,10 @@
   function disarmPad(key) {
     const armed = armedPads.get(key);
     if (!armed) return false;
+    const prev = resolvePadState(key);
     clearTimeout(armed.timer);
     armedPads.delete(key);
+    logPadTransition(key, prev, resolvePadState(key), 'DISARM');
     const [pageId, idxStr] = key.split(':');
     if (Deck.cfg?.activePageId === pageId) {
       const grid = Deck.$ ? Deck.$('grid') : document.getElementById('grid');
@@ -831,6 +888,7 @@
   function armPad(pageId, idx, p) {
     const key = timerKey(pageId, idx);
     disarmPad(key);
+    const prev = resolvePadState(key);
     const ctx = {
       pageId,
       idx,
@@ -840,6 +898,7 @@
       }, 2000),
     };
     armedPads.set(key, ctx);
+    logPadTransition(key, prev, resolvePadState(key), 'ARM');
     if (Deck.cfg?.activePageId === pageId) {
       const grid = Deck.$ ? Deck.$('grid') : document.getElementById('grid');
       if (grid) {
@@ -949,6 +1008,7 @@
       restoreAction = origState ? { type: 'scene', mode: 'named', sceneName: origState } : null;
     }
 
+    const prev = resolvePadState(key);
     const entry = {
       pageId: page.id,
       idx,
@@ -959,12 +1019,13 @@
       pressPromise: null,
     };
     Deck.heldPads.set(key, entry);
+    logPadTransition(key, prev, resolvePadState(key), 'HOLD_PRESS');
     if (Deck.cfg?.activePageId === page.id) {
       Deck.renderPad(idx, page);
     }
 
     try {
-      busyPads.add(key);
+      addBusy(key, 'HOLD_EXEC');
       entry.pressPromise = execAction(p);
       await entry.pressPromise;
       if (p.type === 'volume' && p.inputName) {
@@ -975,14 +1036,16 @@
     } catch (e) {
       Deck.setMsg?.(e.message);
     } finally {
-      busyPads.delete(key);
+      removeBusy(key, 'HOLD_EXEC_DONE');
     }
   }
 
   async function releaseHoldKey(key) {
     const entry = Deck.heldPads.get(key);
     if (!entry) return;
+    const prev = resolvePadState(key);
     Deck.heldPads.delete(key);
+    logPadTransition(key, prev, resolvePadState(key), 'HOLD_RELEASE');
 
     const page = Deck.cfg.pages.find((d) => d.id === entry.pageId) || Deck.getActivePage();
     if (Deck.cfg?.activePageId === entry.pageId) {
@@ -1000,14 +1063,14 @@
       }
       try {
         if (Deck.obs?.ws && Deck.obs.ws.readyState === 1) {
-          busyPads.add(key);
+          addBusy(key, 'HOLD_RESTORE');
           await execAction(entry.restoreAction);
         } else {
           pendingHoldRestores.push(entry);
         }
       } catch {}
       finally {
-        busyPads.delete(key);
+        removeBusy(key, 'HOLD_RESTORE_DONE');
       }
     }
   }
@@ -1098,14 +1161,30 @@
 
   Deck.getPadRuntime = (idx, pageId = Deck.cfg.activePageId) => {
     const key = timerKey(pageId, idx);
+    const state = resolvePadState(key);
+    const busy = busyPads.has(key);
+    const held = Boolean(Deck.heldPads && Deck.heldPads.has(key));
     const macro = Deck.activeMacros.get(key);
-    if (macro) return { running: true, kind: 'macro', endsAt: macro.endsAt || 0 };
+    if (macro) return { state, running: true, held, busy, kind: 'macro', endsAt: macro.endsAt || 0 };
     const autoOff = Deck.activeAutoOffs.get(key);
-    if (autoOff) return { running: true, kind: 'autoOff', endsAt: autoOff.endsAt || 0 };
+    if (autoOff) return { state, running: true, held, busy, kind: 'autoOff', endsAt: autoOff.endsAt || 0 };
     const armed = armedPads.get(key);
-    if (armed) return { running: false, armed: true, kind: 'armed', endsAt: armed.expiresAt || 0 };
-    return { running: false, kind: null, endsAt: 0 };
+    if (armed) return { state, running: false, armed: true, held, busy, kind: 'armed', endsAt: armed.expiresAt || 0 };
+    if (held) return { state, running: false, held: true, busy, kind: 'held', endsAt: 0 };
+    if (busy) return { state, running: false, held: false, busy: true, kind: 'busy', endsAt: 0 };
+    return { state, running: false, held: false, busy: false, kind: null, endsAt: 0 };
   };
+
+  if (typeof Deck.registerPadStateReader === 'function') {
+    Deck.registerPadStateReader(() => ({
+      busy: [...busyPads],
+      armed: [...armedPads.keys()],
+      held: Deck.heldPads ? [...Deck.heldPads.keys()] : [],
+      autoOff: [...Deck.activeAutoOffs.keys()],
+      macro: [...Deck.activeMacros.keys()],
+      pendingHoldRestores: pendingHoldRestores.length,
+    }));
+  }
 
   Deck.getActivePageTicks = () => {
     const activeId = Deck.cfg.activePageId;
@@ -1128,7 +1207,7 @@
       let ranCleanup = 0;
       const errs = [];
       if (cleanupSteps.length) {
-        busyPads.add(key);
+        addBusy(key, 'MACRO_CLEANUP');
         try {
           for (const st of cleanupSteps) {
             try {
@@ -1139,7 +1218,7 @@
             }
           }
         } finally {
-          busyPads.delete(key);
+          removeBusy(key, 'MACRO_CLEANUP_DONE');
         }
       }
       if (cleanupSteps.length) {
@@ -1155,8 +1234,10 @@
     }
     const steps = pad.steps || [];
     if (!steps.length) return;
+    const prev = resolvePadState(key);
     const ctx = { pageId, idx, pad, hasFired: false, aborted: false, waitTimer: null, tickTimer: null, endsAt: 0, resolveWait: null };
     activeMacros.set(key, ctx);
+    logPadTransition(key, prev, resolvePadState(key), 'MACRO_START');
     Deck.renderGrid();
     try {
       for (const st of steps) {
@@ -1220,7 +1301,11 @@
       clearInterval(ctx.tickTimer);
       clearTimeout(ctx.waitTimer);
       if (ctx.resolveWait) ctx.resolveWait();
-      if (activeMacros.get(key) === ctx) activeMacros.delete(key);
+      if (activeMacros.get(key) === ctx) {
+        const beforeEnd = resolvePadState(key);
+        activeMacros.delete(key);
+        logPadTransition(key, beforeEnd, resolvePadState(key), 'MACRO_DONE');
+      }
       Deck.renderGrid();
     }
   }
@@ -1326,14 +1411,14 @@
         const rev = runningCtx?.reverse || buildAutoOffReverse(p);
         if (rev) {
           try {
-            busyPads.add(key);
+            addBusy(key, 'AUTO_OFF_CANCEL_REVERT');
             await execAction(rev);
             Deck.setMsg(`Cancelled & turned off: ${describePad(p)}`);
             return;
           } catch (e) {
             Deck.setMsg(e.message);
           } finally {
-            busyPads.delete(key);
+            removeBusy(key, 'AUTO_OFF_CANCEL_DONE');
           }
         }
       }
@@ -1370,7 +1455,7 @@
       }
     }
     try {
-      busyPads.add(key);
+      addBusy(key, 'PAD_CLICK_EXEC');
       if (Deck.obs) Deck.obs.lastTextReadFromFileWarn = '';
       await execAction(p);
       if (isTurnOnAction(p, wasActive)) {
@@ -1388,7 +1473,7 @@
     } catch (e) {
       Deck.setMsg(e.message);
     } finally {
-      busyPads.delete(key);
+      removeBusy(key, 'PAD_CLICK_DONE');
     }
   }
 

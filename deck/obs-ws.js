@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.3.5';
+  const VERSION = '2.3.6';
   const STORAGE_KEY = 'opendeck_config';
   const LEGACY_STORAGE_KEYS = ['obs_virtual_deck_v2', 'obs_deck_config_v2', 'obs_virtual_deck_v1'];
   let initialSaveFailed = false;
@@ -661,7 +661,7 @@
     return pages;
   }
 
-  const Deck = {
+  const Deck = Object.assign(window.Deck || {}, {
     VERSION,
     PROBE_PORTS,
     PAD_COUNT: DEFAULT_COLS * DEFAULT_ROWS,
@@ -805,7 +805,7 @@
     scheduleRenderGrid: () => Deck.renderGrid(),
     updateMacroTicks: () => {},
     updateStatsPads: () => Deck.renderGrid(),
-  };
+  });
 
   Deck.saveCfg = () => {
     let ok = false;
@@ -2655,19 +2655,25 @@
   Deck.syncObsState = () => {
     const { obs } = Deck;
     if (obs.activeSync) {
+      connectionMachine.send('SYNC_QUEUE');
       if (!obs.queuedSync) {
         obs.queuedSync = obs.activeSync
           .catch(() => {})
           .then(() => {
             obs.queuedSync = null;
+            connectionMachine.send('SYNC_DEQUEUE');
             if (!obs.ws || obs.ws.readyState !== 1) return;
             return Deck.syncObsState();
           });
       }
       return obs.queuedSync;
     }
+    connectionMachine.send('SYNC_START');
     obs.activeSync = performSync().finally(() => {
       obs.activeSync = null;
+      if (!obs.queuedSync && obs.ws && obs.ws.readyState === 1 && obs.status === 'ok') {
+        connectionMachine.send('SYNC_DONE');
+      }
     });
     return obs.activeSync;
   };
@@ -2979,6 +2985,115 @@
     4011: { name: 'Session Invalidated', unrecoverable: true },
   };
 
+  function syncConnectionDom(state) {
+    if (typeof document === 'undefined') return;
+    document.documentElement.dataset.connState = state;
+    const discBtn = $('btn-ws-disconnect');
+    if (discBtn) discBtn.disabled = (state === 'disconnected' || state === 'auth_failed' || state === 'error');
+    const syncBtn = $('btn-sync');
+    if (syncBtn) {
+      syncBtn.disabled = (state !== 'connected' && state !== 'syncing');
+      syncBtn.setAttribute('aria-busy', state === 'syncing' ? 'true' : 'false');
+    }
+    const connBtn = $('btn-ws-connect');
+    if (connBtn) {
+      const busy = state === 'connecting' || state === 'authenticating' || state === 'probing';
+      connBtn.setAttribute('aria-busy', busy ? 'true' : 'false');
+      connBtn.title = state === 'reconnecting'
+        ? 'Retry OBS WebSocket connection now'
+        : (state === 'connected' || state === 'syncing' ? 'Reconnect to OBS WebSocket' : 'Connect to OBS WebSocket');
+    }
+  }
+
+  const connectionMachine = Deck.createMachine({
+    id: 'connection',
+    initial: 'disconnected',
+    context: {
+      nextRetrySec: 0,
+      lastCloseCode: null,
+      lastCloseReason: '',
+      syncQueued: false,
+    },
+    transitions: {
+      '*': {
+        CONNECT: {
+          target: 'connecting',
+          action: (ctx) => {
+            ctx.nextRetrySec = 0;
+            ctx.lastCloseCode = null;
+            ctx.lastCloseReason = '';
+            ctx.syncQueued = false;
+          },
+        },
+        DISCONNECT: {
+          target: 'disconnected',
+          action: (ctx) => {
+            ctx.nextRetrySec = 0;
+            ctx.syncQueued = false;
+          },
+        },
+        AUTH_FAILED: {
+          target: 'auth_failed',
+          action: (ctx, payload) => {
+            ctx.nextRetrySec = 0;
+            ctx.lastCloseCode = payload?.code ?? 4009;
+            ctx.lastCloseReason = payload?.reason || 'Auth Failed';
+            ctx.syncQueued = false;
+          },
+        },
+        FATAL_ERROR: {
+          target: 'error',
+          action: (ctx, payload) => {
+            ctx.nextRetrySec = 0;
+            ctx.lastCloseCode = payload?.code ?? null;
+            ctx.lastCloseReason = payload?.reason || 'Error';
+            ctx.syncQueued = false;
+          },
+        },
+        RECONNECT_WAIT: {
+          target: 'reconnecting',
+          action: (ctx, payload) => {
+            ctx.nextRetrySec = Number(payload?.delaySec) || 0;
+            ctx.lastCloseCode = payload?.code ?? null;
+            ctx.lastCloseReason = payload?.reason || '';
+            ctx.syncQueued = false;
+          },
+        },
+      },
+      connecting: {
+        HELLO: 'authenticating',
+        PROBE_START: 'probing',
+        IDENTIFIED: 'syncing',
+      },
+      authenticating: {
+        IDENTIFIED: 'syncing',
+      },
+      probing: {
+        PROBE_FOUND: 'connecting',
+      },
+      syncing: {
+        SYNC_QUEUE: { target: 'syncing', action: (ctx) => { ctx.syncQueued = true; } },
+        SYNC_DEQUEUE: { target: 'syncing', action: (ctx) => { ctx.syncQueued = false; } },
+        SYNC_DONE: { target: 'connected', action: (ctx) => { ctx.syncQueued = false; } },
+      },
+      connected: {
+        SYNC_START: { target: 'syncing', action: (ctx) => { ctx.syncQueued = false; } },
+      },
+      reconnecting: {
+        RECONNECT_TICK: {
+          target: 'reconnecting',
+          action: (ctx, payload) => {
+            ctx.nextRetrySec = Math.max(0, Number(payload?.remaining) || 0);
+          },
+        },
+      },
+    },
+    onTransition: ({ state }) => {
+      syncConnectionDom(state);
+    },
+  });
+  syncConnectionDom(connectionMachine.state);
+
   function clearConnectionRuntime(rejectReason) {
     const { obs } = Deck;
     if (obs.statsTimer) {
@@ -3031,6 +3146,7 @@
     if (obs.ws) { const w = obs.ws; obs.ws = null; try { w.close(); } catch {} }
     if (manual) {
       obs.retryCount = 0;
+      connectionMachine.send('DISCONNECT');
       Deck.setConn('bad', 'Disconnected');
       Deck.setMsg('Disconnected');
     }
@@ -3053,6 +3169,7 @@
     const entry = code ? CLOSE_CODES[code] : null;
     const reasonText = ev?.reason || entry?.name || (code ? `Code ${code}` : 'Connection dropped');
     let remaining = delaySec;
+    connectionMachine.send('RECONNECT_WAIT', { delaySec, code: code ?? null, reason: reasonText });
 
     const host = obs.currentHost || cfg?.ws?.host || '';
     const isNonLocal = host && !isLocalHost(host);
@@ -3067,6 +3184,7 @@
     obs.reconnectCountdown = setInterval(() => {
       remaining -= 1;
       if (remaining > 0) {
+        connectionMachine.send('RECONNECT_TICK', { remaining });
         updateStatus();
       } else {
         clearInterval(obs.reconnectCountdown);
@@ -3135,10 +3253,16 @@
     if (keepManualPort) cfg.ws.manualPort = true;
     if (keepManualHost) cfg.ws.manualHost = true;
     Deck.saveCfg();
+    connectionMachine.send('CONNECT', { host, port, isBoot });
     Deck.setConn('wait', 'Connecting…');
 
     let ws;
-    try { ws = new WebSocket(url); } catch (e) { Deck.setConn('bad', 'Bad WS URL'); Deck.setMsg(e.message); return; }
+    try { ws = new WebSocket(url); } catch (e) {
+      connectionMachine.send('FATAL_ERROR', { reason: e.message || 'Bad WS URL' });
+      Deck.setConn('bad', 'Bad WS URL');
+      Deck.setMsg(e.message);
+      return;
+    }
     obs.ws = ws;
     let opened = false;
     ws.onopen = () => { opened = true; };
@@ -3153,6 +3277,7 @@
       if (obs.manualClose) return;
 
       if (ev.code === 4009) {
+        connectionMachine.send('AUTH_FAILED', { code: 4009, reason: ev.reason || 'OBS WebSocket password rejected' });
         Deck.setConn('bad', 'Auth Failed');
         Deck.setMsg('OBS WebSocket password rejected');
         $('conn-bar')?.classList.add('open');
@@ -3165,6 +3290,7 @@
         const isNonLocal = host && !isLocalHost(host);
         const lanNote = isNonLocal ? ' · OBS WebSocket must be reachable on the LAN' : '';
         const detail = ev.reason ? `${ev.reason} (${ev.code})` : `${name} (${ev.code})`;
+        connectionMachine.send('FATAL_ERROR', { code: ev.code, reason: name });
         Deck.setConn('bad', name);
         Deck.setMsg(`${detail}${lanNote} — retries stopped`);
         return;
@@ -3173,12 +3299,14 @@
       if (!opened && isBoot && !obs.hasProbedOnBoot
         && isLocalHost(host) && port === 4455 && !cfg.ws.manualPort && !cfg.ws.manualHost && !urlPort && !urlHost) {
         obs.hasProbedOnBoot = true;
+        connectionMachine.send('PROBE_START');
         Deck.setConn('wait', 'Scanning OBS ports…');
         Deck.setMsg('Probing local OBS WebSocket ports…');
         const candidates = Deck.PROBE_PORTS.filter((p) => p !== port);
         const foundPort = await Deck.probeObsPorts(host, candidates);
         if (obs.manualClose || obs.connectGen !== myGen) return;
         if (foundPort) {
+          connectionMachine.send('PROBE_FOUND', { port: foundPort });
           cfg.ws.port = foundPort;
           if ($('ws-port')) $('ws-port').value = foundPort;
           Deck.saveCfg();
@@ -3198,6 +3326,8 @@
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
       if (msg.op === 0) {
+        connectionMachine.send('HELLO');
+        Deck.setConn('wait', 'Authenticating…');
         obs.eventSubscriptions = BASE_EVENT_SUBS;
         const d = { rpcVersion: 1, eventSubscriptions: BASE_EVENT_SUBS };
         if (msg.d?.authentication) {
@@ -3207,6 +3337,7 @@
         ws.send(JSON.stringify({ op: 1, d }));
       } else if (msg.op === 2) {
         obs.retryCount = 0;
+        connectionMachine.send('IDENTIFIED');
         Deck.setConn('ok', 'Connected');
         Deck.setMsg(`Connected to ${url}`);
         await Deck.syncObsState();

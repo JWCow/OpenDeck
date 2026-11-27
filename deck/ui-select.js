@@ -6,7 +6,7 @@
 
   let selectedPads = new Set();
   let lastSelectedIdx = null;
-  let selectMode = false;
+  const isSelectMode = () => Boolean(Deck.machines?.workspace?.context?.selectActive);
 
   function clearSelection() {
     selectedPads.clear();
@@ -15,6 +15,7 @@
   }
 
   function updateSelectionUi() {
+    const selectMode = isSelectMode();
     const grid = $('grid');
     if (grid) {
       grid.querySelectorAll('.pad').forEach((btn) => {
@@ -25,7 +26,10 @@
     const countEl = $('sel-count');
     if (countEl) countEl.textContent = `${selectedPads.size} selected`;
     const selModeBtn = $('btn-sel-mode');
-    if (selModeBtn) selModeBtn.classList.toggle('on', selectMode);
+    if (selModeBtn) {
+      selModeBtn.classList.toggle('on', selectMode);
+      selModeBtn.setAttribute('aria-pressed', selectMode ? 'true' : 'false');
+    }
 
     const hasSel = selectedPads.size > 0;
     const dupBtn = $('btn-sel-dup');
@@ -65,7 +69,7 @@
       updateSelectionUi();
       return true;
     }
-    if (selectMode) {
+    if (isSelectMode()) {
       if (selectedPads.has(i)) selectedPads.delete(i);
       else selectedPads.add(i);
       lastSelectedIdx = i;
@@ -76,9 +80,10 @@
   }
 
   $('btn-sel-mode')?.addEventListener('click', () => {
-    selectMode = !selectMode;
+    const next = !isSelectMode();
+    Deck.machines?.workspace?.send(next ? 'ENTER_SELECT' : 'EXIT_SELECT');
     updateSelectionUi();
-    Deck.setMsg(selectMode ? 'Select mode: click pads to select / deselect' : 'Select mode off');
+    Deck.setMsg(next ? 'Select mode: click pads to select / deselect' : 'Select mode off');
   });
 
   $('btn-sel-all')?.addEventListener('click', () => {
@@ -132,6 +137,7 @@
         if (!selectedPads.size) return;
         Deck.pushHistory(() => {
           Deck.setPadColors(Array.from(selectedPads), c);
+          Deck.machines?.workspace?.send('CLOSE_POPOVER', { popover: 'color_popover' });
           selPop.hidden = true;
           Deck.setMsg(`Recolored ${selectedPads.size} pad(s)`);
           updateSelectionUi();
@@ -145,6 +151,7 @@
     e.stopPropagation();
     if (!selPop) return;
     const willShow = selPop.hidden;
+    Deck.machines?.workspace?.send(willShow ? 'OPEN_POPOVER' : 'CLOSE_POPOVER', { popover: 'color_popover' });
     selPop.hidden = !willShow;
     if (willShow && window.innerWidth <= 480) {
       const rect = selColorBtn.getBoundingClientRect();
@@ -157,11 +164,15 @@
   });
   document.addEventListener('click', (e) => {
     if (selPop && !selPop.hidden && !e.target.closest('#sel-color-wrap')) {
+      Deck.machines?.workspace?.send('CLOSE_POPOVER', { popover: 'color_popover' });
       selPop.hidden = true;
     }
   });
   $('select-bar')?.addEventListener('scroll', () => {
-    if (selPop && !selPop.hidden) selPop.hidden = true;
+    if (selPop && !selPop.hidden) {
+      Deck.machines?.workspace?.send('CLOSE_POPOVER', { popover: 'color_popover' });
+      selPop.hidden = true;
+    }
   }, { passive: true });
 
   $('btn-sel-clear')?.addEventListener('click', () => {

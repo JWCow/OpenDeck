@@ -123,6 +123,8 @@ function formatPhoneUrls(addresses, httpPort, obsPort, hasLayout) {
 
 function createPhoneHost({ rootDir, preferredPort = DEFAULT_PREFERRED_PORT } = {}) {
   const resolvedRoot = path.resolve(rootDir);
+  let state = 'stopped'; // 'stopped' | 'starting' | 'running' | 'stopping'
+  let pendingTransition = null;
   let server = null;
   let actualPort = 0;
   let currentObsPort = 4455;
@@ -272,8 +274,9 @@ function createPhoneHost({ rootDir, preferredPort = DEFAULT_PREFERRED_PORT } = {
   }
 
   function getStatus() {
-    if (!server || !server.listening) {
+    if (state !== 'running' || !server || !server.listening) {
       return {
+        state,
         running: false,
         port: 0,
         obsPort: currentObsPort,
@@ -288,6 +291,7 @@ function createPhoneHost({ rootDir, preferredPort = DEFAULT_PREFERRED_PORT } = {
     const urls = formatPhoneUrls(addresses, actualPort, currentObsPort, hasLayout);
     const primaryUrl = urls[0] || '';
     return {
+      state,
       running: true,
       port: actualPort,
       obsPort: currentObsPort,
@@ -315,6 +319,9 @@ function createPhoneHost({ rootDir, preferredPort = DEFAULT_PREFERRED_PORT } = {
   }
 
   async function start(layoutJson, obsPort) {
+    if (pendingTransition) {
+      await pendingTransition.catch(() => {});
+    }
     if (obsPort != null) {
       currentObsPort = parseValidPort(obsPort, currentObsPort);
     }
@@ -323,40 +330,64 @@ function createPhoneHost({ rootDir, preferredPort = DEFAULT_PREFERRED_PORT } = {
     }
     addresses = getLanAddresses();
 
-    if (server && server.listening) {
+    if (state === 'running' && server && server.listening) {
       return getStatus();
     }
 
-    try {
-      server = await listenOnPort(preferredPort);
-    } catch (err) {
-      if (preferredPort !== 0 && (err.code === 'EADDRINUSE' || err.code === 'EACCES')) {
-        server = await listenOnPort(0);
-      } else {
+    state = 'starting';
+    pendingTransition = (async () => {
+      try {
+        try {
+          server = await listenOnPort(preferredPort);
+        } catch (err) {
+          if (preferredPort !== 0 && (err.code === 'EADDRINUSE' || err.code === 'EACCES')) {
+            server = await listenOnPort(0);
+          } else {
+            throw err;
+          }
+        }
+        actualPort = server.address().port;
+        state = 'running';
+        return getStatus();
+      } catch (err) {
+        server = null;
+        actualPort = 0;
+        state = 'stopped';
         throw err;
+      } finally {
+        pendingTransition = null;
       }
-    }
-
-    actualPort = server.address().port;
-    return getStatus();
+    })();
+    return pendingTransition;
   }
 
   async function stop() {
-    if (!server) {
+    if (pendingTransition) {
+      await pendingTransition.catch(() => {});
+    }
+    if (state === 'stopped' || !server) {
+      state = 'stopped';
       actualPort = 0;
       return getStatus();
     }
+    state = 'stopping';
     const closing = server;
     server = null;
     actualPort = 0;
-    await new Promise((resolve) => {
+    pendingTransition = new Promise((resolve) => {
       try {
-        closing.close(() => resolve());
+        closing.close(() => {
+          state = 'stopped';
+          pendingTransition = null;
+          resolve(getStatus());
+        });
       } catch {
-        resolve();
+        state = 'stopped';
+        pendingTransition = null;
+        resolve(getStatus());
       }
     });
-    return getStatus();
+    return pendingTransition;
   }
 
   function updateLayout(layoutJson, obsPort) {
