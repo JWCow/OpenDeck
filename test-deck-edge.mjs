@@ -283,7 +283,7 @@ try {
   });
   await page.reload();
   await page.waitForSelector('#grid .pad');
-  console.log('  ✓ v1, v2.0.0 & v2.2.0 -> OpenDeck v2.3.4 lossless localStorage migration');
+  console.log(`  ✓ v1, v2.0.0 & v2.2.0 -> OpenDeck v${PKG.version} lossless localStorage migration`);
 
   // 2. ws://host:port normalization + no-auth connect + dismiss auto-import prompt
   await clickMenuItem(page, '#btn-conn-toggle');
@@ -605,8 +605,12 @@ try {
   assert.deepEqual(pageErrors, [], `unexpected page errors: ${pageErrors.join('; ')}`);
   await page.close();
 
-  // 13. Release build check: npm run build:release produces clean valid ZIPs for OpenDeck v2.3.4
-  assert.equal(PKG.version, '2.3.4', 'package.json version is 2.3.4');
+  // 13. Release build check: npm run build:release produces clean valid ZIPs matching package.json version
+  assert.match(PKG.version, /^\d+\.\d+\.\d+/, 'package.json version is valid semver');
+  const obsWsVer = fs.readFileSync(join(__dirname, 'deck', 'obs-ws.js'), 'utf8').match(/const\s+VERSION\s*=\s*'([^']+)'/)?.[1];
+  const deckHtmlVer = fs.readFileSync(join(__dirname, 'deck.html'), 'utf8').match(/id="version-badge"[^>]*>v([^<]+)</)?.[1];
+  assert.equal(obsWsVer, PKG.version, 'deck/obs-ws.js VERSION matches package.json');
+  assert.equal(deckHtmlVer, PKG.version, 'deck.html #version-badge matches package.json');
   execFileSync(process.execPath, [join(__dirname, 'scripts', 'build-release.mjs')], { cwd: __dirname, stdio: 'pipe' });
   const zipPath = join(__dirname, 'dist', 'opendeck.zip');
   const latestZipPath = join(__dirname, 'dist', 'opendeck-latest.zip');
@@ -3694,10 +3698,10 @@ try {
 
     const pageDesk = await ctxW2.newPage();
     pageDesk.on('pageerror', (e) => pageErrors.push(e.message));
-    await pageDesk.addInitScript((statusObj) => {
+    await pageDesk.addInitScript(({ statusObj, version }) => {
       window.__aotSet = [];
       window.opendeckDesktop = {
-        version: '2.3.4',
+        version,
         platform: 'win32',
         getAlwaysOnTop: async () => false,
         setAlwaysOnTop: async (v) => { window.__aotSet.push(v); return v; },
@@ -3714,7 +3718,7 @@ try {
         updatePhoneHostLayout: async () => statusObj,
         getPhoneHostStatus: async () => statusObj,
       };
-    }, hostStarted);
+    }, { statusObj: hostStarted, version: PKG.version });
     await pageDesk.goto(DECK_URL);
     await pageDesk.waitForSelector('#grid .pad');
 

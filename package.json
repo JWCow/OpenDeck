@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "check": "node scripts/check.mjs",
-    "test": "node test-deck.mjs && node test-deck-edge.mjs",
+    "test": "node test-deck.mjs && node test-deck-edge.mjs && node test-platform.mjs",
+    "version:bump": "node scripts/bump-version.mjs",
     "build:release": "node scripts/build-release.mjs",
     "desktop": "npm --prefix electron start",
     "build:desktop": "npm --prefix electron run build",
