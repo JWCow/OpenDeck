@@ -124,6 +124,9 @@
       panicSteps,
       ws,
     };
+    if (typeof cfg.fallbackPageId === 'string' && cfg.fallbackPageId) {
+      snapshot.fallbackPageId = cfg.fallbackPageId;
+    }
 
     try {
       const saved = await putSnapshot(snapshot);
@@ -155,19 +158,91 @@
     }
   }
 
-  async function restoreSnapshot(idOrTimestamp) {
-    if (!isAvailable) return false;
+  function getSnapshotById(idOrTimestamp) {
     const key = Number(idOrTimestamp) || idOrTimestamp;
+    return openDB().then((db) => new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get(key);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    }));
+  }
+
+  function sanitizeSnapshotExport(item) {
+    const pages = Array.isArray(item.pages) ? item.pages : [];
+    const out = {
+      version: 2,
+      ws: {
+        host: item.ws?.host || '127.0.0.1',
+        port: item.ws?.port || 4455,
+      },
+      activePageId: item.activePageId || pages[0]?.id || 'page-1',
+      pages: pages.map((p, idx) => {
+        const pg = {
+          id: p.id || `page-${idx + 1}`,
+          name: p.name || (idx === 0 ? 'Main' : `Page ${idx + 1}`),
+          cols: p.cols || 8,
+          rows: p.rows || 8,
+          pads: (p.pads || []).map(Deck.normalizePad),
+        };
+        if (p.sceneName) pg.sceneName = String(p.sceneName);
+        if (p.fallback) pg.fallback = true;
+        if (p.isFallback) pg.isFallback = true;
+        return pg;
+      }),
+      panicSteps: Array.isArray(item.panicSteps)
+        ? item.panicSteps.map(Deck.normalizeStep).filter((s) => s.type !== 'none' && s.type !== 'wait')
+        : [],
+    };
+    if (typeof item.fallbackPageId === 'string' && item.fallbackPageId) {
+      out.fallbackPageId = item.fallbackPageId;
+    }
+    return out;
+  }
+
+  async function exportSnapshot(idOrTimestamp) {
+    if (!isAvailable) return false;
     let item = null;
     try {
-      const db = await openDB();
-      item = await new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, 'readonly');
-        const store = tx.objectStore(STORE_NAME);
-        const req = store.get(key);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-      });
+      item = await getSnapshotById(idOrTimestamp);
+    } catch {
+      return false;
+    }
+    if (!item) return false;
+    const out = sanitizeSnapshotExport(item);
+    const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `opendeck-snapshot-${item.timestamp}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    return true;
+  }
+
+  async function restoreSnapshotPage(idOrTimestamp, pageIndex) {
+    if (!isAvailable) return false;
+    let item = null;
+    try {
+      item = await getSnapshotById(idOrTimestamp);
+    } catch {
+      return false;
+    }
+    const targetPage = Array.isArray(item?.pages) ? item.pages[Number(pageIndex)] : null;
+    if (!targetPage) return false;
+    const cloned = JSON.parse(JSON.stringify(targetPage));
+    if (typeof Deck.mergePages === 'function') {
+      await Deck.mergePages({ version: 2, pages: [cloned] }, `Snapshot (${cloned.name || 'Page'})`);
+      return true;
+    }
+    return false;
+  }
+
+  async function restoreSnapshot(idOrTimestamp) {
+    if (!isAvailable) return false;
+    let item = null;
+    try {
+      item = await getSnapshotById(idOrTimestamp);
     } catch {
       return false;
     }
@@ -185,19 +260,28 @@
 
     const incomingPages = Array.isArray(item.pages) ? item.pages : [];
     const normalizedPages = incomingPages.map((p, idx) => {
-      return {
+      const pg = {
         id: p.id || `page-${idx + 1}`,
         name: p.name || (idx === 0 ? 'Main' : `Page ${idx + 1}`),
         cols: p.cols || 8,
         rows: p.rows || 8,
         pads: (p.pads || []).map(Deck.normalizePad),
       };
+      if (p.sceneName) pg.sceneName = String(p.sceneName);
+      if (p.fallback) pg.fallback = true;
+      if (p.isFallback) pg.isFallback = true;
+      return pg;
     });
 
     Deck.cfg.pages = normalizedPages;
     Deck.cfg.activePageId = item.activePageId && normalizedPages.some((p) => p.id === item.activePageId)
       ? item.activePageId
       : (normalizedPages[0]?.id || 'page-1');
+    if (item.fallbackPageId && normalizedPages.some((p) => p.id === item.fallbackPageId)) {
+      Deck.cfg.fallbackPageId = item.fallbackPageId;
+    } else {
+      delete Deck.cfg.fallbackPageId;
+    }
     Deck.cfg.panicSteps = Array.isArray(item.panicSteps)
       ? item.panicSteps.map(Deck.normalizeStep).filter((s) => s.type !== 'none' && s.type !== 'wait')
       : [];
@@ -237,6 +321,15 @@
     }
   }
 
+  function countConfiguredPads(page) {
+    if (!Array.isArray(page?.pads)) return 0;
+    let n = 0;
+    for (const p of page.pads) {
+      if (p && p.type && p.type !== 'none') n++;
+    }
+    return n;
+  }
+
   async function renderSnapshotsList() {
     const listEl = $('snapshots-list');
     if (!listEl) return;
@@ -246,18 +339,65 @@
       return;
     }
     listEl.innerHTML = items.map((s) => {
-      const pagesCount = s.pageCount || (s.pages ? s.pages.length : 1);
+      const pages = Array.isArray(s.pages) ? s.pages : [];
+      const pagesCount = s.pageCount || pages.length || 1;
       const desc = s.description ? ` · ${esc(s.description)}` : '';
+      const pagesHtml = pages.length ? `
+        <div class="snap-pages">
+          ${pages.map((p, idx) => {
+            const pName = esc(p.name || (idx === 0 ? 'Main' : `Page ${idx + 1}`));
+            const cols = p.cols || 8;
+            const rows = p.rows || 8;
+            const padCount = countConfiguredPads(p);
+            const sceneTag = p.sceneName ? ` · 🔗 ${esc(p.sceneName)}` : '';
+            return `
+              <div class="snap-page-row">
+                <span class="snap-page-info"><strong>${pName}</strong> (${cols}×${rows}, ${padCount} ${padCount === 1 ? 'pad' : 'pads'}${sceneTag})</span>
+                <button type="button" class="btn sm btn-snapshot-restore-page" data-id="${s.timestamp}" data-page-idx="${idx}" title="Append this Page onto current Deck">Restore Page</button>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      ` : '';
       return `
         <div class="snapshot-item" data-id="${s.timestamp}">
-          <div class="snapshot-meta">
-            <span class="snapshot-time">${esc(formatSnapshotTime(s.timestamp))}</span>
-            <span class="snapshot-details">${pagesCount} ${pagesCount === 1 ? 'Page' : 'Pages'}${desc}</span>
+          <div class="snapshot-head">
+            <div class="snapshot-meta">
+              <span class="snapshot-time">${esc(formatSnapshotTime(s.timestamp))}</span>
+              <span class="snapshot-details">${pagesCount} ${pagesCount === 1 ? 'Page' : 'Pages'}${desc}</span>
+            </div>
+            <div class="snapshot-actions">
+              <button type="button" class="btn sm btn-snapshot-export" data-id="${s.timestamp}" title="Export snapshot as JSON (passwords omitted)">Export JSON</button>
+              <button type="button" class="btn sm on btn-snapshot-restore" data-id="${s.timestamp}">Restore</button>
+            </div>
           </div>
-          <button type="button" class="btn sm on btn-snapshot-restore" data-id="${s.timestamp}">Restore</button>
+          ${pagesHtml}
         </div>
       `;
     }).join('');
+
+    listEl.querySelectorAll('.btn-snapshot-export').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = Number(btn.dataset.id);
+        const ok = await exportSnapshot(id);
+        Deck.setMsg(ok ? 'Exported snapshot JSON' : 'Failed to export snapshot');
+      });
+    });
+
+    listEl.querySelectorAll('.btn-snapshot-restore-page').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = Number(btn.dataset.id);
+        const pageIdx = Number(btn.dataset.pageIdx);
+        btn.disabled = true;
+        const ok = await restoreSnapshotPage(id, pageIdx);
+        if (ok) {
+          $('snapshots-dlg')?.close();
+        } else {
+          btn.disabled = false;
+          Deck.setMsg('Failed to restore Page from snapshot');
+        }
+      });
+    });
 
     listEl.querySelectorAll('.btn-snapshot-restore').forEach((btn) => {
       btn.addEventListener('click', async () => {
@@ -302,6 +442,8 @@
   Deck.createSnapshot = createSnapshot;
   Deck.listSnapshots = listSnapshots;
   Deck.restoreSnapshot = restoreSnapshot;
+  Deck.restoreSnapshotPage = restoreSnapshotPage;
+  Deck.exportSnapshot = exportSnapshot;
   Deck.scheduleSnapshot = scheduleDebouncedSnapshot;
   Deck.openSnapshotsDialog = openSnapshotsDialog;
 

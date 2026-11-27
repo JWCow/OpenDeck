@@ -15,7 +15,7 @@ export function createFakeObs(requireAuth = true, host = '127.0.0.1') {
     previewScene: 'Slides',
     studioModeEnabled: false,
     scenes: ['BRB', 'Slides', 'Main Cam', '<img src=x onerror="window.__xss=1"> #cam'],
-    inputs: ['Webcam', 'Mic/Aux', 'Desktop Audio', 'Intro Video', 'Alert Overlay', 'Slide Image', 'Photo Slideshow'],
+    inputs: ['Webcam', 'Mic/Aux', 'Desktop Audio', 'Intro Video', 'Alert Overlay', 'Slide Image', 'Photo Slideshow', 'Title Text', 'Ticker File'],
     inputKinds: {
       'Webcam': 'dshow_input',
       'Mic/Aux': 'wasapi_input_capture',
@@ -24,11 +24,15 @@ export function createFakeObs(requireAuth = true, host = '127.0.0.1') {
       'Alert Overlay': 'browser_source',
       'Slide Image': 'image_source',
       'Photo Slideshow': 'slideshow',
+      'Title Text': 'text_gdiplus_v2',
+      'Ticker File': 'text_ft2_source_v2',
     },
     inputSettings: {
       'Alert Overlay': { url: 'https://example.com/alerts' },
       'Slide Image': { file: '/img/slide1.png' },
       'Photo Slideshow': { files: [{ value: '/img/slide1.png', hidden: false, selected: false }] },
+      'Title Text': { text: 'Initial Title', read_from_file: false },
+      'Ticker File': { text: 'From File', read_from_file: true },
     },
     sceneItems: {
       'Main Cam': [
@@ -72,6 +76,7 @@ export function createFakeObs(requireAuth = true, host = '127.0.0.1') {
       cpuUsage: 14.2,
       memoryUsage: 512.4,
       activeFps: 60.0,
+      averageFrameTime: 4.2,
       renderSkippedFrames: 3,
       outputSkippedFrames: 1,
     },
@@ -106,6 +111,7 @@ export function createFakeObs(requireAuth = true, host = '127.0.0.1') {
     savedScreenshots: [],
     lastSavedReplay: '',
     calls: [],
+    reidentifies: [],
     connections: 0,
     sceneItemListDelayMs: 0,
     inFlightSceneItemRequests: 0,
@@ -190,9 +196,19 @@ export function createFakeObs(requireAuth = true, host = '127.0.0.1') {
       if (eventData.inputName) state.mediaStates[eventData.inputName] = 'OBS_MEDIA_STATE_PLAYING';
     } else if (eventType === 'MediaInputPlaybackEnded') {
       if (eventData.inputName) state.mediaStates[eventData.inputName] = 'OBS_MEDIA_STATE_ENDED';
+    } else if (eventType === 'SourceFilterNameChanged') {
+      const { sourceName, oldFilterName, filterName } = eventData;
+      if (sourceName && oldFilterName && filterName) {
+        const flt = (state.filters[sourceName] || []).find((f) => f.filterName === oldFilterName);
+        if (flt) flt.filterName = filterName;
+      }
     }
     const payload = JSON.stringify({ op: 5, d: { eventType, eventIntent: 2047, eventData } });
-    for (const s of sockets) if (s.readyState === 1 && s._authed) s.send(payload);
+    for (const s of sockets) {
+      if (s.readyState !== 1 || !s._authed) continue;
+      if (eventType === 'InputVolumeMeters' && ((Number(s._eventSubscriptions) || 0) & 65536) === 0) continue;
+      s.send(payload);
+    }
   };
 
   const closeAll = (code = 1000, reason = '') => {
@@ -214,7 +230,15 @@ export function createFakeObs(requireAuth = true, host = '127.0.0.1') {
       if (msg.op === 1) {
         if (requireAuth && msg.d?.authentication !== EXPECTED_AUTH) { ws.close(4009, 'Authentication failed.'); return; }
         ws._authed = true;
+        ws._eventSubscriptions = msg.d?.eventSubscriptions ?? 2047;
         ws.send(JSON.stringify({ op: 2, d: { negotiatedRpcVersion: 1 } }));
+        return;
+      }
+      if (msg.op === 3) {
+        if (ws._authed) {
+          ws._eventSubscriptions = Number(msg.d?.eventSubscriptions ?? 2047);
+          state.reidentifies.push(ws._eventSubscriptions);
+        }
         return;
       }
       if (msg.op !== 6) return;
@@ -316,6 +340,10 @@ export function createFakeObs(requireAuth = true, host = '127.0.0.1') {
           outputActive: !!state.outputs.stream,
           outputDuration: state.streamDuration ?? (state.outputs.stream ? 65000 : 0),
           outputTimecode: state.streamTimecode ?? (state.outputs.stream ? '00:01:05' : '00:00:00'),
+          outputCongestion: 0,
+          outputBytes: 0,
+          outputSkippedFrames: 0,
+          outputTotalFrames: 0,
           ...(state.streamStatus || {}),
         };
       } else if (requestType === 'StartStream') {
@@ -438,6 +466,10 @@ export function createFakeObs(requireAuth = true, host = '127.0.0.1') {
           state.inputSettings[requestData.inputName] = requestData.overlay
             ? { ...prev, ...(requestData.inputSettings || {}) }
             : { ...(requestData.inputSettings || {}) };
+          broadcast('InputSettingsChanged', {
+            inputName: requestData.inputName,
+            inputSettings: state.inputSettings[requestData.inputName],
+          });
         }
       } else if (requestType === 'GetInputSettings') {
         responseData = {

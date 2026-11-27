@@ -50,6 +50,15 @@
       if ((p.mode || 'set_file') !== 'set_file') return false;
       return Boolean(p.inputName && p.filePath && obs.imageFiles?.[p.inputName] === p.filePath);
     }
+    if (p.type === 'text') {
+      if (!p.inputName) return false;
+      const curText = obs.textValues?.[p.inputName];
+      if (typeof curText !== 'string') return false;
+      const m = p.mode || 'set';
+      if (m === 'set') return Boolean(p.text && curText === p.text);
+      if (m === 'cycle') return Boolean(curText && Array.isArray(p.presets) && p.presets.includes(curText));
+      return false;
+    }
     if (p.type === 'page') {
       const pid = p.pageId || p.deckId;
       return (p.mode || 'goto') === 'goto' && Boolean(pid && cfg.activePageId === pid);
@@ -368,6 +377,55 @@
         const enumAction = MEDIA_ENUM[mode] || MEDIA_ENUM.restart;
         await obsCall('TriggerMediaInputAction', { inputName: a.inputName, mediaAction: enumAction });
       }
+    } else if (a.type === 'text' && a.inputName) {
+      const mode = a.mode || 'set';
+      let nextText = '';
+      if (mode === 'cycle') {
+        const list = Array.isArray(a.presets) ? a.presets.filter((s) => typeof s === 'string' && s.length > 0) : [];
+        if (!list.length) throw new Error('No text presets configured');
+        let cur = obs.textValues?.[a.inputName];
+        if (typeof cur !== 'string' && typeof Deck.fetchTextSettings === 'function') {
+          await Deck.fetchTextSettings(a.inputName);
+          cur = obs.textValues?.[a.inputName];
+        }
+        const curIdx = list.indexOf(cur);
+        nextText = list[(curIdx + 1) % list.length];
+      } else if (mode === 'counter') {
+        const delta = Number.isFinite(Number(a.delta)) ? Number(a.delta) : 1;
+        const curVal = Number.isFinite(Number(a.counterVal)) ? Number(a.counterVal) : 0;
+        const nextVal = delta === 0 ? 0 : (curVal + delta);
+        a.counterVal = nextVal;
+        let syncedCfg = false;
+        for (const pg of (cfg.pages || [])) {
+          for (const pad of (pg.pads || [])) {
+            if (pad === a) syncedCfg = true;
+            else if (pad && pad.type === 'text' && pad.mode === 'counter' && pad.inputName === a.inputName) {
+              pad.counterVal = nextVal;
+              syncedCfg = true;
+            }
+          }
+        }
+        if (syncedCfg) Deck.saveCfg();
+        const tpl = typeof a.template === 'string' && a.template ? a.template : '{{n}}';
+        nextText = /\{\{n\}\}/i.test(tpl) ? tpl.replace(/\{\{n\}\}/gi, String(nextVal)) : `${tpl} ${nextVal}`;
+      } else {
+        nextText = typeof a.text === 'string' ? a.text : '';
+      }
+      if (obs.textReadFromFile?.[a.inputName] === undefined && typeof Deck.fetchTextSettings === 'function') {
+        try { await Deck.fetchTextSettings(a.inputName); } catch {}
+      }
+      await obsCall('SetInputSettings', {
+        inputName: a.inputName,
+        inputSettings: { text: nextText },
+        overlay: true,
+      });
+      obs.textValues = obs.textValues || {};
+      obs.textValues[a.inputName] = nextText;
+      if (obs.textReadFromFile?.[a.inputName]) {
+        obs.lastTextReadFromFileWarn = a.inputName;
+      } else if (obs.lastTextReadFromFileWarn === a.inputName) {
+        obs.lastTextReadFromFileWarn = '';
+      }
     } else if (a.type === 'hotkey') {
       if (a.mode === 'keys') {
         if (a.keyId) {
@@ -569,7 +627,33 @@
     Deck.renderGrid();
   }
 
-  function buildAutoOffReverse(p) {
+  function isStateStillOwnedByPad(type, targetInfo, expectedState) {
+    const obs = Deck.obs;
+    if (!obs) return true;
+    if (type === 'volume' && targetInfo?.inputName) {
+      const cur = obs.volumes?.[targetInfo.inputName];
+      if (typeof cur === 'number' && typeof expectedState === 'number') {
+        return Math.abs(cur - expectedState) < 0.25;
+      }
+      return true;
+    }
+    if (type === 'scene') {
+      if (expectedState && obs.programScene) {
+        return obs.programScene === expectedState;
+      }
+      return true;
+    }
+    if (type === 'text' && targetInfo?.inputName) {
+      const cur = obs.textValues?.[targetInfo.inputName];
+      if (typeof cur === 'string' && typeof expectedState === 'string') {
+        return cur === expectedState;
+      }
+      return true;
+    }
+    return true;
+  }
+
+  function buildAutoOffReverse(p, prevState) {
     if (!p) return null;
     if (p.type === 'source') return { type: 'source', sceneName: p.sceneName, sourceName: p.sourceName, mode: 'hide' };
     if (p.type === 'filter') return { type: 'filter', sourceName: p.sourceName, filterName: p.filterName, mode: 'disable' };
@@ -579,6 +663,15 @@
     if (p.type === 'media') {
       const ma = p.mediaAction === 'restart' ? 'stop' : 'pause';
       return { type: 'media', inputName: p.inputName, mediaAction: ma };
+    }
+    if (p.type === 'volume' && p.inputName && typeof prevState === 'number') {
+      return { type: 'volume', inputName: p.inputName, mode: 'set', volumeDb: prevState };
+    }
+    if (p.type === 'scene' && typeof prevState === 'string' && prevState) {
+      return { type: 'scene', mode: 'named', sceneName: prevState };
+    }
+    if (p.type === 'text' && p.inputName) {
+      return { type: 'text', inputName: p.inputName, mode: 'set', text: typeof prevState === 'string' ? prevState : '' };
     }
     return null;
   }
@@ -610,6 +703,17 @@
       const ma = p.mediaAction || 'play_pause';
       return ma === 'play' || ma === 'restart' || (ma === 'play_pause' && !wasActive);
     }
+    if (p.type === 'volume') {
+      const m = p.mode || 'step';
+      return m === 'step' || !wasActive;
+    }
+    if (p.type === 'scene') {
+      const m = p.mode || 'named';
+      return m === 'next' || m === 'prev' || (!wasActive && Boolean(p.sceneName));
+    }
+    if (p.type === 'text') {
+      return Boolean(p.inputName);
+    }
     return false;
   }
 
@@ -623,16 +727,17 @@
     return true;
   }
 
-  function startAutoOff(key, pageId, idx, pad) {
+  function startAutoOff(key, pageId, idx, pad, stateInfo = {}) {
     abortAutoOff(key);
     const ms = Math.max(1, Number(pad.autoOffMs) || 0);
-    const reverse = buildAutoOffReverse(pad);
+    const reverse = buildAutoOffReverse(pad, stateInfo.prevState);
     if (!reverse) return;
     const ctx = {
       pageId,
       idx,
       pad,
       reverse,
+      expectedState: stateInfo.expectedState,
       aborted: false,
       endsAt: Date.now() + ms,
       waitTimer: null,
@@ -645,9 +750,14 @@
       clearInterval(ctx.tickTimer);
       if (Deck.activeAutoOffs.get(key) === ctx) Deck.activeAutoOffs.delete(key);
       if (ctx.aborted) return;
+      if (['volume', 'scene', 'text'].includes(pad.type) && !isStateStillOwnedByPad(pad.type, pad, ctx.expectedState)) {
+        Deck.setMsg(`Auto-off skipped: ${pad.label || pad.sceneName || pad.inputName || pad.type} changed in OBS`);
+        Deck.renderGrid();
+        return;
+      }
       try {
         await execAction(reverse);
-        Deck.setMsg(`Auto-off: ${pad.label || pad.filterName || pad.sourceName || pad.inputName || pad.type}`);
+        Deck.setMsg(`Auto-off: ${pad.label || pad.filterName || pad.sourceName || pad.inputName || pad.sceneName || pad.type}`);
       } catch (e) {
         Deck.setMsg(`Auto-off error: ${e.message}`);
         Deck.renderGrid();
@@ -660,13 +770,13 @@
     const steps = Array.isArray(pad?.steps) ? pad.steps : [];
     let lastWaitIdx = -1;
     for (let i = steps.length - 1; i >= 0; i--) {
-      if (steps[i]?.type === 'wait') {
+      if (steps[i]?.type === 'wait' || steps[i]?.type === 'wait_event') {
         lastWaitIdx = i;
         break;
       }
     }
     if (lastWaitIdx < 0) return [];
-    return steps.slice(lastWaitIdx + 1).filter((s) => s && s.type !== 'wait' && s.type !== 'none');
+    return steps.slice(lastWaitIdx + 1).filter((s) => s && s.type !== 'wait' && s.type !== 'wait_event' && s.type !== 'none');
   }
 
   function abortMacro(key, opts = {}) {
@@ -754,7 +864,7 @@
     for (const entry of toRestore) {
       if (!entry.restoreAction) continue;
       let stillHeld = true;
-      const { restoreAction, origState } = entry;
+      const { restoreAction, origState, expectedState } = entry;
       if (restoreAction.type === 'mute') {
         const cur = Boolean(Deck.obs?.mutes?.[restoreAction.inputName]);
         stillHeld = (cur !== origState);
@@ -769,6 +879,18 @@
         const f = (flts || []).find((x) => x.filterName === restoreAction.filterName);
         if (f) {
           stillHeld = (Boolean(f.filterEnabled) !== origState);
+        }
+      } else if (restoreAction.type === 'volume') {
+        if (typeof expectedState === 'number') {
+          stillHeld = isStateStillOwnedByPad('volume', restoreAction, expectedState);
+        } else if (typeof Deck.obs?.volumes?.[restoreAction.inputName] === 'number' && typeof origState === 'number') {
+          stillHeld = Math.abs(Deck.obs.volumes[restoreAction.inputName] - origState) >= 0.25;
+        }
+      } else if (restoreAction.type === 'scene') {
+        if (expectedState) {
+          stillHeld = isStateStillOwnedByPad('scene', restoreAction, expectedState);
+        } else if (Deck.obs?.programScene && origState) {
+          stillHeld = (Deck.obs.programScene !== origState);
         }
       }
       if (stillHeld) {
@@ -815,6 +937,16 @@
       const f = (flts || []).find((x) => x.filterName === p.filterName);
       origState = Boolean(f?.filterEnabled);
       restoreAction = { type: 'filter', sourceName: p.sourceName, filterName: p.filterName, mode: origState ? 'enable' : 'disable' };
+    } else if (p.type === 'volume' && p.inputName) {
+      let curDb = Deck.obs?.volumes?.[p.inputName];
+      if (typeof curDb !== 'number' && Deck.obs?.status === 'ok' && typeof Deck.fetchVolume === 'function') {
+        try { curDb = await Deck.fetchVolume(p.inputName); } catch {}
+      }
+      origState = typeof curDb === 'number' ? curDb : 0;
+      restoreAction = { type: 'volume', inputName: p.inputName, mode: 'set', volumeDb: origState };
+    } else if (p.type === 'scene') {
+      origState = Deck.obs?.programScene || '';
+      restoreAction = origState ? { type: 'scene', mode: 'named', sceneName: origState } : null;
     }
 
     const entry = {
@@ -822,6 +954,7 @@
       idx,
       pad: p,
       origState,
+      expectedState: undefined,
       restoreAction,
       pressPromise: null,
     };
@@ -834,6 +967,11 @@
       busyPads.add(key);
       entry.pressPromise = execAction(p);
       await entry.pressPromise;
+      if (p.type === 'volume' && p.inputName) {
+        entry.expectedState = Deck.obs?.volumes?.[p.inputName];
+      } else if (p.type === 'scene') {
+        entry.expectedState = Deck.obs?.programScene || '';
+      }
     } catch (e) {
       Deck.setMsg?.(e.message);
     } finally {
@@ -856,6 +994,10 @@
     }
 
     if (entry.restoreAction) {
+      if ((entry.pad?.type === 'volume' || entry.pad?.type === 'scene')
+        && !isStateStillOwnedByPad(entry.pad.type, entry.pad, entry.expectedState)) {
+        return;
+      }
       try {
         if (Deck.obs?.ws && Deck.obs.ws.readyState === 1) {
           busyPads.add(key);
@@ -932,8 +1074,11 @@
       }
       for (const k of timers) {
         const t = Deck.activeAutoOffs.get(k);
-        if (t?.reverse && t.pad && ['source', 'filter', 'mute', 'media'].includes(t.pad.type) && isPadActive(t.pad)) {
-          autoOffReverses.push(t.reverse);
+        if (!t?.reverse || !t.pad) continue;
+        if (['source', 'filter', 'mute', 'media'].includes(t.pad.type)) {
+          if (isPadActive(t.pad)) autoOffReverses.push(t.reverse);
+        } else if (['volume', 'scene', 'text'].includes(t.pad.type)) {
+          if (isStateStillOwnedByPad(t.pad.type, t.pad, t.expectedState)) autoOffReverses.push(t.reverse);
         }
       }
     }
@@ -1028,6 +1173,41 @@
           clearInterval(ctx.tickTimer);
           ctx.resolveWait = null;
           ctx.endsAt = 0;
+        } else if (st.type === 'wait_event') {
+          const ms = Math.max(0, Number.isFinite(Number(st.timeoutMs)) ? Number(st.timeoutMs) : 15000);
+          ctx.endsAt = ms > 0 ? Date.now() + ms : 0;
+          Deck.updateMacroTicks();
+          ctx.tickTimer = setInterval(() => Deck.updateMacroTicks(), 200);
+          await new Promise((res, rej) => {
+            let settled = false;
+            const waiter = {
+              eventType: st.eventType || 'MediaInputPlaybackEnded',
+              targetName: st.targetName || '',
+              onMatch: () => finish(),
+              onAbort: (reason) => finish(reason ? new Error(reason) : null),
+            };
+            const cleanup = () => {
+              clearTimeout(ctx.waitTimer);
+              clearInterval(ctx.tickTimer);
+              if (Deck.obs?.eventWaiters) Deck.obs.eventWaiters.delete(waiter);
+              ctx.resolveWait = null;
+            };
+            const finish = (err) => {
+              if (settled) return;
+              settled = true;
+              cleanup();
+              if (err) rej(err);
+              else res();
+            };
+            ctx.resolveWait = () => finish();
+            if (ms === 0) {
+              finish();
+              return;
+            }
+            if (Deck.obs?.eventWaiters) Deck.obs.eventWaiters.add(waiter);
+            ctx.waitTimer = setTimeout(() => finish(), ms);
+          });
+          ctx.endsAt = 0;
         } else {
           ctx.hasFired = true;
           await execAction(st);
@@ -1039,13 +1219,14 @@
     } finally {
       clearInterval(ctx.tickTimer);
       clearTimeout(ctx.waitTimer);
+      if (ctx.resolveWait) ctx.resolveWait();
       if (activeMacros.get(key) === ctx) activeMacros.delete(key);
       Deck.renderGrid();
     }
   }
 
   async function runPanic() {
-    const { cfg, obsCall, setMsg } = Deck;
+    const { cfg, obs, obsCall, setMsg } = Deck;
     const { stoppedCount, macroCleanups, autoOffReverses } = abortAllTimers({ collectCleanups: true });
     let ran = 0;
     const errs = [];
@@ -1135,9 +1316,14 @@
     }
 
     if (Deck.activeAutoOffs.has(key)) {
+      const runningCtx = Deck.activeAutoOffs.get(key);
       abortAutoOff(key);
-      if (isPadActive(p)) {
-        const rev = buildAutoOffReverse(p);
+      const isCapturedAutoOff = ['volume', 'scene', 'text'].includes(p.type);
+      const shouldRevert = isCapturedAutoOff
+        ? isStateStillOwnedByPad(p.type, p, runningCtx?.expectedState)
+        : isPadActive(p);
+      if (shouldRevert) {
+        const rev = runningCtx?.reverse || buildAutoOffReverse(p);
         if (rev) {
           try {
             busyPads.add(key);
@@ -1167,13 +1353,38 @@
     }
 
     const wasActive = isPadActive(p);
+    let prevState;
+    if (p.autoOffMs > 0) {
+      if (p.type === 'volume' && p.inputName) {
+        if (typeof Deck.obs?.volumes?.[p.inputName] !== 'number' && Deck.obs?.status === 'ok' && typeof Deck.fetchVolume === 'function') {
+          try { await Deck.fetchVolume(p.inputName); } catch {}
+        }
+        prevState = Deck.obs?.volumes?.[p.inputName];
+      } else if (p.type === 'scene') {
+        prevState = Deck.obs?.programScene || '';
+      } else if (p.type === 'text' && p.inputName) {
+        if (typeof Deck.obs?.textValues?.[p.inputName] !== 'string' && Deck.obs?.status === 'ok' && typeof Deck.fetchTextSettings === 'function') {
+          try { await Deck.fetchTextSettings(p.inputName); } catch {}
+        }
+        prevState = Deck.obs?.textValues?.[p.inputName] ?? '';
+      }
+    }
     try {
       busyPads.add(key);
+      if (Deck.obs) Deck.obs.lastTextReadFromFileWarn = '';
       await execAction(p);
       if (isTurnOnAction(p, wasActive)) {
-        startAutoOff(key, page.id, idx, p);
+        let expectedState;
+        if (p.type === 'volume' && p.inputName) expectedState = Deck.obs?.volumes?.[p.inputName];
+        else if (p.type === 'scene') expectedState = Deck.obs?.programScene || '';
+        else if (p.type === 'text' && p.inputName) expectedState = Deck.obs?.textValues?.[p.inputName];
+        startAutoOff(key, page.id, idx, p, { prevState, expectedState });
       }
-      Deck.setMsg(`Ran: ${describePad(p)}`);
+      if (p.type === 'text' && p.inputName && Deck.obs?.lastTextReadFromFileWarn === p.inputName) {
+        Deck.setMsg(`Warning: "${p.inputName}" has "Read from file" enabled in OBS`);
+      } else {
+        Deck.setMsg(`Ran: ${describePad(p)}`);
+      }
     } catch (e) {
       Deck.setMsg(e.message);
     } finally {

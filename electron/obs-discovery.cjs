@@ -92,8 +92,14 @@ function discoverObsPort() {
   };
 }
 
+function isSameObsDiscovery(a, b) {
+  if (!a || !b) return false;
+  return a.port === b.port && Boolean(a.enabled) === Boolean(b.enabled) && a.source === b.source;
+}
+
 module.exports = {
   discoverObsPort,
   getCandidatePaths,
+  isSameObsDiscovery,
   parseValidPort,
 };

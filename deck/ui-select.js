@@ -140,9 +140,29 @@
       selPop.appendChild(b);
     });
   }
-  $('btn-sel-color')?.addEventListener('click', () => {
-    if (selPop) selPop.hidden = !selPop.hidden;
+  const selColorBtn = $('btn-sel-color');
+  selColorBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!selPop) return;
+    const willShow = selPop.hidden;
+    selPop.hidden = !willShow;
+    if (willShow && window.innerWidth <= 480) {
+      const rect = selColorBtn.getBoundingClientRect();
+      selPop.style.top = `${Math.round(rect.bottom + 4)}px`;
+      selPop.style.left = `${Math.max(8, Math.min(Math.round(rect.left), window.innerWidth - 210))}px`;
+    } else {
+      selPop.style.top = '';
+      selPop.style.left = '';
+    }
   });
+  document.addEventListener('click', (e) => {
+    if (selPop && !selPop.hidden && !e.target.closest('#sel-color-wrap')) {
+      selPop.hidden = true;
+    }
+  });
+  $('select-bar')?.addEventListener('scroll', () => {
+    if (selPop && !selPop.hidden) selPop.hidden = true;
+  }, { passive: true });
 
   $('btn-sel-clear')?.addEventListener('click', () => {
     if (!selectedPads.size) return;

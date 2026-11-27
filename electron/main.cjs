@@ -8,6 +8,7 @@ const {
   BrowserWindow,
   Menu,
   Tray,
+  globalShortcut,
   ipcMain,
   nativeImage,
   net,
@@ -18,16 +19,42 @@ const {
 } = require('electron');
 
 const pkg = require('./package.json');
-const { discoverObsPort } = require('./obs-discovery.cjs');
+const { discoverObsPort, isSameObsDiscovery } = require('./obs-discovery.cjs');
 const { MIN_WIDTH, MIN_HEIGHT, loadWindowState, trackWindowState } = require('./window-state.cjs');
+const { createPhoneHost } = require('./phone-host.cjs');
 
 const RELEASES_URL = 'https://github.com/JWCow/OpenDeck/releases';
 const APP_ORIGIN = 'app://opendeck';
 const APP_ROOT = app.isPackaged ? path.join(__dirname, 'app') : path.resolve(__dirname, '..');
+const OBS_POLL_INTERVAL_MS = 5000;
 
 let mainWindow = null;
 let tray = null;
 let stateTracker = null;
+let isQuitting = false;
+let obsPollTimer = null;
+let lastDiscoveredObs = { port: null, enabled: false, source: null };
+
+let obsStatus = {
+  connected: false,
+  streaming: false,
+  recording: false,
+  programScene: '',
+  activePageId: '',
+  pages: [],
+};
+
+let desktopPrefs = {
+  launchAtLogin: false,
+  minimizeToTray: false,
+  globalShortcuts: {
+    toggleWindow: '',
+    panic: '',
+    pads: [],
+  },
+};
+
+const phoneHost = createPhoneHost({ rootDir: APP_ROOT, preferredPort: 8765 });
 
 // Must be called before app.whenReady().
 protocol.registerSchemesAsPrivileged([
@@ -50,6 +77,210 @@ if (!gotSingleInstanceLock) {
   app.on('second-instance', () => {
     focusMainWindow();
   });
+}
+
+function getPrefsFilePath() {
+  return path.join(app.getPath('userData'), 'desktop-prefs.json');
+}
+
+function normalizeAccelerator(raw) {
+  if (typeof raw !== 'string') return '';
+  return raw.trim().slice(0, 64);
+}
+
+function sanitizeGlobalShortcuts(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const pads = Array.isArray(src.pads)
+    ? src.pads
+        .slice(0, 16)
+        .map((entry) => ({
+          accelerator: normalizeAccelerator(entry?.accelerator),
+          pageId: typeof entry?.pageId === 'string' ? entry.pageId.slice(0, 80) : '',
+          padIdx: Number.isInteger(Number(entry?.padIdx)) && Number(entry.padIdx) >= 0 ? Number(entry.padIdx) : -1,
+        }))
+        .filter((entry) => entry.accelerator && entry.pageId && entry.padIdx >= 0)
+    : [];
+
+  return {
+    toggleWindow: normalizeAccelerator(src.toggleWindow),
+    panic: normalizeAccelerator(src.panic),
+    pads,
+  };
+}
+
+function sanitizeDesktopPrefs(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  return {
+    launchAtLogin: Boolean(src.launchAtLogin),
+    minimizeToTray: Boolean(src.minimizeToTray),
+    globalShortcuts: sanitizeGlobalShortcuts(src.globalShortcuts),
+  };
+}
+
+function loadDesktopPrefs() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(getPrefsFilePath(), 'utf8'));
+    desktopPrefs = sanitizeDesktopPrefs(parsed);
+  } catch {
+    desktopPrefs = sanitizeDesktopPrefs({});
+  }
+  return desktopPrefs;
+}
+
+function saveDesktopPrefs() {
+  try {
+    const filePath = getPrefsFilePath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(desktopPrefs, null, 2) + '\n', 'utf8');
+  } catch {
+    // Non-fatal: ignore persistence failures on restricted paths.
+  }
+}
+
+function applyLaunchAtLogin(enabled) {
+  try {
+    app.setLoginItemSettings({ openAtLogin: Boolean(enabled) });
+  } catch {
+    // Ignore on platforms/environments where login item settings are unsupported.
+  }
+}
+
+function sendToRenderer(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  if (!mainWindow.webContents || mainWindow.webContents.isDestroyed()) return false;
+  mainWindow.webContents.send(channel, payload);
+  return true;
+}
+
+function triggerPanicInRenderer() {
+  return sendToRenderer('opendeck:trigger-panic');
+}
+
+function triggerPadInRenderer(target) {
+  if (!target || typeof target !== 'object') return false;
+  const pageId = typeof target.pageId === 'string' ? target.pageId.slice(0, 80) : '';
+  const padIdx = Number(target.padIdx);
+  if (!pageId || !Number.isInteger(padIdx) || padIdx < 0) return false;
+  return sendToRenderer('opendeck:trigger-pad', { pageId, padIdx });
+}
+
+function applyGlobalShortcuts(nextShortcuts) {
+  const clean = sanitizeGlobalShortcuts(nextShortcuts);
+  desktopPrefs.globalShortcuts = clean;
+  saveDesktopPrefs();
+
+  const failed = [];
+  const registered = [];
+
+  if (!app.isReady()) {
+    return { ok: true, shortcuts: clean, registered, failed };
+  }
+
+  try {
+    globalShortcut.unregisterAll();
+  } catch {}
+
+  const seen = new Set();
+  const tryRegister = (accel, handler) => {
+    if (!accel) return;
+    const key = accel.toLowerCase();
+    if (seen.has(key)) {
+      failed.push(accel);
+      return;
+    }
+    seen.add(key);
+    try {
+      const ok = globalShortcut.register(accel, handler);
+      if (ok) registered.push(accel);
+      else failed.push(accel);
+    } catch {
+      failed.push(accel);
+    }
+  };
+
+  tryRegister(clean.toggleWindow, () => toggleMainWindowVisibility());
+  tryRegister(clean.panic, () => triggerPanicInRenderer());
+  for (const padEntry of clean.pads) {
+    tryRegister(padEntry.accelerator, () =>
+      triggerPadInRenderer({ pageId: padEntry.pageId, padIdx: padEntry.padIdx })
+    );
+  }
+
+  return {
+    ok: failed.length === 0,
+    shortcuts: clean,
+    registered,
+    failed,
+  };
+}
+
+/**
+ * Sanitize one-way OBS/Deck summary pushed by the renderer (no credentials allowed per ADR-0002).
+ */
+function sanitizeObsStatus(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const pages = Array.isArray(src.pages)
+    ? src.pages
+        .slice(0, 24)
+        .map((p) => ({
+          id: typeof p?.id === 'string' ? p.id.slice(0, 80) : '',
+          name: typeof p?.name === 'string' ? p.name.slice(0, 80) : 'Page',
+        }))
+        .filter((p) => p.id)
+    : [];
+
+  return {
+    connected: Boolean(src.connected),
+    streaming: Boolean(src.streaming),
+    recording: Boolean(src.recording),
+    programScene: typeof src.programScene === 'string' ? src.programScene.slice(0, 120) : '',
+    activePageId: typeof src.activePageId === 'string' ? src.activePageId.slice(0, 80) : '',
+    pages,
+  };
+}
+
+function escapeMenuLabel(text) {
+  return String(text || '').replace(/&/g, '&&');
+}
+
+function formatStatusLabel() {
+  if (!obsStatus.connected) return 'OBS: Disconnected';
+  const flags = [];
+  if (obsStatus.streaming) flags.push('LIVE');
+  if (obsStatus.recording) flags.push('REC');
+  const state = flags.length ? flags.join(' • ') : 'Connected';
+  return obsStatus.programScene ? `OBS: ${state} • ${obsStatus.programScene}` : `OBS: ${state}`;
+}
+
+function formatTrayTooltip() {
+  if (!obsStatus.connected) return 'OpenDeck — Disconnected';
+  const flags = [];
+  if (obsStatus.streaming) flags.push('LIVE');
+  if (obsStatus.recording) flags.push('REC');
+  const state = flags.length ? flags.join(' • ') : 'Connected';
+  return obsStatus.programScene ? `OpenDeck — ${state} • ${obsStatus.programScene}` : `OpenDeck — ${state}`;
+}
+
+function syncObsPoller() {
+  if (obsStatus.connected || !mainWindow || mainWindow.isDestroyed()) {
+    if (obsPollTimer) {
+      clearInterval(obsPollTimer);
+      obsPollTimer = null;
+    }
+    return;
+  }
+  if (obsPollTimer) return;
+  obsPollTimer = setInterval(() => {
+    if (obsStatus.connected || !mainWindow || mainWindow.isDestroyed()) {
+      syncObsPoller();
+      return;
+    }
+    const next = discoverObsPort();
+    if (!isSameObsDiscovery(next, lastDiscoveredObs)) {
+      lastDiscoveredObs = next;
+      sendToRenderer('opendeck:obs-port-changed', next);
+    }
+  }, OBS_POLL_INTERVAL_MS);
 }
 
 function focusMainWindow() {
@@ -92,6 +323,27 @@ function setAlwaysOnTop(enabled) {
   return next;
 }
 
+function updateDesktopPrefs(partial) {
+  const src = partial && typeof partial === 'object' ? partial : {};
+  if ('launchAtLogin' in src) {
+    desktopPrefs.launchAtLogin = Boolean(src.launchAtLogin);
+    applyLaunchAtLogin(desktopPrefs.launchAtLogin);
+  }
+  if ('minimizeToTray' in src) {
+    desktopPrefs.minimizeToTray = Boolean(src.minimizeToTray);
+  }
+  if ('globalShortcuts' in src) {
+    applyGlobalShortcuts(src.globalShortcuts);
+  } else {
+    saveDesktopPrefs();
+  }
+  refreshMenus();
+  return {
+    launchAtLogin: desktopPrefs.launchAtLogin,
+    minimizeToTray: desktopPrefs.minimizeToTray,
+  };
+}
+
 function buildToggleActions() {
   const isOnTop = Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isAlwaysOnTop());
   const isVisible = Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
@@ -132,6 +384,18 @@ function refreshMenus() {
       checked: actions.isOnTop,
       accelerator: 'CmdOrCtrl+Shift+T',
       click: (item) => actions.toggleAlwaysOnTop(item.checked),
+    },
+    {
+      label: 'Minimize to Tray',
+      type: 'checkbox',
+      checked: desktopPrefs.minimizeToTray,
+      click: (item) => updateDesktopPrefs({ minimizeToTray: item.checked }),
+    },
+    {
+      label: 'Launch at Login',
+      type: 'checkbox',
+      checked: desktopPrefs.launchAtLogin,
+      click: (item) => updateDesktopPrefs({ launchAtLogin: item.checked }),
     },
     { type: 'separator' },
     {
@@ -214,7 +478,38 @@ function refreshMenus() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate));
 
   if (tray && !tray.isDestroyed()) {
+    tray.setToolTip(formatTrayTooltip());
+    if (process.platform === 'darwin' && typeof tray.setTitle === 'function') {
+      const macTitle = obsStatus.streaming ? ' LIVE' : obsStatus.recording ? ' REC' : '';
+      tray.setTitle(macTitle);
+    }
+
+    const pageItems = obsStatus.pages.length
+      ? obsStatus.pages.map((p) => ({
+          label: escapeMenuLabel(p.name),
+          type: 'radio',
+          checked: p.id === obsStatus.activePageId,
+          click: () => sendToRenderer('opendeck:switch-page', { pageId: p.id }),
+        }))
+      : [{ label: 'No Pages', enabled: false }];
+
+    const hostStatus = phoneHost.getStatus();
+    const phoneHostItems = hostStatus.running
+      ? [
+          { label: `Phone Deck: ${escapeMenuLabel(hostStatus.primaryUrl)}`, enabled: false },
+          {
+            label: 'Stop Phone Deck Host',
+            click: () => {
+              phoneHost.stop().then(() => refreshMenus()).catch(() => {});
+            },
+          },
+          { type: 'separator' },
+        ]
+      : [];
+
     const trayMenu = Menu.buildFromTemplate([
+      { label: escapeMenuLabel(formatStatusLabel()), enabled: false },
+      { type: 'separator' },
       {
         label: actions.isVisible ? 'Hide OpenDeck' : 'Show OpenDeck',
         click: actions.toggleShowHide,
@@ -224,6 +519,29 @@ function refreshMenus() {
         type: 'checkbox',
         checked: actions.isOnTop,
         click: (item) => actions.toggleAlwaysOnTop(item.checked),
+      },
+      {
+        label: 'Trigger PANIC',
+        enabled: obsStatus.connected,
+        click: () => triggerPanicInRenderer(),
+      },
+      {
+        label: 'Switch Page',
+        submenu: pageItems,
+      },
+      { type: 'separator' },
+      ...phoneHostItems,
+      {
+        label: 'Minimize to Tray',
+        type: 'checkbox',
+        checked: desktopPrefs.minimizeToTray,
+        click: (item) => updateDesktopPrefs({ minimizeToTray: item.checked }),
+      },
+      {
+        label: 'Launch at Login',
+        type: 'checkbox',
+        checked: desktopPrefs.launchAtLogin,
+        click: (item) => updateDesktopPrefs({ launchAtLogin: item.checked }),
       },
       { type: 'separator' },
       { label: 'Reload', click: actions.reloadWindow },
@@ -320,7 +638,66 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('opendeck:get-obs-port-info', () => {
-    return discoverObsPort();
+    lastDiscoveredObs = discoverObsPort();
+    return lastDiscoveredObs;
+  });
+
+  ipcMain.handle('opendeck:rediscover-obs-port', () => {
+    lastDiscoveredObs = discoverObsPort();
+    return lastDiscoveredObs;
+  });
+
+  ipcMain.handle('opendeck:trigger-panic', () => {
+    return triggerPanicInRenderer();
+  });
+
+  ipcMain.handle('opendeck:trigger-pad', (_event, target) => {
+    return triggerPadInRenderer(target);
+  });
+
+  ipcMain.on('opendeck:update-status', (_event, rawStatus) => {
+    obsStatus = sanitizeObsStatus(rawStatus);
+    syncObsPoller();
+    refreshMenus();
+  });
+
+  ipcMain.handle('opendeck:get-global-shortcuts', () => {
+    return { ...desktopPrefs.globalShortcuts, pads: desktopPrefs.globalShortcuts.pads.map((p) => ({ ...p })) };
+  });
+
+  ipcMain.handle('opendeck:set-global-shortcuts', (_event, nextShortcuts) => {
+    return applyGlobalShortcuts(nextShortcuts);
+  });
+
+  ipcMain.handle('opendeck:get-desktop-prefs', () => {
+    return {
+      launchAtLogin: desktopPrefs.launchAtLogin,
+      minimizeToTray: desktopPrefs.minimizeToTray,
+    };
+  });
+
+  ipcMain.handle('opendeck:set-desktop-prefs', (_event, partial) => {
+    return updateDesktopPrefs(partial);
+  });
+
+  ipcMain.handle('opendeck:start-phone-host', async (_event, payload) => {
+    const status = await phoneHost.start(payload?.layoutJson, payload?.obsPort);
+    refreshMenus();
+    return status;
+  });
+
+  ipcMain.handle('opendeck:stop-phone-host', async () => {
+    const status = await phoneHost.stop();
+    refreshMenus();
+    return status;
+  });
+
+  ipcMain.handle('opendeck:update-phone-host-layout', (_event, payload) => {
+    return phoneHost.updateLayout(payload?.layoutJson, payload?.obsPort);
+  });
+
+  ipcMain.handle('opendeck:get-phone-host-status', () => {
+    return phoneHost.getStatus();
   });
 }
 
@@ -390,6 +767,14 @@ function createWindow() {
     }
     mainWindow.show();
     refreshMenus();
+    syncObsPoller();
+  });
+
+  mainWindow.on('minimize', (event) => {
+    if (!isQuitting && desktopPrefs.minimizeToTray && tray && !tray.isDestroyed()) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
   });
 
   mainWindow.on('show', refreshMenus);
@@ -397,10 +782,12 @@ function createWindow() {
   mainWindow.on('closed', () => {
     stateTracker = null;
     mainWindow = null;
+    syncObsPoller();
     refreshMenus();
   });
 
   const obsInfo = discoverObsPort();
+  lastDiscoveredObs = obsInfo;
   const startUrl = new URL(`${APP_ORIGIN}/deck.html`);
   if (obsInfo.enabled && obsInfo.port) {
     startUrl.searchParams.set('port', String(obsInfo.port));
@@ -415,11 +802,14 @@ if (gotSingleInstanceLock) {
       const dockIconPath = resolveAssetPath(['icon.png']);
       if (dockIconPath) app.dock.setIcon(dockIconPath);
     }
+    loadDesktopPrefs();
+    applyLaunchAtLogin(desktopPrefs.launchAtLogin);
     registerAppProtocol();
     setupDownloads();
     registerIpcHandlers();
     createWindow();
     setupTray();
+    applyGlobalShortcuts(desktopPrefs.globalShortcuts);
     refreshMenus();
 
     app.on('activate', () => {
@@ -432,11 +822,23 @@ if (gotSingleInstanceLock) {
   });
 
   app.on('before-quit', () => {
+    isQuitting = true;
+    if (obsPollTimer) {
+      clearInterval(obsPollTimer);
+      obsPollTimer = null;
+    }
+    phoneHost.stop().catch(() => {});
     if (stateTracker) stateTracker.saveNow();
     if (tray && !tray.isDestroyed()) {
       tray.destroy();
       tray = null;
     }
+  });
+
+  app.on('will-quit', () => {
+    try {
+      globalShortcut.unregisterAll();
+    } catch {}
   });
 
   app.on('window-all-closed', () => {

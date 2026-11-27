@@ -28,6 +28,7 @@
     macro: 'MCR',
     http: 'API',
     panic: 'PNC',
+    text: 'TXT',
   };
 
   const OUTPUT_LABELS = {
@@ -121,22 +122,51 @@
       const target = (Deck.cfg.pages || []).find((d) => d.id === pid);
       return target ? target.name : 'Page';
     }
+    if (p.type === 'text') {
+      if (p.mode === 'counter') return p.inputName ? `${p.inputName} #` : 'Counter';
+      return p.inputName || 'Text';
+    }
     if (p.type === 'macro') return 'Macro';
     if (p.type === 'panic') return 'PANIC';
     return Deck.editMode ? `${Math.floor(i / cols) + 1}:${(i % cols) + 1}` : '';
   }
+
+  const tickSpans = new Map();
 
   function tickText(rt) {
     if (!rt || !rt.running) return '';
     return rt.endsAt ? `${Math.max(0, (rt.endsAt - Date.now()) / 1000).toFixed(1)}s` : 'RUN';
   }
 
+  function computeTickProgress(pageId, t, p) {
+    if (!t || !t.endsAt) return 0;
+    const now = Date.now();
+    const rem = Math.max(0, t.endsAt - now);
+    if (rem <= 0) return 0;
+    let totalMs = 0;
+    if (t.kind === 'autoOff' && p && p.autoOffMs > 0) {
+      totalMs = p.autoOffMs;
+    } else {
+      const spanKey = `${pageId}:${t.idx}:${t.endsAt}`;
+      totalMs = tickSpans.get(spanKey) || 0;
+      if (!totalMs) {
+        totalMs = Math.max(1, rem);
+        tickSpans.set(spanKey, totalMs);
+      }
+    }
+    return Math.max(0, Math.min(1, rem / Math.max(1, totalMs)));
+  }
+
   Deck.updateMacroTicks = () => {
     const grid = $('grid');
     if (!grid) return;
+    const page = Deck.getActivePage();
+    const pageId = page?.id || '';
     const activeTicks = Deck.getActivePageTicks();
     const activeIndices = new Set(activeTicks.map((t) => t.idx));
+    const activeSpanKeys = new Set();
     for (const t of activeTicks) {
+      if (t.endsAt) activeSpanKeys.add(`${pageId}:${t.idx}:${t.endsAt}`);
       const btn = grid.querySelector(`.pad[data-idx="${t.idx}"]`);
       if (!btn) continue;
       let sub = btn.querySelector('.sub');
@@ -150,14 +180,25 @@
         sub.textContent = txt;
         sub.style.display = txt ? '' : 'none';
       }
+      const progEl = btn.querySelector('.pad-prog');
+      if (progEl) {
+        const p = page?.pads?.[t.idx];
+        const prog = computeTickProgress(pageId, t, p);
+        progEl.style.setProperty('--prog', prog.toFixed(3));
+      }
       const ctx = btn.querySelector('.ctx');
       if (ctx) ctx.style.display = txt ? 'none' : '';
+    }
+    for (const k of tickSpans.keys()) {
+      if (!activeSpanKeys.has(k)) tickSpans.delete(k);
     }
     grid.querySelectorAll('.pad:not(.stats-pad)').forEach((btn) => {
       const idx = Number(btn.dataset.idx);
       if (!activeIndices.has(idx)) {
         btn.classList.remove('running');
-        const p = Deck.getActivePage()?.pads?.[idx];
+        const progEl = btn.querySelector('.pad-prog');
+        if (progEl) progEl.style.setProperty('--prog', '0');
+        const p = page?.pads?.[idx];
         const readoutTxt = p && isReadoutPad(p) && typeof Deck.getPadReadoutText === 'function' ? Deck.getPadReadoutText(p) : '';
         const sub = btn.querySelector('.sub');
         if (readoutTxt) {
@@ -181,7 +222,7 @@
   function isReadoutPad(p) {
     if (typeof Deck.isReadoutPad === 'function') return Deck.isReadoutPad(p);
     if (!p) return false;
-    if (p.type === 'volume' || p.type === 'media') return true;
+    if (p.type === 'volume' || p.type === 'media' || p.type === 'text') return true;
     if (p.type === 'output' && (p.target === 'stream' || p.target === 'record' || p.target === 'recordPause')) return true;
     return false;
   }
@@ -256,20 +297,91 @@
     });
   };
 
+  let focusedPadIdx = 0;
+
+  function setRovingFocus(grid, nextIdx, moveFocus = false) {
+    const btns = grid?.children;
+    if (!btns || !btns.length) return;
+    const clamped = Math.max(0, Math.min(btns.length - 1, nextIdx));
+    focusedPadIdx = clamped;
+    for (let k = 0; k < btns.length; k++) {
+      btns[k].tabIndex = k === clamped ? 0 : -1;
+    }
+    if (moveFocus) btns[clamped]?.focus();
+  }
+
+  function assignPaletteActionToPad(paletteData, i, activePage) {
+    if (!paletteData || !activePage) return;
+    const pads = activePage.pads;
+    if (i < 0 || i >= pads.length) return;
+    Deck.setDragState({ paletteDragItem: null, justDroppedAt: Date.now() });
+    if (typeof Deck.clearArmedPaletteItem === 'function') Deck.clearArmedPaletteItem();
+    if (typeof Deck.abortPadTimer === 'function') {
+      Deck.abortPadTimer(activePage.id, i);
+    }
+    if (Deck.isSelfContained(paletteData)) {
+      Deck.pushHistory(() => {
+        const newPad = JSON.parse(JSON.stringify(paletteData));
+        delete newPad.isLive;
+        if (!newPad.color) {
+          newPad.color = newPad.type === 'scene' ? '#991b1b' : COLORS[0];
+        }
+        pads[i] = Deck.normalizePad(newPad);
+        Deck.saveCfg();
+        Deck.renderGrid();
+        Deck.setMsg(`Assigned ${pads[i].label || pads[i].type} to pad ${i + 1}`);
+      });
+    } else {
+      Deck.openPadEditor(i, activePage.id, paletteData);
+    }
+  }
+
   function initGrid(page) {
     const grid = $('grid');
     const total = page.cols * page.rows;
     grid.style.setProperty('--cols', page.cols);
     grid.style.setProperty('--rows', page.rows);
     grid.setAttribute('aria-label', `${page.cols} by ${page.rows} OBS Deck Page`);
-    if (grid.children.length === total) return;
+    if (grid.children.length === total) {
+      setRovingFocus(grid, focusedPadIdx, false);
+      return;
+    }
     grid.innerHTML = '';
+    const clampedFocus = Math.max(0, Math.min(total - 1, focusedPadIdx));
+    focusedPadIdx = clampedFocus;
     for (let i = 0; i < total; i++) {
       const el = document.createElement('button');
       el.type = 'button';
       el.dataset.idx = i;
+      el.tabIndex = i === clampedFocus ? 0 : -1;
       let holdTimer = null;
       let holdTriggered = false;
+
+      el.addEventListener('focus', () => {
+        if (focusedPadIdx !== i) setRovingFocus(grid, i, false);
+      });
+
+      el.addEventListener('keydown', (e) => {
+        if (document.querySelector('dialog[open]')) return;
+        const tag = e.target?.tagName?.toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+        if (Deck.getDragState().dragIdx !== null) return;
+        const curPage = Deck.getActivePage();
+        const cols = curPage?.cols || page.cols || 8;
+        const rows = curPage?.rows || page.rows || 8;
+        const maxIdx = cols * rows - 1;
+        let target = -1;
+        if (e.key === 'ArrowRight') target = i + 1 <= maxIdx ? i + 1 : 0;
+        else if (e.key === 'ArrowLeft') target = i - 1 >= 0 ? i - 1 : maxIdx;
+        else if (e.key === 'ArrowDown') target = i + cols <= maxIdx ? i + cols : i % cols;
+        else if (e.key === 'ArrowUp') target = i - cols >= 0 ? i - cols : (rows - 1) * cols + (i % cols);
+        else if (e.key === 'Home') target = i - (i % cols);
+        else if (e.key === 'End') target = Math.min(maxIdx, i - (i % cols) + (cols - 1));
+        if (target >= 0 && target <= maxIdx) {
+          e.preventDefault();
+          setRovingFocus(grid, target, true);
+        }
+      });
 
       el.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
@@ -318,6 +430,11 @@
         cancelHold();
         if (Date.now() - Deck.getDragState().justDroppedAt < 250) return;
         if (Deck.editMode) {
+          const armedItem = typeof Deck.getArmedPaletteItem === 'function' ? Deck.getArmedPaletteItem() : null;
+          if (armedItem && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+            assignPaletteActionToPad(armedItem, i, Deck.getActivePage());
+            return;
+          }
           if (Deck.handleSelectionClick(i, e)) return;
           Deck.openPadEditor(i);
           return;
@@ -380,25 +497,7 @@
         }
 
         if (paletteData) {
-          Deck.setDragState({ paletteDragItem: null, justDroppedAt: Date.now() });
-          if (typeof Deck.abortPadTimer === 'function') {
-            Deck.abortPadTimer(activePage.id, i);
-          }
-          if (Deck.isSelfContained(paletteData)) {
-            Deck.pushHistory(() => {
-              const newPad = JSON.parse(JSON.stringify(paletteData));
-              delete newPad.isLive;
-              if (!newPad.color) {
-                newPad.color = newPad.type === 'scene' ? '#991b1b' : COLORS[0];
-              }
-              pads[i] = Deck.normalizePad(newPad);
-              Deck.saveCfg();
-              Deck.renderGrid();
-              Deck.setMsg(`Assigned ${pads[i].label || pads[i].type} to pad ${i + 1}`);
-            });
-          } else {
-            Deck.openPadEditor(i, activePage.id, paletteData);
-          }
+          assignPaletteActionToPad(paletteData, i, activePage);
           return;
         }
 
@@ -416,6 +515,14 @@
       });
       grid.appendChild(el);
     }
+  }
+
+  function isTogglePad(p) {
+    if (!p) return false;
+    if (p.type === 'mute' || p.type === 'source' || p.type === 'filter') return true;
+    if (p.type === 'output') return (p.target || 'stream') !== 'saveReplay';
+    if (p.type === 'studio') return (p.action || 'toggle') !== 'transition';
+    return false;
   }
 
   function renderPad(pOrIdx, i, el, page) {
@@ -444,6 +551,12 @@
     const isDraggingEl = el.classList.contains('dragging');
     const selectedPads = Deck.getSelectedPads();
     const isSelected = selectedPads.has(i);
+    const hasProg = Boolean(p.type === 'macro' || p.autoOffMs > 0);
+    const showMeter = Boolean((p.type === 'mute' || p.type === 'volume') && p.showMeter && p.inputName);
+    const alertLvl = (p.type === 'stats' && typeof Deck.getStatsAlertLevel === 'function')
+      ? Deck.getStatsAlertLevel(p.mode || 'all')
+      : '';
+    const ariaPressed = isTogglePad(p) ? (active ? 'true' : 'false') : '';
 
     const subText = isRunning
       ? tickText(rt)
@@ -459,6 +572,7 @@
       i,
       p.type,
       active ? 1 : 0,
+      ariaPressed,
       isRunning ? 1 : 0,
       isArmed ? 1 : 0,
       isHeld ? 1 : 0,
@@ -468,6 +582,9 @@
       isDraggingEl ? 1 : 0,
       isSelected ? 1 : 0,
       Deck.editMode ? 1 : 0,
+      hasProg ? 1 : 0,
+      showMeter ? 1 : 0,
+      alertLvl,
       p.color && p.type !== 'none' ? p.color : '',
       p.hideLabel ? 1 : 0,
       lbl,
@@ -494,8 +611,11 @@
       + (isFullFace ? ' full-face' : '')
       + (!isFullFace && p.color && p.type !== 'none' ? ' has-color' : '')
       + (p.hideLabel ? ' hide-label' : '')
+      + (alertLvl === 'warn' ? ' warn' : alertLvl === 'crit' ? ' crit' : '')
       + (isDragOver ? ' drag-over' : '')
       + (isDraggingEl ? ' dragging' : '');
+    if (ariaPressed) el.setAttribute('aria-pressed', ariaPressed);
+    else el.removeAttribute('aria-pressed');
     if (isFullFace) {
       el.style.backgroundColor = p.color && p.type !== 'none' ? p.color : '';
       el.style.backgroundImage = `url("${p.image}")`;
@@ -523,12 +643,16 @@
 
     const lblHtml = `<span class="lbl"${p.hideLabel ? ' style="display:none"' : ''}>${esc(lbl)}</span>`;
     const ctxHtml = ctxText ? `<span class="ctx"${(isRunning || subText || p.hideLabel) ? ' style="display:none"' : ''}>${esc(ctxText)}</span>` : '';
+    const progHtml = hasProg ? `<span class="pad-prog" aria-hidden="true" style="--prog:${isRunning && rt.endsAt ? computeTickProgress(page.id, { idx: i, kind: rt.kind, endsAt: rt.endsAt }, p).toFixed(3) : '0'}"></span>` : '';
+    const meterHtml = (showMeter && Deck.obs?.status === 'ok') ? '<span class="pad-meter" aria-hidden="true"></span>' : '';
 
     el.innerHTML = `<i class="led"></i>${TAGS[p.type] ? `<span class="tag">${TAGS[p.type]}</span>` : ''}`
       + iconHtml
       + lblHtml
       + ctxHtml
-      + `${subText ? `<span class="sub${subText === 'PAUSED' ? ' paused' : ''}">${esc(subText)}</span>` : ''}`;
+      + `${subText ? `<span class="sub${subText === 'PAUSED' ? ' paused' : ''}">${esc(subText)}</span>` : ''}`
+      + progHtml
+      + meterHtml;
   }
 
   let renderFrame = null;
@@ -553,7 +677,16 @@
       renderPad(p, i, btns[i], page);
     });
     if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+    if (typeof Deck.syncMeterSubscription === 'function') Deck.syncMeterSubscription();
+    if (typeof Deck.updateMeterPads === 'function') Deck.updateMeterPads();
+    if (typeof Deck.applyStatsAlerts === 'function') Deck.applyStatsAlerts();
     Deck.updateSelectionUi();
+  }
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pointercancel', () => {
+      if (typeof Deck.releaseHold === 'function') Deck.releaseHold();
+    });
   }
 
   Deck.TAGS = TAGS;

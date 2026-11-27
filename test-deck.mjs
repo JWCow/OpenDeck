@@ -498,7 +498,7 @@ try {
   await page.selectOption('#f-type', 'volume');
   await page.locator('#f-fields select').nth(0).selectOption('Mic/Aux');
   await page.locator('#f-fields select').nth(1).selectOption('set');
-  await page.locator('#f-fields input[type="number"]').fill('-12');
+  await page.locator('#f-fields input[type="number"]').first().fill('-12');
   await page.click('#pad-form button[type="submit"]');
 
   // Slot 9: Transition (Slide, 500ms)

@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.2.3';
+  const VERSION = '2.3.4';
   const STORAGE_KEY = 'opendeck_config';
   const LEGACY_STORAGE_KEYS = ['obs_virtual_deck_v2', 'obs_deck_config_v2', 'obs_virtual_deck_v1'];
   let initialSaveFailed = false;
@@ -17,10 +17,11 @@
     'none', 'scene', 'source', 'filter', 'mute', 'macro', 'panic',
     'page', 'studio', 'output', 'media', 'screenshot', 'browser', 'volume',
     'profile', 'collection', 'transition',
-    'stats', 'hotkey', 'chapter', 'monitor', 'transform', 'image', 'http',
+    'stats', 'hotkey', 'chapter', 'monitor', 'transform', 'image', 'text', 'http',
   ];
-  const AUTO_OFF_TYPES = new Set(['source', 'filter', 'mute', 'studio', 'output', 'media']);
-  const HOLD_TYPES = new Set(['mute', 'source', 'filter']);
+  const AUTO_OFF_TYPES = new Set(['source', 'filter', 'mute', 'studio', 'output', 'media', 'text', 'volume', 'scene']);
+  const HOLD_TYPES = new Set(['mute', 'source', 'filter', 'volume']);
+  const WAIT_EVENT_TYPES = ['MediaInputPlaybackEnded', 'SceneTransitionEnded', 'CurrentProgramSceneChanged'];
   const MONITOR_TYPES = [
     'OBS_MONITORING_TYPE_NONE',
     'OBS_MONITORING_TYPE_MONITOR_ONLY',
@@ -134,7 +135,7 @@
     if (!pad || pad.type === 'none') return '';
     if (pad.type === 'filter') return pad.sourceName || '';
     if (pad.type === 'source' || pad.type === 'transform') return pad.sceneName || '';
-    if (pad.type === 'volume' || pad.type === 'monitor') {
+    if (pad.type === 'volume' || pad.type === 'monitor' || pad.type === 'text') {
       return (pad.label && pad.label !== pad.inputName) ? (pad.inputName || '') : '';
     }
     return '';
@@ -182,6 +183,17 @@
       const delay = Number(raw.delayMs);
       return { type: 'wait', delayMs: Number.isFinite(delay) ? Math.max(0, delay) : 0 };
     }
+    if (isStep && raw.type === 'wait_event') {
+      const eventType = WAIT_EVENT_TYPES.includes(raw.eventType) ? raw.eventType : 'MediaInputPlaybackEnded';
+      const t = Number(raw.timeoutMs);
+      const outWait = {
+        type: 'wait_event',
+        eventType,
+        timeoutMs: Number.isFinite(t) ? Math.max(0, Math.round(t)) : 15000,
+      };
+      if (raw.targetName) outWait.targetName = String(raw.targetName);
+      return outWait;
+    }
     let type = PAD_TYPES.includes(raw.type) ? raw.type : 'none';
     if (isStep && (type === 'macro' || type === 'panic' || type === 'stats')) type = 'none';
     const out = isStep
@@ -207,6 +219,7 @@
     } else if (type === 'mute') {
       if (raw.inputName) out.inputName = String(raw.inputName);
       if (['toggle', 'mute', 'unmute'].includes(raw.mode)) out.mode = raw.mode;
+      if (!isStep && Boolean(raw.showMeter)) out.showMeter = true;
     } else if (type === 'macro') {
       out.steps = Array.isArray(raw.steps)
         ? raw.steps.filter((s) => s && typeof s === 'object').map((s) => normalizePadInternal(s, true)).filter((s) => s.type !== 'none')
@@ -245,6 +258,7 @@
       const db = Number(raw.volumeDb);
       const defDb = out.mode === 'step' ? -3 : 0;
       out.volumeDb = Number.isFinite(db) ? Math.max(-100, Math.min(26, db)) : defDb;
+      if (!isStep && Boolean(raw.showMeter)) out.showMeter = true;
     } else if (type === 'profile') {
       if (raw.profileName) out.profileName = String(raw.profileName);
     } else if (type === 'collection') {
@@ -256,7 +270,7 @@
         if (Number.isFinite(dur) && dur >= 0) out.durationMs = Math.round(dur);
       }
     } else if (type === 'stats') {
-      out.mode = ['cpu', 'dropped', 'fps', 'all'].includes(raw.mode) ? raw.mode : 'all';
+      out.mode = ['cpu', 'dropped', 'fps', 'all', 'stream', 'mem'].includes(raw.mode) ? raw.mode : 'all';
     } else if (type === 'hotkey') {
       const mode = raw.mode === 'keys' ? 'keys' : 'name';
       out.mode = mode;
@@ -285,6 +299,23 @@
       if (raw.inputName) out.inputName = String(raw.inputName);
       out.mode = ['set_file', 'next', 'previous', 'restart'].includes(raw.mode) ? raw.mode : 'set_file';
       if (out.mode === 'set_file' && raw.filePath) out.filePath = String(raw.filePath);
+    } else if (type === 'text') {
+      if (raw.inputName) out.inputName = String(raw.inputName);
+      out.mode = ['set', 'cycle', 'counter'].includes(raw.mode) ? raw.mode : 'set';
+      if (out.mode === 'set') {
+        if (typeof raw.text === 'string') out.text = raw.text;
+      } else if (out.mode === 'cycle') {
+        const list = Array.isArray(raw.presets)
+          ? raw.presets
+          : (typeof raw.presets === 'string' ? raw.presets.split(/\r?\n/) : []);
+        out.presets = list.map((s) => String(s ?? '')).filter((s) => s.length > 0);
+      } else if (out.mode === 'counter') {
+        const d = Number(raw.delta);
+        out.delta = Number.isFinite(d) ? d : 1;
+        if (typeof raw.template === 'string' && raw.template) out.template = raw.template;
+        const cv = Number(raw.counterVal);
+        out.counterVal = Number.isFinite(cv) ? cv : 0;
+      }
     } else if (type === 'http') {
       const m = String(raw.method || 'POST').toUpperCase();
       out.method = ['GET', 'POST', 'PUT'].includes(m) ? m : 'POST';
@@ -326,7 +357,7 @@
     return normalizePadInternal(raw, true);
   }
 
-  function renameReference(item, kind, oldName, newName) {
+  function renameReference(item, kind, oldName, newName, scope = '') {
     if (!item || typeof item !== 'object' || !oldName || !newName || oldName === newName) return false;
     let changed = false;
     if (kind === 'scene') {
@@ -342,22 +373,34 @@
           changed = true;
         }
       }
+      if (item.type === 'wait_event' && item.eventType === 'CurrentProgramSceneChanged' && item.targetName === oldName) {
+        item.targetName = newName;
+        changed = true;
+      }
     } else if (kind === 'input') {
       if (['source', 'filter', 'screenshot', 'transform'].includes(item.type)) {
         if (item.sourceName === oldName) {
           item.sourceName = newName;
           changed = true;
         }
-      } else if (['mute', 'volume', 'monitor', 'media', 'image', 'browser'].includes(item.type)) {
+      } else if (['mute', 'volume', 'monitor', 'media', 'image', 'browser', 'text'].includes(item.type)) {
         if (item.inputName === oldName) {
           item.inputName = newName;
           changed = true;
         }
+      } else if (item.type === 'wait_event' && item.eventType === 'MediaInputPlaybackEnded' && item.targetName === oldName) {
+        item.targetName = newName;
+        changed = true;
+      }
+    } else if (kind === 'filter') {
+      if (item.type === 'filter' && (!scope || item.sourceName === scope) && item.filterName === oldName) {
+        item.filterName = newName;
+        changed = true;
       }
     }
     if (Array.isArray(item.steps)) {
       for (const step of item.steps) {
-        if (renameReference(step, kind, oldName, newName)) {
+        if (renameReference(step, kind, oldName, newName, scope)) {
           changed = true;
         }
       }
@@ -368,7 +411,7 @@
     return changed;
   }
 
-  function applyRename(kind, oldName, newName) {
+  function applyRename(kind, oldName, newName, scope = '') {
     if (!oldName || !newName || oldName === newName) return false;
     let changed = false;
     const { cfg } = Deck;
@@ -378,13 +421,13 @@
         changed = true;
       }
       for (const pad of (page.pads || [])) {
-        if (renameReference(pad, kind, oldName, newName)) {
+        if (renameReference(pad, kind, oldName, newName, scope)) {
           changed = true;
         }
       }
     }
     for (const step of (cfg.panicSteps || [])) {
-      if (renameReference(step, kind, oldName, newName)) {
+      if (renameReference(step, kind, oldName, newName, scope)) {
         changed = true;
       }
     }
@@ -426,7 +469,7 @@
     return `page-${n}`;
   }
 
-  function normalizePage(raw, idx, usedIds, seedPanicIfMissing = false, usedScenes = null) {
+  function normalizePage(raw, idx, usedIds, seedPanicIfMissing = false, usedScenes = null, usedFallback = null) {
     const cols = clampInt(raw?.cols, MIN_COLS, MAX_COLS, DEFAULT_COLS);
     const rows = clampInt(raw?.rows, MIN_ROWS, MAX_ROWS, DEFAULT_ROWS);
     const id = uniquePageId(usedIds, raw?.id || `page-${idx + 1}`);
@@ -448,6 +491,12 @@
       if (!usedScenes || !usedScenes.has(sc)) {
         page.sceneName = sc;
         if (usedScenes) usedScenes.add(sc);
+      }
+    }
+    if (Boolean(raw?.isFallback)) {
+      if (!usedFallback || !usedFallback.claimed) {
+        page.isFallback = true;
+        if (usedFallback) usedFallback.claimed = true;
       }
     }
     return page;
@@ -476,16 +525,22 @@
     if (sourcePages) {
       const usedIds = new Set();
       const usedScenes = new Set();
+      const usedFallback = { claimed: false };
       pages = sourcePages
         .filter((d) => d && typeof d === 'object')
-        .map((d, idx) => normalizePage(d, idx, usedIds, false, usedScenes));
+        .map((d, idx) => normalizePage(d, idx, usedIds, false, usedScenes, usedFallback));
       if (!pages.length) throw new Error('Invalid layout JSON (empty pages[])');
+      if (!usedFallback.claimed && typeof raw.fallbackPageId === 'string' && raw.fallbackPageId) {
+        const fb = pages.find((d) => d.id === raw.fallbackPageId);
+        if (fb) fb.isFallback = true;
+      }
       const rawActiveId = raw.activePageId || raw.activeDeckId;
       activePageId = pages.some((d) => d.id === rawActiveId) ? rawActiveId : pages[0].id;
     } else if (Array.isArray(raw.pads)) {
       const usedIds = new Set();
       const usedScenes = new Set();
-      const single = normalizePage({ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads: raw.pads }, 0, usedIds, false, usedScenes);
+      const usedFallback = { claimed: false };
+      const single = normalizePage({ id: 'page-1', name: 'Main', cols: 8, rows: 8, pads: raw.pads }, 0, usedIds, false, usedScenes, usedFallback);
       pages = [single];
       activePageId = single.id;
     } else {
@@ -496,7 +551,7 @@
       ? raw.panicSteps
           .filter((s) => s && typeof s === 'object')
           .map(normalizeStep)
-          .filter((s) => s.type !== 'none' && s.type !== 'wait')
+          .filter((s) => s.type !== 'none' && s.type !== 'wait' && s.type !== 'wait_event')
       : [];
 
     return { version: 2, ws, activePageId, pages, panicSteps };
@@ -648,6 +703,9 @@
       retryCount: 0,
       statsTimer: null,
       readoutTimer: null,
+      meterTimer: null,
+      eventSubscriptions: 2047,
+      eventWaiters: new Set(),
       streamStatus: null,
       recordStatus: null,
       mediaStatus: {},
@@ -661,6 +719,7 @@
       mediaInputs: [],
       browserInputs: [],
       imageInputs: [],
+      textInputs: [],
       hotkeys: [],
       programScene: '',
       previewScene: '',
@@ -669,17 +728,36 @@
       filtersBySource: {},
       mutes: {},
       volumes: {},
+      volumeMeters: {},
       monitors: {},
       mediaStates: {},
       imageFiles: {},
+      textValues: {},
+      textReadFromFile: {},
+      lastTextReadFromFileWarn: '',
       transforms: {},
-      videoSettings: { baseWidth: 1920, baseHeight: 1080 },
+      videoSettings: { baseWidth: 1920, baseHeight: 1080, targetFps: 0 },
       stats: {
         cpuUsage: 0,
         memoryUsage: 0,
         activeFps: 0,
+        averageFrameTime: 0,
         renderSkippedFrames: 0,
         outputSkippedFrames: 0,
+      },
+      statsDelta: {
+        initialized: false,
+        prevRenderSkipped: 0,
+        prevOutputSkipped: 0,
+        deltaDropped: 0,
+      },
+      streamMetrics: {
+        kbps: 0,
+        congestion: 0,
+        deltaSkipped: 0,
+        lastBytes: null,
+        lastAt: 0,
+        lastSkipped: null,
       },
       outputs: {
         stream: false,
@@ -697,6 +775,7 @@
       transitionDuration: 300,
       lastScreenshot: '',
     },
+    WAIT_EVENT_TYPES,
     STORAGE_KEY,
     hasSaveWarning: initialSaveFailed,
     setSaveWarning: (show) => {
@@ -741,6 +820,7 @@
     Deck.setSaveWarning(!ok);
     Deck.syncStatsPolling();
     Deck.syncReadoutPolling();
+    if (typeof Deck.syncMeterSubscription === 'function') Deck.syncMeterSubscription();
     return ok;
   };
 
@@ -754,7 +834,8 @@
 
   Deck.exportConfig = () => {
     const { cfg } = Deck;
-    return {
+    const fb = (cfg.pages || []).find((d) => d.isFallback);
+    const exported = {
       version: 2,
       ws: { host: cfg.ws.host, port: cfg.ws.port },
       activePageId: cfg.activePageId,
@@ -767,10 +848,13 @@
           pads: d.pads.map(normalizePad),
         };
         if (d.sceneName) out.sceneName = d.sceneName;
+        if (d.isFallback) out.isFallback = true;
         return out;
       }),
-      panicSteps: (cfg.panicSteps || []).map(normalizeStep).filter((s) => s.type !== 'none' && s.type !== 'wait'),
+      panicSteps: (cfg.panicSteps || []).map(normalizeStep).filter((s) => s.type !== 'none' && s.type !== 'wait' && s.type !== 'wait_event'),
     };
+    if (fb) exported.fallbackPageId = fb.id;
+    return exported;
   };
 
   Deck.getActivePage = () => {
@@ -800,6 +884,34 @@
     Deck.saveCfg();
     Deck.renderGrid();
     return page;
+  };
+
+  let pageLocked = false;
+  Deck.isPageLocked = () => pageLocked;
+  Deck.setPageLock = (locked) => {
+    pageLocked = Boolean(locked);
+    if (typeof Deck.renderPageBar === 'function') Deck.renderPageBar();
+    if (!pageLocked && !Deck.editMode && Deck.obs.status === 'ok' && Deck.obs.programScene) {
+      if (typeof Deck.syncSceneLinkedPage === 'function') Deck.syncSceneLinkedPage(Deck.obs.programScene);
+    }
+    return pageLocked;
+  };
+
+  Deck.getFallbackPage = () => (Deck.cfg.pages || []).find((p) => p.isFallback) || null;
+  Deck.setFallbackPage = (pageId) => {
+    const pages = Deck.cfg.pages || [];
+    let matched = false;
+    for (const p of pages) {
+      if (pageId && p.id === pageId) {
+        p.isFallback = true;
+        matched = true;
+      } else {
+        delete p.isFallback;
+      }
+    }
+    Deck.saveCfg();
+    Deck.renderGrid();
+    return matched ? pages.find((p) => p.id === pageId) : null;
   };
 
   Deck.addPage = ({ name, cols, rows, switchTo = true } = {}) => {
@@ -1286,6 +1398,7 @@
         cols: raw.cols || DEFAULT_COLS,
         rows: raw.rows || DEFAULT_ROWS,
         sceneName: raw.sceneName,
+        isFallback: raw.isFallback,
         pads: raw.pads,
       }];
     } else {
@@ -1309,9 +1422,10 @@
 
     const usedIds = new Set((Deck.cfg.pages || []).map((p) => p.id));
     const usedScenes = new Set((Deck.cfg.pages || []).map((p) => p.sceneName).filter(Boolean));
+    const usedFallback = { claimed: (Deck.cfg.pages || []).some((p) => p.isFallback) };
     const idMap = new Map();
     const normalized = validIncoming.map((rawPage, idx) => {
-      const page = normalizePage(rawPage, idx, usedIds, false, usedScenes);
+      const page = normalizePage(rawPage, idx, usedIds, false, usedScenes, usedFallback);
       const oldId = rawPage.id || `page-${idx + 1}`;
       if (oldId && page.id !== oldId && !idMap.has(oldId)) {
         idMap.set(oldId, page.id);
@@ -1781,9 +1895,35 @@
     if ($('ws-pass')) $('ws-pass').value = Deck.cfg.ws.password ?? '';
   };
 
+  let cleanToastTimer = null;
   Deck.setMsg = (txt) => {
     const el = $('msg-info');
     if (el) el.textContent = txt;
+    if (typeof Deck.onMsg === 'function') {
+      try { Deck.onMsg(txt); } catch {}
+    }
+    const toast = $('clean-toast');
+    if (toast) {
+      const msgStr = String(txt || '');
+      const isClean = document.documentElement?.dataset?.clean === '1';
+      toast.textContent = msgStr;
+      toast.classList.remove('warn', 'bad');
+      if (/^(Warning:|Armed:)/i.test(msgStr)) toast.classList.add('warn');
+      else if (/(error|failed|rejected)/i.test(msgStr)) toast.classList.add('bad');
+      if (msgStr && isClean) {
+        toast.hidden = false;
+        toast.classList.add('show');
+        clearTimeout(cleanToastTimer);
+        cleanToastTimer = setTimeout(() => {
+          toast.classList.remove('show');
+          toast.hidden = true;
+        }, 2600);
+      } else {
+        clearTimeout(cleanToastTimer);
+        toast.classList.remove('show');
+        toast.hidden = true;
+      }
+    }
   };
 
   Deck.updateSceneHeader = () => {
@@ -1869,29 +2009,181 @@
     return Deck.obs.monitors[inputName] || 'OBS_MONITORING_TYPE_NONE';
   };
 
+  Deck.fetchTextSettings = async (inputName) => {
+    if (!inputName) return '';
+    try {
+      const r = await Deck.obsCall('GetInputSettings', { inputName });
+      const st = r?.inputSettings || {};
+      if (typeof st.text === 'string') Deck.obs.textValues[inputName] = st.text;
+      if (typeof st.read_from_file === 'boolean') Deck.obs.textReadFromFile[inputName] = st.read_from_file;
+    } catch {}
+    return typeof Deck.obs.textValues[inputName] === 'string' ? Deck.obs.textValues[inputName] : '';
+  };
+
+  function updateStatsMetrics(r) {
+    if (!r) return;
+    const { obs } = Deck;
+    const renderSkipped = Number(r.renderSkippedFrames) || 0;
+    const outputSkipped = Number(r.outputSkippedFrames) || 0;
+    const prev = obs.statsDelta || { initialized: false, prevRenderSkipped: 0, prevOutputSkipped: 0, deltaDropped: 0 };
+    let deltaDropped = 0;
+    if (prev.initialized && renderSkipped >= prev.prevRenderSkipped && outputSkipped >= prev.prevOutputSkipped) {
+      deltaDropped = (renderSkipped - prev.prevRenderSkipped) + (outputSkipped - prev.prevOutputSkipped);
+    }
+    obs.statsDelta = {
+      initialized: true,
+      prevRenderSkipped: renderSkipped,
+      prevOutputSkipped: outputSkipped,
+      deltaDropped,
+    };
+    obs.stats = {
+      cpuUsage: Number(r.cpuUsage) || 0,
+      memoryUsage: Number(r.memoryUsage) || 0,
+      activeFps: Number(r.activeFps) || 0,
+      averageFrameTime: Number(r.averageFrameTime) || 0,
+      renderSkippedFrames: renderSkipped,
+      outputSkippedFrames: outputSkipped,
+    };
+  }
+
+  function updateStreamMetrics(r) {
+    if (!r) return;
+    const { obs } = Deck;
+    const active = Boolean(r.outputActive);
+    if (!active) {
+      obs.streamMetrics = {
+        kbps: 0,
+        congestion: 0,
+        deltaSkipped: 0,
+        lastBytes: null,
+        lastAt: 0,
+        lastSkipped: null,
+      };
+      return;
+    }
+    const prev = obs.streamMetrics || { kbps: 0, congestion: 0, deltaSkipped: 0, lastBytes: null, lastAt: 0, lastSkipped: null };
+    const now = Date.now();
+    const bytes = typeof r.outputBytes === 'number' ? r.outputBytes : null;
+    let kbps = prev.kbps || 0;
+    if (bytes !== null && prev.lastBytes !== null && bytes >= prev.lastBytes && now > prev.lastAt) {
+      const dtSec = (now - prev.lastAt) / 1000;
+      kbps = Math.round(((bytes - prev.lastBytes) * 8) / (dtSec * 1000));
+    }
+    const skipped = typeof r.outputSkippedFrames === 'number' ? r.outputSkippedFrames : null;
+    let deltaSkipped = 0;
+    if (skipped !== null && prev.lastSkipped !== null && skipped >= prev.lastSkipped) {
+      deltaSkipped = skipped - prev.lastSkipped;
+    }
+    obs.streamMetrics = {
+      kbps,
+      congestion: Number(r.outputCongestion) || 0,
+      deltaSkipped,
+      lastBytes: bytes !== null ? bytes : prev.lastBytes,
+      lastAt: bytes !== null ? now : prev.lastAt,
+      lastSkipped: skipped !== null ? skipped : prev.lastSkipped,
+    };
+  }
+
   Deck.formatStatsText = (mode = 'all') => {
     const s = Deck.obs.stats || {};
+    const sm = Deck.obs.streamMetrics || {};
     const cpu = Number(s.cpuUsage || 0);
     const fps = Number(s.activeFps || 0);
+    const mem = Number(s.memoryUsage || 0);
+    const frameMs = Number(s.averageFrameTime || 0);
     const dropped = Number(s.renderSkippedFrames || 0) + Number(s.outputSkippedFrames || 0);
     if (mode === 'cpu') return `${cpu.toFixed(1)}% CPU`;
     if (mode === 'fps') return `${fps.toFixed(1)} FPS`;
     if (mode === 'dropped') return `${dropped} drop`;
+    if (mode === 'mem') return `${Math.round(mem)} MB · ${frameMs.toFixed(1)}ms`;
+    if (mode === 'stream') {
+      if (!Deck.obs.outputs?.stream) return 'OFFLINE';
+      return `${Number(sm.kbps || 0)}k · ${Math.round((Number(sm.congestion) || 0) * 100)}%`;
+    }
     return `${cpu.toFixed(0)}% · ${fps.toFixed(0)}fps · ${dropped}d`;
+  };
+
+  function worstAlert(a, b) {
+    if (a === 'crit' || b === 'crit') return 'crit';
+    if (a === 'warn' || b === 'warn') return 'warn';
+    return '';
+  }
+
+  Deck.getStatsAlertLevel = (mode = 'all') => {
+    const { obs } = Deck;
+    if (!obs || obs.status !== 'ok') return '';
+    const s = obs.stats || {};
+    const sd = obs.statsDelta || {};
+    const sm = obs.streamMetrics || {};
+    const cpu = Number(s.cpuUsage || 0);
+    const fps = Number(s.activeFps || 0);
+    const targetFps = Number(obs.videoSettings?.targetFps || 0);
+    const frameMs = Number(s.averageFrameTime || 0);
+    const deltaDropped = Number(sd.deltaDropped || 0);
+
+    const cpuLvl = cpu >= 90 ? 'crit' : (cpu >= 75 ? 'warn' : '');
+    let fpsLvl = '';
+    if (fps > 0) {
+      if (targetFps > 0) {
+        if (fps < targetFps * 0.75) fpsLvl = 'crit';
+        else if (fps < targetFps * 0.9) fpsLvl = 'warn';
+      } else {
+        if (fps < 20) fpsLvl = 'crit';
+        else if (fps < 28) fpsLvl = 'warn';
+      }
+    }
+    const dropLvl = deltaDropped >= 10 ? 'crit' : (deltaDropped > 0 ? 'warn' : '');
+    const budgetMs = targetFps > 0 ? (1000 / targetFps) : 33.3;
+    const memLvl = frameMs > budgetMs * 1.1 ? 'crit' : (frameMs > budgetMs * 0.85 ? 'warn' : '');
+
+    let streamLvl = '';
+    if (obs.outputs?.stream) {
+      const cong = Number(sm.congestion || 0);
+      const sDrop = Number(sm.deltaSkipped || 0);
+      if (cong >= 0.5 || sDrop >= 10) streamLvl = 'crit';
+      else if (cong >= 0.2 || sDrop > 0) streamLvl = 'warn';
+    }
+
+    if (mode === 'cpu') return cpuLvl;
+    if (mode === 'fps') return fpsLvl;
+    if (mode === 'dropped') return dropLvl;
+    if (mode === 'mem') return memLvl;
+    if (mode === 'stream') return streamLvl;
+    return worstAlert(cpuLvl, worstAlert(fpsLvl, dropLvl));
+  };
+
+  Deck.applyStatsAlerts = () => {
+    const grid = $('grid');
+    const page = Deck.getActivePage();
+    if (!grid || !page) return;
+    page.pads.forEach((p, i) => {
+      if (!p || p.type !== 'stats') return;
+      const btn = grid.querySelector(`.pad[data-idx="${i}"]`);
+      if (!btn) return;
+      const lvl = Deck.getStatsAlertLevel(p.mode || 'all');
+      btn.classList.toggle('warn', lvl === 'warn');
+      btn.classList.toggle('crit', lvl === 'crit');
+    });
   };
 
   Deck.fetchStats = async () => {
     try {
-      const r = await Deck.obsCall('GetStats');
-      Deck.obs.stats = {
-        cpuUsage: Number(r.cpuUsage) || 0,
-        memoryUsage: Number(r.memoryUsage) || 0,
-        activeFps: Number(r.activeFps) || 0,
-        renderSkippedFrames: Number(r.renderSkippedFrames) || 0,
-        outputSkippedFrames: Number(r.outputSkippedFrames) || 0,
-      };
+      const activePads = Deck.getActivePads();
+      const needsStreamForStats = activePads.some((p) => p && p.type === 'stats' && p.mode === 'stream')
+        && !activePads.some((p) => p && p.type === 'output' && p.target === 'stream');
+      const [r, streamRes] = await Promise.all([
+        Deck.obsCall('GetStats'),
+        needsStreamForStats ? Deck.obsCall('GetStreamStatus').catch(() => null) : Promise.resolve(null),
+      ]);
+      updateStatsMetrics(r);
+      if (streamRes) {
+        Deck.obs.streamStatus = streamRes;
+        if (typeof streamRes.outputActive === 'boolean') Deck.obs.outputs.stream = streamRes.outputActive;
+        updateStreamMetrics(streamRes);
+      }
       if (typeof Deck.updateStatsPads === 'function') Deck.updateStatsPads();
       else Deck.renderGrid();
+      Deck.applyStatsAlerts();
     } catch {}
     return Deck.obs.stats;
   };
@@ -1952,8 +2244,7 @@
 
   function isReadoutPad(p) {
     if (!p) return false;
-    if (p.type === 'volume') return true;
-    if (p.type === 'media') return true;
+    if (p.type === 'volume' || p.type === 'media' || p.type === 'text') return true;
     if (p.type === 'output' && (p.target === 'stream' || p.target === 'record' || p.target === 'recordPause')) return true;
     return false;
   }
@@ -1980,6 +2271,18 @@
         return `${dbVal} dB`;
       }
       return '';
+    }
+
+    if (p.type === 'text' && p.inputName) {
+      let raw = obs.textValues?.[p.inputName];
+      if (typeof raw !== 'string' && p.mode === 'counter') {
+        const val = Number.isFinite(Number(p.counterVal)) ? Number(p.counterVal) : 0;
+        const tpl = typeof p.template === 'string' && p.template ? p.template : '{{n}}';
+        raw = /\{\{n\}\}/i.test(tpl) ? tpl.replace(/\{\{n\}\}/gi, String(val)) : `${tpl} ${val}`;
+      }
+      if (typeof raw !== 'string' || !raw) return '';
+      const clean = raw.replace(/\s+/g, ' ').trim();
+      return clean.length > 18 ? `${clean.slice(0, 17)}…` : clean;
     }
 
     if (p.type === 'output' && p.target === 'stream') {
@@ -2024,6 +2327,7 @@
       calls.push(Deck.obsCall('GetStreamStatus').then((r) => {
         obs.streamStatus = r;
         if (typeof r.outputActive === 'boolean') obs.outputs.stream = r.outputActive;
+        updateStreamMetrics(r);
       }).catch(() => {}));
     }
     if (hasRecord) {
@@ -2047,6 +2351,10 @@
     if (typeof Deck.updateReadoutPads === 'function') {
       Deck.updateReadoutPads();
     }
+    if (hasStream && activePads.some((p) => p && p.type === 'stats' && p.mode === 'stream')) {
+      if (typeof Deck.updateStatsPads === 'function') Deck.updateStatsPads();
+      Deck.applyStatsAlerts();
+    }
   };
 
   Deck.syncReadoutPolling = () => {
@@ -2059,6 +2367,14 @@
         .map((p) => p.inputName);
       if (missingVolumes.length > 0) {
         Promise.all([...new Set(missingVolumes)].map(Deck.fetchVolume)).then(() => {
+          if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+        });
+      }
+      const missingTexts = Deck.getActivePads()
+        .filter((p) => p && p.type === 'text' && p.inputName && typeof obs.textValues[p.inputName] !== 'string')
+        .map((p) => p.inputName);
+      if (missingTexts.length > 0) {
+        Promise.all([...new Set(missingTexts)].map(Deck.fetchTextSettings)).then(() => {
           if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
         });
       }
@@ -2081,6 +2397,67 @@
     }
   };
 
+  const BASE_EVENT_SUBS = 2047;
+  const METER_EVENT_BIT = 65536;
+
+  Deck.updateMeterPads = () => {
+    const grid = $('grid');
+    const page = Deck.getActivePage();
+    if (!grid || !page) return;
+    const { obs } = Deck;
+    const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+    page.pads.forEach((p, i) => {
+      const btn = grid.querySelector(`.pad[data-idx="${i}"]`);
+      if (!btn) return;
+      const isMetered = connected && p && (p.type === 'mute' || p.type === 'volume') && p.showMeter && p.inputName;
+      let meterEl = btn.querySelector('.pad-meter');
+      if (!isMetered) {
+        if (meterEl) meterEl.remove();
+        return;
+      }
+      if (!meterEl) {
+        meterEl = document.createElement('span');
+        meterEl.className = 'pad-meter';
+        meterEl.setAttribute('aria-hidden', 'true');
+        btn.appendChild(meterEl);
+      }
+      const m = obs.volumeMeters?.[p.inputName] || { level: 0, clip: false };
+      meterEl.style.setProperty('--meter', String(m.level ?? 0));
+      meterEl.classList.toggle('clip', Boolean(m.clip));
+    });
+  };
+
+  function scheduleMeterUpdate() {
+    const { obs } = Deck;
+    if (obs.meterTimer) return;
+    obs.meterTimer = setTimeout(() => {
+      obs.meterTimer = null;
+      Deck.updateMeterPads();
+    }, 110);
+  }
+
+  Deck.syncMeterSubscription = () => {
+    const { obs } = Deck;
+    const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+    if (!connected) return;
+    const needsMeters = Deck.getActivePads().some((p) => p && (p.type === 'mute' || p.type === 'volume') && p.showMeter && p.inputName);
+    const desired = needsMeters ? (BASE_EVENT_SUBS | METER_EVENT_BIT) : BASE_EVENT_SUBS;
+    if (desired !== obs.eventSubscriptions) {
+      obs.eventSubscriptions = desired;
+      try {
+        obs.ws.send(JSON.stringify({ op: 3, d: { eventSubscriptions: desired } }));
+      } catch {}
+      if (!needsMeters) {
+        if (obs.meterTimer) {
+          clearTimeout(obs.meterTimer);
+          obs.meterTimer = null;
+        }
+        obs.volumeMeters = {};
+      }
+    }
+    Deck.updateMeterPads();
+  };
+
   function applyInputList(rawInputs) {
     const { obs } = Deck;
     const list = Array.isArray(rawInputs) ? rawInputs : [];
@@ -2089,6 +2466,7 @@
     obs.mediaInputs = [];
     obs.browserInputs = [];
     obs.imageInputs = [];
+    obs.textInputs = [];
     for (const i of list) {
       if (!i?.inputName) continue;
       const kind = String(i.inputKind || '');
@@ -2097,6 +2475,9 @@
       if (/browser/i.test(kind)) obs.browserInputs.push(i.inputName);
       if (kind === 'image_source' || kind === 'slideshow' || kind === 'slideshow_v2' || /image_source|slideshow/i.test(kind)) {
         obs.imageInputs.push(i.inputName);
+      }
+      if (/^text_/i.test(kind)) {
+        obs.textInputs.push(i.inputName);
       }
     }
   }
@@ -2149,7 +2530,11 @@
       applyInputList(il.inputs);
 
       if (studioRes) obs.studioModeEnabled = !!studioRes.studioModeEnabled;
-      if (streamRes) obs.outputs.stream = !!streamRes.outputActive;
+      if (streamRes) {
+        obs.streamStatus = streamRes;
+        obs.outputs.stream = !!streamRes.outputActive;
+        updateStreamMetrics(streamRes);
+      }
       if (recRes) {
         obs.outputs.record = !!recRes.outputActive;
         obs.outputs.recordPaused = !!recRes.outputPaused;
@@ -2178,19 +2563,16 @@
         obs.hotkeys = hkRes.hotkeys.filter(Boolean);
       }
       if (videoRes) {
+        const fpsNum = Number(videoRes.fpsNumerator) || 0;
+        const fpsDen = Number(videoRes.fpsDenominator) || 1;
         obs.videoSettings = {
           baseWidth: Number(videoRes.baseWidth) || 1920,
           baseHeight: Number(videoRes.baseHeight) || 1080,
+          targetFps: fpsNum > 0 && fpsDen > 0 ? (fpsNum / fpsDen) : 0,
         };
       }
       if (statsRes) {
-        obs.stats = {
-          cpuUsage: Number(statsRes.cpuUsage) || 0,
-          memoryUsage: Number(statsRes.memoryUsage) || 0,
-          activeFps: Number(statsRes.activeFps) || 0,
-          renderSkippedFrames: Number(statsRes.renderSkippedFrames) || 0,
-          outputSkippedFrames: Number(statsRes.outputSkippedFrames) || 0,
-        };
+        updateStatsMetrics(statsRes);
       }
 
       obs.groups = new Set();
@@ -2205,6 +2587,8 @@
       const volumeInputs = new Set();
       const monitorInputs = new Set();
       const mediaTargets = new Set(obs.mediaInputs);
+      const imageTargets = new Set();
+      const textTargets = new Set();
       const collectStep = (st) => {
         if (!st) return;
         if (st.type === 'filter' && st.sourceName) filterSources.add(st.sourceName);
@@ -2212,6 +2596,8 @@
         if (st.type === 'volume' && st.inputName) volumeInputs.add(st.inputName);
         if (st.type === 'media' && st.inputName) mediaTargets.add(st.inputName);
         if (st.type === 'monitor' && st.inputName) monitorInputs.add(st.inputName);
+        if (st.type === 'image' && st.inputName && (st.mode || 'set_file') === 'set_file') imageTargets.add(st.inputName);
+        if (st.type === 'text' && st.inputName) textTargets.add(st.inputName);
       };
       for (const d of cfg.pages) {
         for (const p of d.pads) {
@@ -2221,12 +2607,33 @@
       }
       (cfg.panicSteps || []).forEach(collectStep);
 
+      const settingsTargets = new Set([...imageTargets, ...textTargets]);
+      const fetchInputSettingsForSync = async (inputName) => {
+        try {
+          const r = await Deck.obsCall('GetInputSettings', { inputName });
+          const st = r?.inputSettings || {};
+          const kind = r?.inputKind || obs.inputKinds[inputName] || '';
+          if (imageTargets.has(inputName)) {
+            if (/slideshow/i.test(kind)) {
+              obs.imageFiles[inputName] = Array.isArray(st.files) ? (st.files[0]?.value || '') : '';
+            } else if (typeof st.file === 'string') {
+              obs.imageFiles[inputName] = st.file;
+            }
+          }
+          if (textTargets.has(inputName)) {
+            if (typeof st.text === 'string') obs.textValues[inputName] = st.text;
+            if (typeof st.read_from_file === 'boolean') obs.textReadFromFile[inputName] = st.read_from_file;
+          }
+        } catch {}
+      };
+
       await Promise.all([
         ...[...filterSources].map(Deck.refreshFilters),
         ...[...muteInputs].map(Deck.fetchMute),
         ...[...volumeInputs].map(Deck.fetchVolume),
         ...[...mediaTargets].map(Deck.fetchMediaState),
         ...[...monitorInputs].map(Deck.fetchMonitorType),
+        ...[...settingsTargets].map(fetchInputSettingsForSync),
       ]);
 
       if (typeof Deck.syncTransforms === 'function') {
@@ -2237,7 +2644,9 @@
       Deck.scheduleRenderGrid();
       Deck.syncStatsPolling();
       Deck.syncReadoutPolling();
+      Deck.syncMeterSubscription();
       if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+      Deck.applyStatsAlerts();
     } catch (e) {
       Deck.setMsg(`Sync error: ${e.message}`);
     }
@@ -2264,15 +2673,41 @@
   };
 
   function syncSceneLinkedPage(sceneName) {
-    if (Deck.editMode || !sceneName) return false;
-    const linked = (Deck.cfg.pages || []).find((p) => p.sceneName && p.sceneName === sceneName);
-    if (linked && Deck.cfg.activePageId !== linked.id) {
-      Deck.setActivePage(linked.id);
+    if (Deck.editMode || !sceneName || Deck.isPageLocked()) return false;
+    const pages = Deck.cfg.pages || [];
+    const linked = pages.find((p) => p.sceneName && p.sceneName === sceneName);
+    if (linked) {
+      if (Deck.cfg.activePageId !== linked.id) {
+        Deck.setActivePage(linked.id);
+        return true;
+      }
+      return false;
+    }
+    const fallback = pages.find((p) => p.isFallback);
+    if (fallback && Deck.cfg.activePageId !== fallback.id) {
+      Deck.setActivePage(fallback.id);
       return true;
     }
     return false;
   }
   Deck.syncSceneLinkedPage = syncSceneLinkedPage;
+
+  function notifyEventWaiters(type, d) {
+    const waiters = Deck.obs?.eventWaiters;
+    if (!waiters || !waiters.size) return;
+    for (const w of [...waiters]) {
+      if (!w || w.eventType !== type) continue;
+      let matched = !w.targetName;
+      if (!matched) {
+        if (type === 'MediaInputPlaybackEnded') matched = d.inputName === w.targetName;
+        else if (type === 'SceneTransitionEnded') matched = d.transitionName === w.targetName;
+        else if (type === 'CurrentProgramSceneChanged') matched = d.sceneName === w.targetName;
+      }
+      if (matched) {
+        try { w.onMatch(d); } catch {}
+      }
+    }
+  }
 
   async function handleObsEvent(type, d) {
     const { obs } = Deck;
@@ -2281,6 +2716,7 @@
       syncSceneLinkedPage(obs.programScene);
       Deck.updateSceneHeader();
       Deck.scheduleRenderGrid();
+      notifyEventWaiters(type, d);
     } else if (type === 'CurrentPreviewSceneChanged') {
       obs.previewScene = d.sceneName || '';
       Deck.updateSceneHeader();
@@ -2333,6 +2769,16 @@
         applyInputList(il.inputs);
       } catch {}
       Deck.scheduleRenderGrid();
+    } else if (type === 'InputSettingsChanged') {
+      if (d.inputName && d.inputSettings && typeof d.inputSettings === 'object') {
+        const st = d.inputSettings;
+        if (typeof st.text === 'string') obs.textValues[d.inputName] = st.text;
+        if (typeof st.read_from_file === 'boolean') obs.textReadFromFile[d.inputName] = st.read_from_file;
+        if (typeof st.file === 'string') obs.imageFiles[d.inputName] = st.file;
+        else if (Array.isArray(st.files)) obs.imageFiles[d.inputName] = st.files[0]?.value || '';
+        if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+        Deck.scheduleRenderGrid();
+      }
     } else if (type === 'SceneItemEnableStateChanged') {
       const arr = obs.itemsByScene[d.sceneName];
       if (arr) {
@@ -2350,7 +2796,13 @@
         if (f) f.filterEnabled = !!d.filterEnabled;
       }
       Deck.scheduleRenderGrid();
-    } else if (type === 'SourceFilterCreated' || type === 'SourceFilterRemoved' || type === 'SourceFilterListReindexed' || type === 'SourceFilterNameChanged') {
+    } else if (type === 'SourceFilterNameChanged') {
+      if (d.sourceName && d.oldFilterName && d.filterName && d.oldFilterName !== d.filterName) {
+        applyRename('filter', d.oldFilterName, d.filterName, d.sourceName);
+      }
+      await Deck.refreshFilters(d.sourceName);
+      Deck.scheduleRenderGrid();
+    } else if (type === 'SourceFilterCreated' || type === 'SourceFilterRemoved' || type === 'SourceFilterListReindexed') {
       await Deck.refreshFilters(d.sourceName);
       Deck.scheduleRenderGrid();
     } else if (type === 'InputMuteStateChanged') {
@@ -2360,13 +2812,41 @@
       if (d.inputName && typeof d.inputVolumeDb === 'number') obs.volumes[d.inputName] = d.inputVolumeDb;
       if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
       Deck.scheduleRenderGrid();
+    } else if (type === 'InputVolumeMeters') {
+      if (Array.isArray(d.inputs)) {
+        for (const inp of d.inputs) {
+          if (!inp?.inputName) continue;
+          let maxPeak = 0;
+          if (Array.isArray(inp.inputLevelsMul)) {
+            for (const ch of inp.inputLevelsMul) {
+              if (Array.isArray(ch)) {
+                const v = Number(ch[1] ?? ch[0] ?? 0);
+                if (Number.isFinite(v) && v > maxPeak) maxPeak = v;
+              }
+            }
+          }
+          let level = 0;
+          if (maxPeak > 0.001) {
+            const db = 20 * Math.log10(maxPeak);
+            level = Math.max(0, Math.min(1, (db + 60) / 60));
+          }
+          obs.volumeMeters[inp.inputName] = {
+            peak: maxPeak,
+            level: Math.round(level * 100) / 100,
+            clip: maxPeak >= 0.98,
+          };
+        }
+        scheduleMeterUpdate();
+      }
     } else if (type === 'InputAudioMonitorTypeChanged') {
       if (d.inputName && d.monitorType) obs.monitors[d.inputName] = d.monitorType;
       Deck.scheduleRenderGrid();
     } else if (type === 'StreamStateChanged') {
       obs.outputs.stream = !!d.outputActive;
-      if (!d.outputActive) obs.streamStatus = null;
-      else if (typeof Deck.fetchReadouts === 'function') Deck.fetchReadouts();
+      if (!d.outputActive) {
+        obs.streamStatus = null;
+        updateStreamMetrics({ outputActive: false });
+      } else if (typeof Deck.fetchReadouts === 'function') Deck.fetchReadouts();
       if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
       Deck.scheduleRenderGrid();
     } else if (type === 'RecordStateChanged') {
@@ -2397,6 +2877,7 @@
       }
       if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
       Deck.scheduleRenderGrid();
+      notifyEventWaiters(type, d);
     } else if (type === 'MediaInputActionTriggered') {
       if (d.inputName) {
         if (d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY' || d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART' || d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_NEXT' || d.mediaAction === 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PREVIOUS') {
@@ -2430,6 +2911,8 @@
       Deck.scheduleRenderGrid();
     } else if (type === 'CurrentSceneTransitionDurationChanged') {
       if (typeof d.transitionDuration === 'number') obs.transitionDuration = d.transitionDuration;
+    } else if (type === 'SceneTransitionEnded') {
+      notifyEventWaiters(type, d);
     }
   }
 
@@ -2496,6 +2979,42 @@
     4011: { name: 'Session Invalidated', unrecoverable: true },
   };
 
+  function clearConnectionRuntime(rejectReason) {
+    const { obs } = Deck;
+    if (obs.statsTimer) {
+      clearInterval(obs.statsTimer);
+      obs.statsTimer = null;
+    }
+    if (obs.readoutTimer) {
+      clearInterval(obs.readoutTimer);
+      obs.readoutTimer = null;
+    }
+    if (obs.meterTimer) {
+      clearTimeout(obs.meterTimer);
+      obs.meterTimer = null;
+    }
+    obs.eventSubscriptions = BASE_EVENT_SUBS;
+    obs.streamStatus = null;
+    obs.recordStatus = null;
+    obs.mediaStatus = {};
+    obs.volumeMeters = {};
+    obs.statsDelta = { initialized: false, prevRenderSkipped: 0, prevOutputSkipped: 0, deltaDropped: 0 };
+    obs.streamMetrics = { kbps: 0, congestion: 0, deltaSkipped: 0, lastBytes: null, lastAt: 0, lastSkipped: null };
+    if (obs.eventWaiters && obs.eventWaiters.size) {
+      for (const w of [...obs.eventWaiters]) {
+        try { w.onAbort?.(rejectReason); } catch {}
+      }
+      obs.eventWaiters.clear();
+    }
+    if (typeof Deck.clearReadoutPads === 'function') Deck.clearReadoutPads();
+    if (typeof Deck.updateMeterPads === 'function') Deck.updateMeterPads();
+    if (typeof Deck.applyStatsAlerts === 'function') Deck.applyStatsAlerts();
+    obs.activeSync = null;
+    obs.queuedSync = null;
+    for (const p of obs.pending.values()) { clearTimeout(p.timer); p.reject(new Error(rejectReason)); }
+    obs.pending.clear();
+  }
+
   Deck.disconnectObs = (manual = true) => {
     const { obs } = Deck;
     if (typeof Deck.releaseHold === 'function') {
@@ -2508,22 +3027,7 @@
       clearInterval(obs.reconnectCountdown);
       obs.reconnectCountdown = null;
     }
-    if (obs.statsTimer) {
-      clearInterval(obs.statsTimer);
-      obs.statsTimer = null;
-    }
-    if (obs.readoutTimer) {
-      clearInterval(obs.readoutTimer);
-      obs.readoutTimer = null;
-    }
-    obs.streamStatus = null;
-    obs.recordStatus = null;
-    obs.mediaStatus = {};
-    if (typeof Deck.clearReadoutPads === 'function') Deck.clearReadoutPads();
-    obs.activeSync = null;
-    obs.queuedSync = null;
-    for (const p of obs.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Disconnected')); }
-    obs.pending.clear();
+    clearConnectionRuntime('Disconnected');
     if (obs.ws) { const w = obs.ws; obs.ws = null; try { w.close(); } catch {} }
     if (manual) {
       obs.retryCount = 0;
@@ -2645,22 +3149,7 @@
         try { Deck.releaseHold(); } catch {}
       }
       obs.ws = null;
-      obs.activeSync = null;
-      obs.queuedSync = null;
-      if (obs.statsTimer) {
-        clearInterval(obs.statsTimer);
-        obs.statsTimer = null;
-      }
-      if (obs.readoutTimer) {
-        clearInterval(obs.readoutTimer);
-        obs.readoutTimer = null;
-      }
-      obs.streamStatus = null;
-      obs.recordStatus = null;
-      obs.mediaStatus = {};
-      if (typeof Deck.clearReadoutPads === 'function') Deck.clearReadoutPads();
-      for (const p of obs.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Closed')); }
-      obs.pending.clear();
+      clearConnectionRuntime('Closed');
       if (obs.manualClose) return;
 
       if (ev.code === 4009) {
@@ -2709,7 +3198,8 @@
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
       if (msg.op === 0) {
-        const d = { rpcVersion: 1, eventSubscriptions: 2047 };
+        obs.eventSubscriptions = BASE_EVENT_SUBS;
+        const d = { rpcVersion: 1, eventSubscriptions: BASE_EVENT_SUBS };
         if (msg.d?.authentication) {
           const { challenge, salt } = msg.d.authentication;
           d.authentication = sha256Base64(sha256Base64(password + salt) + challenge);

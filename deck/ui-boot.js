@@ -182,6 +182,7 @@
     Deck.syncWsInputs();
     Deck.saveCfg();
     Deck.renderGrid();
+    Deck.syncPageLockButton?.();
     if (Deck.obs.status === 'ok') await Deck.syncObsState();
     if (snapFailed) {
       Deck.setMsg('No snapshot was saved');
@@ -340,6 +341,7 @@
     Deck.cfg.panicSteps = [];
     Deck.saveCfg();
     Deck.renderGrid();
+    Deck.syncPageLockButton?.();
     if (snapFailed) {
       Deck.setMsg('No snapshot was saved');
     } else {
@@ -347,16 +349,307 @@
     }
   });
 
+  // Desktop App integration (Electron preload bridge; no-op on file:// and Phone Deck)
+  function initDesktopBridge() {
+    const api = window.opendeckDesktop;
+    if (!api) return;
+
+    const aotBtn = $('btn-desktop-aot');
+    const redetectBtn = $('btn-desktop-redetect');
+    const phoneHostBtn = $('btn-phone-host');
+    if (aotBtn) aotBtn.hidden = false;
+    if (redetectBtn) redetectBtn.hidden = false;
+    if (phoneHostBtn) phoneHostBtn.hidden = false;
+
+    const syncAotUi = (enabled) => {
+      const on = Boolean(enabled);
+      if (aotBtn) {
+        aotBtn.textContent = `Always on Top: ${on ? 'On' : 'Off'}`;
+        aotBtn.classList.toggle('on', on);
+        aotBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+    };
+
+    api.getAlwaysOnTop?.().then(syncAotUi).catch(() => {});
+    api.onAlwaysOnTopChange?.(syncAotUi);
+
+    aotBtn?.addEventListener('click', async () => {
+      try {
+        const cur = await api.getAlwaysOnTop?.();
+        const next = await api.setAlwaysOnTop?.(!cur);
+        syncAotUi(next);
+      } catch {}
+    });
+
+    const applyDiscoveredObsPort = (info, { force = false } = {}) => {
+      if (!info || !info.enabled || !info.port) {
+        if (force) Deck.setMsg('OBS WebSocket server not enabled in local OBS config');
+        return;
+      }
+      const nextPort = Number(info.port);
+      if (!Number.isInteger(nextPort) || nextPort < 1 || nextPort > 65535) return;
+      if (!force && Deck.cfg?.ws?.manualPort) return;
+      const changed = Number(Deck.cfg?.ws?.port) !== nextPort;
+      if (force) delete Deck.cfg.ws.manualPort;
+      if (changed || force) {
+        Deck.cfg.ws.port = nextPort;
+        Deck.syncWsInputs();
+        Deck.saveCfg();
+      }
+      if (Deck.obs.status !== 'ok') {
+        Deck.setMsg(`Detected OBS WebSocket on port ${nextPort}`);
+        Deck.connectObs({ isBoot: false });
+      } else if (force) {
+        Deck.setMsg(`OBS WebSocket port: ${nextPort}`);
+      }
+    };
+
+    redetectBtn?.addEventListener('click', async () => {
+      try {
+        const info = await api.rediscoverObsPort?.();
+        applyDiscoveredObsPort(info, { force: true });
+      } catch (err) {
+        Deck.setMsg(`Port detection failed: ${err?.message || 'Error'}`);
+      }
+    });
+
+    api.onObsPortChanged?.((info) => {
+      if (Deck.obs.status !== 'ok') {
+        applyDiscoveredObsPort(info, { force: false });
+      }
+    });
+
+    phoneHostBtn?.addEventListener('click', () => {
+      Deck.openPhoneHostDialog?.();
+    });
+
+    api.onTriggerPanic?.(() => {
+      Deck.runPanic?.();
+    });
+
+    api.onTriggerPad?.((target) => {
+      if (Deck.editMode || !target) return;
+      const idx = Number(target.padIdx);
+      const pageId = typeof target.pageId === 'string' ? target.pageId : Deck.cfg?.activePageId;
+      if (!Number.isInteger(idx) || idx < 0) return;
+      Deck.onPadClick?.(idx, pageId);
+    });
+
+    api.onSwitchPage?.((payload) => {
+      if (payload?.pageId) Deck.setActivePage?.(payload.pageId);
+    });
+
+    let lastStatusJson = '';
+    const pushDesktopStatus = () => {
+      if (typeof api.updateStatus !== 'function') return;
+      const payload = {
+        connected: Deck.obs.status === 'ok',
+        streaming: Boolean(Deck.obs.outputs?.stream),
+        recording: Boolean(Deck.obs.outputs?.record),
+        programScene: String(Deck.obs.programScene || ''),
+        activePageId: String(Deck.cfg?.activePageId || ''),
+        pages: (Deck.cfg?.pages || []).map((p) => ({
+          id: String(p.id || ''),
+          name: String(p.name || 'Page'),
+        })),
+      };
+      const serialized = JSON.stringify(payload);
+      if (serialized === lastStatusJson) return;
+      lastStatusJson = serialized;
+      try {
+        api.updateStatus(payload);
+      } catch {}
+    };
+
+    let phoneSyncTimer = null;
+    const schedulePhoneLayoutSync = () => {
+      if (typeof Deck.syncPhoneHostLayout !== 'function') return;
+      if (phoneSyncTimer) clearTimeout(phoneSyncTimer);
+      phoneSyncTimer = setTimeout(() => {
+        phoneSyncTimer = null;
+        Deck.syncPhoneHostLayout();
+      }, 250);
+    };
+
+    for (const fnName of ['setConn', 'updateSceneHeader', 'renderGrid', 'renderPageBar']) {
+      const orig = Deck[fnName];
+      if (typeof orig === 'function') {
+        Deck[fnName] = (...args) => {
+          const res = orig(...args);
+          pushDesktopStatus();
+          return res;
+        };
+      }
+    }
+
+    const origSaveCfg = Deck.saveCfg;
+    if (typeof origSaveCfg === 'function') {
+      Deck.saveCfg = (...args) => {
+        const res = origSaveCfg(...args);
+        pushDesktopStatus();
+        schedulePhoneLayoutSync();
+        return res;
+      };
+    }
+
+    pushDesktopStatus();
+  }
+
+  // Phone Deck progressive enhancements: Wake Lock, Haptics, and non-blocking live layout update banner
+  function initPhoneUxAndLiveLayoutBanner() {
+    let wakeLockSentinel = null;
+    const syncWakeLock = async () => {
+      if (typeof navigator === 'undefined' || !navigator.wakeLock || typeof navigator.wakeLock.request !== 'function') return;
+      const wantLock = Deck.obs.status === 'ok' && document.visibilityState === 'visible';
+      if (wantLock && !wakeLockSentinel) {
+        try {
+          wakeLockSentinel = await navigator.wakeLock.request('screen');
+          wakeLockSentinel?.addEventListener?.('release', () => {
+            wakeLockSentinel = null;
+          });
+        } catch {
+          wakeLockSentinel = null;
+        }
+      } else if (!wantLock && wakeLockSentinel) {
+        const cur = wakeLockSentinel;
+        wakeLockSentinel = null;
+        try { await cur.release(); } catch {}
+      }
+    };
+
+    document.addEventListener('visibilitychange', () => {
+      syncWakeLock();
+    });
+    const origSetConn = Deck.setConn;
+    if (typeof origSetConn === 'function') {
+      Deck.setConn = (...args) => {
+        const res = origSetConn(...args);
+        syncWakeLock();
+        return res;
+      };
+    }
+    syncWakeLock();
+
+    const triggerHaptic = (pattern) => {
+      try {
+        if (localStorage.getItem('opendeck_haptics') === '0') return;
+      } catch {}
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        try { navigator.vibrate(pattern); } catch {}
+      }
+    };
+
+    $('grid')?.addEventListener('pointerdown', (e) => {
+      if (Deck.editMode) return;
+      const padEl = e.target?.closest?.('.pad');
+      if (!padEl || padEl.classList.contains('empty')) return;
+      triggerHaptic(12);
+    });
+    $('btn-panic')?.addEventListener('click', () => triggerHaptic([15, 30, 15]));
+    $('btn-clean-panic')?.addEventListener('click', () => triggerHaptic([15, 30, 15]));
+
+    // Poll /layout-version over HTTP/HTTPS (Phone Deck LAN host) for live layout updates
+    if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+
+    const banner = $('layout-update-banner');
+    const textEl = $('layout-update-text');
+    const reloadBtn = $('btn-layout-reload');
+    const mergeBtn = $('btn-layout-merge');
+    const dismissBtn = $('btn-layout-dismiss');
+    if (!banner) return;
+
+    let knownVersion = null;
+    let pendingVersion = null;
+    let dismissedVersion = null;
+    let pollStopped = false;
+    let pollTimer = null;
+
+    const layoutHref = () => new URL('layout.json', location.href).href;
+    const versionHref = () => new URL('layout-version', location.href).href;
+
+    const checkLayoutVersion = async () => {
+      if (pollStopped || document.visibilityState === 'hidden') return;
+      try {
+        const res = await fetch(versionHref(), { cache: 'no-store' });
+        if (res.status === 404 || res.status === 405) {
+          pollStopped = true;
+          if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+          return;
+        }
+        if (!res.ok) return;
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('json')) {
+          pollStopped = true;
+          if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+          return;
+        }
+        const data = await res.json();
+        if (!data || !data.available || !data.version) return;
+        if (knownVersion === null) {
+          knownVersion = data.version;
+          return;
+        }
+        if (data.version !== knownVersion && data.version !== dismissedVersion) {
+          pendingVersion = data.version;
+          if (textEl) {
+            textEl.textContent = data.source
+              ? `Updated Deck layout available (${data.source})`
+              : 'Updated Deck layout available';
+          }
+          banner.hidden = false;
+        }
+      } catch {}
+    };
+
+    reloadBtn?.addEventListener('click', async () => {
+      if (reloadBtn) reloadBtn.disabled = true;
+      try {
+        await Deck.importFromLink(layoutHref());
+        Deck.syncPageLockButton?.();
+        knownVersion = pendingVersion || knownVersion;
+        banner.hidden = true;
+      } catch {} finally {
+        if (reloadBtn) reloadBtn.disabled = false;
+      }
+    });
+
+    mergeBtn?.addEventListener('click', async () => {
+      if (mergeBtn) mergeBtn.disabled = true;
+      try {
+        await Deck.mergeFromLink(layoutHref());
+        Deck.syncPageLockButton?.();
+        knownVersion = pendingVersion || knownVersion;
+        banner.hidden = true;
+      } catch {} finally {
+        if (mergeBtn) mergeBtn.disabled = false;
+      }
+    });
+
+    dismissBtn?.addEventListener('click', () => {
+      dismissedVersion = pendingVersion;
+      banner.hidden = true;
+    });
+
+    checkLayoutVersion();
+    pollTimer = setInterval(checkLayoutVersion, 4000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') checkLayoutVersion();
+    });
+  }
+
   // Boot
   initFontScaler();
   initTheme();
   initCleanView();
   Deck.initPaletteResizer();
   if ($('version-badge') && Deck.VERSION) $('version-badge').textContent = `v${Deck.VERSION}`;
+  initDesktopBridge();
+  initPhoneUxAndLiveLayoutBanner();
   Deck.syncWsInputs();
   Deck.updateUndoRedoUi?.();
   Deck.renderPalette();
   Deck.renderGrid();
+  Deck.syncPageLockButton?.();
 
   // Phone Deck: ?layout=layout.json loads a layout served by the same helper (same origin only), asks before importing, then drops the param.
   const layoutParam = new URLSearchParams(location.search).get('layout');
@@ -384,10 +677,24 @@
   Deck.connectObs({ isBoot: true });
 
   document.addEventListener('keydown', (e) => {
-    if (!Deck.editMode) return;
     if (document.querySelector('dialog[open]')) return;
     const tag = e.target?.tagName?.toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
+
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      const pages = Deck.cfg?.pages || [];
+      if (pages.length > 1) {
+        e.preventDefault();
+        const curIdx = Math.max(0, pages.findIndex((p) => p.id === Deck.cfg.activePageId));
+        const delta = e.key === 'ArrowRight' ? 1 : -1;
+        const nextPage = pages[(curIdx + delta + pages.length) % pages.length];
+        Deck.clearSelection?.();
+        Deck.setActivePage?.(nextPage.id);
+      }
+      return;
+    }
+
+    if (!Deck.editMode) return;
     if (!(e.ctrlKey || e.metaKey)) return;
 
     if (e.key === 'z' || e.key === 'Z') {
