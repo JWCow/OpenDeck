@@ -106,6 +106,11 @@
 
   // Overflow menu: secondary toolbar actions live behind the ⋯ button.
   function setMoreMenu(open) {
+    const wsMachine = Deck.machines?.workspace;
+    if (wsMachine) {
+      wsMachine.send(open ? 'OPEN_POPOVER' : 'CLOSE_POPOVER', { popover: 'more_menu' });
+      return;
+    }
     const menu = $('more-menu');
     const btn = $('btn-more');
     if (!menu || !btn) return;
@@ -126,9 +131,28 @@
     if (!e.target.closest('.menu-wrap')) setMoreMenu(false);
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !$('more-menu')?.hidden) {
+    if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+    const ws = Deck.machines?.workspace;
+    if (ws?.context?.popover === 'more_menu' || !$('more-menu')?.hidden) {
       setMoreMenu(false);
       $('btn-more')?.focus();
+      return;
+    }
+    if (ws?.context?.popover === 'color_popover') {
+      ws.send('CLOSE_POPOVER', { popover: 'color_popover' });
+      $('btn-sel-color')?.focus();
+      return;
+    }
+    if (ws?.context?.submode === 'place') {
+      Deck.clearArmedPaletteItem?.();
+      Deck.setMsg?.('Cancelled command placement');
+      return;
+    }
+    if (Deck.editMode && (ws?.context?.selectActive || Deck.getSelectedPads?.().size > 0)) {
+      Deck.clearSelection?.();
+      ws?.send('EXIT_SELECT');
+      Deck.updateSelectionUi?.();
+      Deck.setMsg?.('Selection cleared');
     }
   });
 
@@ -141,14 +165,7 @@
     Deck.renderPalette();
   });
   $('btn-edit').addEventListener('click', () => {
-    Deck.editMode = !Deck.editMode;
-    $('btn-edit').classList.toggle('on', Deck.editMode);
-    document.body.classList.toggle('edit-mode', Deck.editMode);
-    if (!Deck.editMode) {
-      Deck.clearSelection();
-      const pal = $('palette');
-      if (pal) pal.classList.remove('open');
-    }
+    Deck.machines?.workspace?.send('TOGGLE_EDIT');
     Deck.updateUndoRedoUi?.();
     Deck.setMsg(Deck.editMode ? 'Edit mode: drag commands from palette, click pad to configure' : 'Run mode');
     Deck.renderGrid();
@@ -228,6 +245,37 @@
 
   $('btn-import').addEventListener('click', () => $('file-import').click());
   $('btn-merge-pages')?.addEventListener('click', () => $('file-merge-pages')?.click());
+  const importLinkMachine = Deck.createMachine({
+    id: 'importLink',
+    initial: 'closed',
+    context: { error: '' },
+    transitions: {
+      closed: { OPEN: { target: 'idle', action: (ctx) => { ctx.error = ''; } } },
+      idle: {
+        INVALID: { target: 'invalid', action: (ctx, p) => { ctx.error = p?.error || ''; } },
+        SUBMIT: { target: 'fetching', action: (ctx) => { ctx.error = ''; } },
+        CLOSE: 'closed',
+      },
+      invalid: {
+        INPUT: { target: 'idle', action: (ctx) => { ctx.error = ''; } },
+        INVALID: { target: 'invalid', action: (ctx, p) => { ctx.error = p?.error || ''; } },
+        SUBMIT: { target: 'fetching', action: (ctx) => { ctx.error = ''; } },
+        CLOSE: 'closed',
+      },
+      fetching: {
+        SUCCESS: 'closed',
+        FAIL: { target: 'error', action: (ctx, p) => { ctx.error = p?.error || ''; } },
+        CLOSE: 'closed',
+      },
+      error: {
+        INPUT: { target: 'idle', action: (ctx) => { ctx.error = ''; } },
+        INVALID: { target: 'invalid', action: (ctx, p) => { ctx.error = p?.error || ''; } },
+        SUBMIT: { target: 'fetching', action: (ctx) => { ctx.error = ''; } },
+        CLOSE: 'closed',
+      },
+    },
+  });
+
   function openImportLinkDialog() {
     const dlg = $('import-link-dlg');
     const urlInput = $('import-link-url');
@@ -240,14 +288,17 @@
       errEl.hidden = true;
     }
     if (submitBtn) submitBtn.disabled = false;
+    importLinkMachine.send('OPEN');
     if (!dlg.open) dlg.showModal();
     urlInput.focus();
   }
 
   $('btn-import-link')?.addEventListener('click', openImportLinkDialog);
+  $('import-link-dlg')?.addEventListener('close', () => importLinkMachine.send('CLOSE'));
   $('import-link-close')?.addEventListener('click', () => $('import-link-dlg')?.close());
   $('btn-import-link-cancel')?.addEventListener('click', () => $('import-link-dlg')?.close());
   $('import-link-url')?.addEventListener('input', () => {
+    importLinkMachine.send('INPUT');
     const errEl = $('import-link-err');
     if (errEl && !errEl.hidden) {
       errEl.textContent = '';
@@ -279,24 +330,32 @@
     };
     const raw = String(urlInput?.value || '').trim();
     if (!raw) {
-      showErr('Please enter a layout JSON URL.');
+      const msg = 'Please enter a layout JSON URL.';
+      importLinkMachine.send('INVALID', { error: msg });
+      showErr(msg);
       return;
     }
     const valid = Deck.isValidHttpUrl ? Deck.isValidHttpUrl(raw) : /^https?:\/\//i.test(raw);
     if (!valid) {
-      showErr('Enter a valid http:// or https:// URL.');
+      const msg = 'Enter a valid http:// or https:// URL.';
+      importLinkMachine.send('INVALID', { error: msg });
+      showErr(msg);
       return;
     }
     if (errEl) {
       errEl.textContent = '';
       errEl.hidden = true;
     }
+    importLinkMachine.send('SUBMIT');
     if (submitBtn) submitBtn.disabled = true;
     try {
       await Deck.importFromLink(raw);
+      importLinkMachine.send('SUCCESS');
       dlg?.close();
     } catch (err) {
-      showErr('Import failed: ' + (err?.message || 'Unable to load URL'));
+      const msg = 'Import failed: ' + (err?.message || 'Unable to load URL');
+      importLinkMachine.send('FAIL', { error: msg });
+      showErr(msg);
     } finally {
       if (submitBtn) submitBtn.disabled = false;
     }
@@ -549,48 +608,79 @@
     $('btn-clean-panic')?.addEventListener('click', () => triggerHaptic([15, 30, 15]));
 
     // Poll /layout-version over HTTP/HTTPS (Phone Deck LAN host) for live layout updates
-    if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
-
+    const isHttpOrigin = location.protocol === 'http:' || location.protocol === 'https:';
     const banner = $('layout-update-banner');
+    const bannerMachine = Deck.createMachine({
+      id: 'layoutBanner',
+      initial: (isHttpOrigin && banner) ? 'idle' : 'disabled',
+      context: { knownVersion: null, pendingVersion: null, dismissedVersion: null },
+      transitions: {
+        idle: {
+          SET_KNOWN: { target: 'idle', action: (ctx, p) => { ctx.knownVersion = p?.version || null; } },
+          UPDATE_FOUND: { target: 'update_available', action: (ctx, p) => { ctx.pendingVersion = p?.version || null; } },
+          UNSUPPORTED: 'unsupported',
+        },
+        update_available: {
+          APPLY: 'applying',
+          DISMISS: { target: 'dismissed', action: (ctx) => { ctx.dismissedVersion = ctx.pendingVersion; } },
+          UPDATE_FOUND: { target: 'update_available', action: (ctx, p) => { ctx.pendingVersion = p?.version || null; } },
+          UNSUPPORTED: 'unsupported',
+        },
+        applying: {
+          APPLIED: {
+            target: 'idle',
+            action: (ctx) => {
+              ctx.knownVersion = ctx.pendingVersion || ctx.knownVersion;
+              ctx.pendingVersion = null;
+            },
+          },
+          APPLY_FAILED: 'update_available',
+          UNSUPPORTED: 'unsupported',
+        },
+        dismissed: {
+          UPDATE_FOUND: { target: 'update_available', action: (ctx, p) => { ctx.pendingVersion = p?.version || null; } },
+          UNSUPPORTED: 'unsupported',
+        },
+        unsupported: {},
+        disabled: {},
+      },
+    });
+    if (!isHttpOrigin || !banner) return;
+
     const textEl = $('layout-update-text');
     const reloadBtn = $('btn-layout-reload');
     const mergeBtn = $('btn-layout-merge');
     const dismissBtn = $('btn-layout-dismiss');
-    if (!banner) return;
-
-    let knownVersion = null;
-    let pendingVersion = null;
-    let dismissedVersion = null;
-    let pollStopped = false;
     let pollTimer = null;
 
     const layoutHref = () => new URL('layout.json', location.href).href;
     const versionHref = () => new URL('layout-version', location.href).href;
 
     const checkLayoutVersion = async () => {
-      if (pollStopped || document.visibilityState === 'hidden') return;
+      if (bannerMachine.matches('unsupported', 'disabled', 'applying') || document.visibilityState === 'hidden') return;
       try {
         const res = await fetch(versionHref(), { cache: 'no-store' });
         if (res.status === 404 || res.status === 405) {
-          pollStopped = true;
+          bannerMachine.send('UNSUPPORTED');
           if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
           return;
         }
         if (!res.ok) return;
         const ct = res.headers.get('content-type') || '';
         if (!ct.includes('json')) {
-          pollStopped = true;
+          bannerMachine.send('UNSUPPORTED');
           if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
           return;
         }
         const data = await res.json();
         if (!data || !data.available || !data.version) return;
-        if (knownVersion === null) {
-          knownVersion = data.version;
+        const ctx = bannerMachine.context;
+        if (ctx.knownVersion === null) {
+          bannerMachine.send('SET_KNOWN', { version: data.version });
           return;
         }
-        if (data.version !== knownVersion && data.version !== dismissedVersion) {
-          pendingVersion = data.version;
+        if (data.version !== ctx.knownVersion && data.version !== ctx.dismissedVersion) {
+          bannerMachine.send('UPDATE_FOUND', { version: data.version });
           if (textEl) {
             textEl.textContent = data.source
               ? `Updated Deck layout available (${data.source})`
@@ -602,31 +692,39 @@
     };
 
     reloadBtn?.addEventListener('click', async () => {
+      if (!bannerMachine.can('APPLY')) return;
+      bannerMachine.send('APPLY');
       if (reloadBtn) reloadBtn.disabled = true;
       try {
         await Deck.importFromLink(layoutHref());
         Deck.syncPageLockButton?.();
-        knownVersion = pendingVersion || knownVersion;
+        bannerMachine.send('APPLIED');
         banner.hidden = true;
-      } catch {} finally {
+      } catch {
+        bannerMachine.send('APPLY_FAILED');
+      } finally {
         if (reloadBtn) reloadBtn.disabled = false;
       }
     });
 
     mergeBtn?.addEventListener('click', async () => {
+      if (!bannerMachine.can('APPLY')) return;
+      bannerMachine.send('APPLY');
       if (mergeBtn) mergeBtn.disabled = true;
       try {
         await Deck.mergeFromLink(layoutHref());
         Deck.syncPageLockButton?.();
-        knownVersion = pendingVersion || knownVersion;
+        bannerMachine.send('APPLIED');
         banner.hidden = true;
-      } catch {} finally {
+      } catch {
+        bannerMachine.send('APPLY_FAILED');
+      } finally {
         if (mergeBtn) mergeBtn.disabled = false;
       }
     });
 
     dismissBtn?.addEventListener('click', () => {
-      dismissedVersion = pendingVersion;
+      bannerMachine.send('DISMISS');
       banner.hidden = true;
     });
 

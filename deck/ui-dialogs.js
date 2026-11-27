@@ -6,7 +6,75 @@
 
   let draftPanic = [];
   let promptedAutoImportThisSession = false;
-  let phoneHostRunning = false;
+
+  const phoneHostMachine = Deck.createMachine({
+    id: 'phoneHost',
+    initial: (typeof window !== 'undefined' && window.opendeckDesktop?.startPhoneHost) ? 'stopped' : 'unavailable',
+    context: { port: 0, obsPort: 4455, primaryUrl: '', lastError: '' },
+    transitions: {
+      unavailable: {},
+      stopped: {
+        START: { target: 'starting', action: (ctx) => { ctx.lastError = ''; } },
+        SYNC_STATUS: {
+          target: 'running',
+          guard: (_ctx, payload) => Boolean(payload?.running),
+          action: (ctx, payload) => {
+            ctx.port = Number(payload.port) || 0;
+            ctx.obsPort = Number(payload.obsPort) || 4455;
+            ctx.primaryUrl = String(payload.primaryUrl || '');
+          },
+        },
+      },
+      starting: {
+        STARTED: {
+          target: 'running',
+          action: (ctx, payload) => {
+            ctx.port = Number(payload?.port) || 0;
+            ctx.obsPort = Number(payload?.obsPort) || 4455;
+            ctx.primaryUrl = String(payload?.primaryUrl || '');
+            ctx.lastError = '';
+          },
+        },
+        STOPPED: {
+          target: 'stopped',
+          action: (ctx) => { ctx.port = 0; ctx.primaryUrl = ''; },
+        },
+        FAIL: {
+          target: 'error',
+          action: (ctx, payload) => { ctx.lastError = String(payload?.error || 'Error'); },
+        },
+      },
+      running: {
+        STOP: 'stopping',
+        SYNC_STATUS: {
+          target: 'running',
+          action: (ctx, payload) => {
+            ctx.port = Number(payload?.port) || ctx.port;
+            ctx.obsPort = Number(payload?.obsPort) || ctx.obsPort;
+            ctx.primaryUrl = String(payload?.primaryUrl || ctx.primaryUrl);
+          },
+        },
+        STOPPED: {
+          target: 'stopped',
+          action: (ctx) => { ctx.port = 0; ctx.primaryUrl = ''; },
+        },
+      },
+      stopping: {
+        STOPPED: {
+          target: 'stopped',
+          action: (ctx) => { ctx.port = 0; ctx.primaryUrl = ''; ctx.lastError = ''; },
+        },
+        FAIL: {
+          target: 'error',
+          action: (ctx, payload) => { ctx.lastError = String(payload?.error || 'Error'); },
+        },
+      },
+      error: {
+        START: { target: 'starting', action: (ctx) => { ctx.lastError = ''; } },
+        STOPPED: { target: 'stopped', action: (ctx) => { ctx.port = 0; ctx.primaryUrl = ''; } },
+      },
+    },
+  });
 
   function syncPageOrderButtons() {
     const pages = Deck.cfg?.pages || [];
@@ -347,14 +415,19 @@
   }
 
   function applyPhoneHostState(status) {
-    phoneHostRunning = Boolean(status?.running);
+    const isRunning = Boolean(status?.running);
+    if (isRunning) {
+      phoneHostMachine.send(phoneHostMachine.state === 'starting' ? 'STARTED' : 'SYNC_STATUS', status);
+    } else if (phoneHostMachine.state !== 'unavailable') {
+      phoneHostMachine.send('STOPPED', status);
+    }
     const statusEl = $('phone-host-status');
     const qrEl = $('phone-host-qr');
     const urlEl = $('phone-host-url');
     const toggleBtn = $('btn-phone-toggle');
     const copyBtn = $('btn-phone-copy');
 
-    if (phoneHostRunning) {
+    if (isRunning) {
       const extraIps = Array.isArray(status.urls) && status.urls.length > 1
         ? ` (${status.urls.length} network addresses available)`
         : '';
@@ -388,11 +461,18 @@
   async function startDesktopPhoneHost() {
     const api = window.opendeckDesktop;
     if (!api?.startPhoneHost) return null;
+    if (!phoneHostMachine.can('START') && phoneHostMachine.state !== 'running') return null;
+    phoneHostMachine.send('START');
     const obsPort = Number(Deck.cfg?.ws?.port) || 4455;
     const layoutJson = JSON.stringify(Deck.exportConfig());
-    const status = await api.startPhoneHost(layoutJson, obsPort);
-    applyPhoneHostState(status);
-    return status;
+    try {
+      const status = await api.startPhoneHost(layoutJson, obsPort);
+      applyPhoneHostState(status);
+      return status;
+    } catch (err) {
+      phoneHostMachine.send('FAIL', { error: err?.message || 'Error' });
+      throw err;
+    }
   }
 
   async function openPhoneHostDialog() {
@@ -412,17 +492,19 @@
         await startDesktopPhoneHost();
       }
     } catch (err) {
+      phoneHostMachine.send('FAIL', { error: err?.message || 'Error' });
       if ($('phone-host-status')) $('phone-host-status').textContent = `Unable to start Phone Deck host: ${err?.message || 'Error'}`;
     }
   }
 
   async function syncPhoneHostLayout() {
     const api = window.opendeckDesktop;
-    if (!phoneHostRunning || !api?.updatePhoneHostLayout) return;
+    if (phoneHostMachine.state !== 'running' || !api?.updatePhoneHostLayout) return;
     try {
       const obsPort = Number(Deck.cfg?.ws?.port) || 4455;
       const status = await api.updatePhoneHostLayout(JSON.stringify(Deck.exportConfig()), obsPort);
-      phoneHostRunning = Boolean(status?.running);
+      if (!status?.running) phoneHostMachine.send('STOPPED');
+      else phoneHostMachine.send('SYNC_STATUS', status);
       if ($('phone-host-dlg')?.open) applyPhoneHostState(status);
     } catch {}
   }
@@ -435,13 +517,15 @@
     const toggleBtn = $('btn-phone-toggle');
     if (toggleBtn) toggleBtn.disabled = true;
     try {
-      if (phoneHostRunning) {
+      if (phoneHostMachine.state === 'running') {
+        phoneHostMachine.send('STOP');
         const status = await api.stopPhoneHost?.();
         applyPhoneHostState(status);
       } else {
         await startDesktopPhoneHost();
       }
     } catch (err) {
+      phoneHostMachine.send('FAIL', { error: err?.message || 'Error' });
       if ($('phone-host-status')) $('phone-host-status').textContent = `Phone Deck host error: ${err?.message || 'Error'}`;
     } finally {
       if (toggleBtn) toggleBtn.disabled = false;

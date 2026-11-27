@@ -1537,6 +1537,7 @@
   $('btn-pad-cancel').addEventListener('click', () => $('pad-dlg').close());
 
   $('btn-pad-clear').addEventListener('click', () => {
+    Deck.abortPadTimer?.(editingPageId, editingIdx);
     Deck.pushHistory(() => {
       const page = Deck.cfg.pages.find((d) => d.id === editingPageId) || Deck.getActivePage();
       if (page.pads[editingIdx]) page.pads[editingIdx] = { type: 'none', label: '', icon: '', color: COLORS[0] };
@@ -1573,6 +1574,7 @@
       saved.steps = (draftPad.steps || []).map(Deck.normalizeStep).filter((st) => st.type !== 'none');
     }
     const page = Deck.cfg.pages.find((d) => d.id === editingPageId) || Deck.getActivePage();
+    Deck.abortPadTimer?.(editingPageId, editingIdx);
     Deck.pushHistory(() => {
       page.pads[editingIdx] = saved;
       Deck.saveCfg();

@@ -20,6 +20,7 @@ const CANONICAL_FILES = [
   'deck/deck.css',
   'deck/obs-ws.js',
   'deck/snapshots.js',
+  'deck/state.js',
   'deck/ui-boot.js',
   'deck/ui-dialogs.js',
   'deck/ui-editor.js',

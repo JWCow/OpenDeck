@@ -3746,6 +3746,118 @@ try {
   }
   }
 
+  // =========================================================================
+  // 20. Explicit State Machines (UX, DX, AX): Connection, Workspace, Pad Runtime, Snapshots
+  // =========================================================================
+  if (!ONLY_SECTION || ONLY_SECTION === '20') {
+  const fsmObs = createFakeObs(true);
+  await new Promise((r) => fsmObs.wss.once('listening', r));
+  const fsmPort = fsmObs.wss.address().port;
+  try {
+    const ctxFsm = await browser.newContext();
+    const pageFsm = await ctxFsm.newPage();
+    const fsmErrors = [];
+    pageFsm.on('pageerror', (e) => fsmErrors.push(e.message));
+    await pageFsm.goto(`${DECK_URL}?port=${fsmPort}`);
+    await pageFsm.waitForSelector('#grid .pad');
+
+    // Fill password and subscribe to state transitions
+    await pageFsm.evaluate((pw) => {
+      window.__fsmEvents = [];
+      Deck.subscribeState((ev) => window.__fsmEvents.push({ machine: ev.machine, from: ev.prevState, to: ev.state, event: ev.event }));
+      document.getElementById('ws-pass').value = pw;
+    }, PASSWORD);
+    await pageFsm.click('#btn-ws-connect');
+    await waitConnectedAndDismissAutoImport(pageFsm);
+
+    // Verify connection state machine & DOM reflection & zero password leak in getAppState()
+    const connState = await pageFsm.evaluate(() => ({
+      domConn: document.documentElement.dataset.connState,
+      app: Deck.getAppState(),
+    }));
+    assert.equal(connState.domConn, 'connected', 'html[data-conn-state] reaches connected');
+    assert.equal(connState.app.connection.state, 'connected', 'Deck.getAppState().connection.state is connected');
+    assert.equal(JSON.stringify(connState.app).includes(PASSWORD), false, 'Deck.getAppState() never leaks OBS password (ADR-0002)');
+    assert.ok(
+      await pageFsm.evaluate(() => window.__fsmEvents.some((e) => e.machine === 'connection' && e.to === 'authenticating')
+        && window.__fsmEvents.some((e) => e.machine === 'connection' && e.to === 'syncing')
+        && window.__fsmEvents.some((e) => e.machine === 'connection' && e.to === 'connected')),
+      'connection machine transitions through authenticating -> syncing -> connected'
+    );
+
+    // Workspace mode isolation + Escape cascade
+    await pageFsm.click('#btn-edit');
+    assert.equal(await pageFsm.evaluate(() => document.body.dataset.workspaceMode), 'edit', 'body[data-workspace-mode] is edit');
+    const firstPal = pageFsm.locator('#palette-list .palette-item').first();
+    await firstPal.click();
+    assert.equal(await pageFsm.evaluate(() => Deck.getAppState().workspace.submode), 'place', 'arming palette sets submode=place');
+    // Toggling Select Mode must disarm palette item so click selects instead of placing
+    await pageFsm.click('#btn-sel-mode');
+    assert.equal(await pageFsm.evaluate(() => Deck.getAppState().workspace.submode), 'select', 'Select Mode enters submode=select');
+    assert.equal(await firstPal.evaluate((el) => el.classList.contains('armed')), false, 'Select Mode disarms palette item');
+    await pageFsm.locator('#grid .pad').nth(0).click();
+    assert.equal(await pageFsm.evaluate(() => Deck.getAppState().workspace.selectedCount), 1, 'clicking pad in select submode selects pad');
+
+    // Escape clears selection and exits select submode cleanly
+    await pageFsm.keyboard.press('Escape');
+    const afterEsc = await pageFsm.evaluate(() => Deck.getAppState().workspace);
+    assert.equal(afterEsc.selectedCount, 0, 'Escape clears selected pads');
+    assert.equal(afterEsc.submode, 'browse', 'Escape exits select submode back to browse');
+
+    // Re-arm palette, then exit Edit Mode -> resets submode to browse and disarms palette
+    await firstPal.click();
+    assert.equal(await pageFsm.evaluate(() => Deck.getAppState().workspace.submode), 'place');
+    await pageFsm.click('#btn-edit');
+    const runState = await pageFsm.evaluate(() => Deck.getAppState().workspace);
+    assert.equal(runState.mode, 'run', 'exiting edit mode sets workspace.mode=run');
+    assert.equal(runState.submode, 'browse', 'exiting edit mode resets submode=browse');
+    assert.equal(runState.armedCommand, '', 'exiting edit mode clears armedCommand');
+
+    // Pad runtime state machine + editor clear aborts active timer
+    await pageFsm.evaluate(() => {
+      const p = Deck.getActivePads();
+      p[0] = Deck.normalizePad({ type: 'mute', inputName: 'Mic/Aux', mode: 'toggle', autoOffMs: 5000, label: 'Timed Mic' });
+      Deck.saveCfg();
+      Deck.renderGrid();
+    });
+    await pageFsm.locator('#grid .pad').nth(0).click();
+    await pageFsm.waitForFunction(() => Deck.getPadRuntime(0).state === 'auto_off');
+    assert.equal(await pageFsm.locator('#grid .pad').nth(0).getAttribute('data-pad-state'), 'auto_off', 'pad[data-pad-state] reflects auto_off');
+    // Open pad editor via contextmenu and click Clear -> aborts timer cleanly
+    await pageFsm.locator('#grid .pad').nth(0).click({ button: 'right' });
+    await pageFsm.waitForSelector('#pad-dlg[open]');
+    await pageFsm.click('#btn-pad-clear');
+    assert.equal(await pageFsm.evaluate(() => Deck.activeAutoOffs.size), 0, 'clearing pad in editor aborts active Auto-Off timer');
+    assert.equal(await pageFsm.evaluate(() => Deck.getPadRuntime(0).state), 'idle', 'pad runtime returns to idle after clear');
+
+    // Popover mutual exclusion: opening #more-menu closes #sel-color-pop
+    await pageFsm.click('#btn-edit');
+    await pageFsm.locator('#grid .pad').nth(1).click({ modifiers: ['Control'] });
+    await pageFsm.click('#btn-sel-color');
+    assert.equal(await pageFsm.evaluate(() => Deck.getAppState().workspace.popover), 'color_popover', 'color popover open');
+    await pageFsm.click('#btn-more');
+    assert.equal(await pageFsm.evaluate(() => Deck.getAppState().workspace.popover), 'more_menu', 'opening more-menu replaces color popover');
+    assert.equal(await pageFsm.evaluate(() => document.getElementById('sel-color-pop').hidden), true, 'color popover hidden when more-menu opens');
+    await pageFsm.keyboard.press('Escape');
+    assert.equal(await pageFsm.evaluate(() => Deck.getAppState().workspace.popover), 'none', 'Escape closes more-menu popover');
+    await pageFsm.click('#btn-edit');
+
+    // Disconnect updates connection state machine & button states
+    if (!(await pageFsm.locator('#conn-bar').evaluate((el) => el.classList.contains('open')))) {
+      await clickMenuItem(pageFsm, '#btn-conn-toggle');
+    }
+    await pageFsm.click('#btn-ws-disconnect');
+    await pageFsm.waitForFunction(() => document.documentElement.dataset.connState === 'disconnected');
+    assert.equal(await pageFsm.isDisabled('#btn-ws-disconnect'), true, '#btn-ws-disconnect disabled when disconnected');
+
+    assert.deepEqual(fsmErrors, [], `unexpected page errors: ${fsmErrors.join('; ')}`);
+    await ctxFsm.close();
+    console.log('  ✓ explicit state machines (connection, workspace submodes, Escape cascade, pad runtime & getAppState AX)');
+  } finally {
+    fsmObs.wss.close();
+  }
+  }
+
   console.log('\nPASS: all deck edge E2E checks succeeded.');
 } finally {
   if (browser) await browser.close();

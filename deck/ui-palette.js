@@ -10,9 +10,12 @@
 
   let armedPaletteItem = null;
 
-  function clearArmedPaletteItem() {
+  function clearArmedPaletteItem(skipMachine = false) {
     armedPaletteItem = null;
     document.querySelectorAll('.palette-item.armed').forEach((el) => el.classList.remove('armed'));
+    if (!skipMachine && Deck.machines?.workspace?.context?.submode === 'place') {
+      Deck.machines.workspace.send('DISARM_PALETTE');
+    }
   }
 
   function getArmedPaletteItem() {
@@ -174,6 +177,8 @@
       }
       armedPaletteItem = it.action;
       el.classList.add('armed');
+      Deck.machines?.workspace?.send('ARM_PALETTE', { label: it.label, type: it.action?.type });
+      Deck.updateSelectionUi?.();
       if (window.innerWidth <= 600) {
         $('palette')?.classList.remove('open');
       }
@@ -191,6 +196,7 @@
     el.addEventListener('dragstart', (e) => {
       clearArmedPaletteItem();
       Deck.setDragState({ paletteDragItem: it.action });
+      Deck.machines?.workspace?.send('DRAG_START', { kind: 'palette', type: it.action?.type });
       if (e.dataTransfer) {
         e.dataTransfer.effectAllowed = 'copy';
         e.dataTransfer.setData('application/json', JSON.stringify({ source: 'palette', action: it.action }));
@@ -199,6 +205,7 @@
     });
     el.addEventListener('dragend', () => {
       Deck.setDragState({ paletteDragItem: null });
+      Deck.machines?.workspace?.send('DRAG_END');
       Deck.clearDragHighlights();
     });
     return el;
@@ -224,7 +231,7 @@
   function renderPalette() {
     const container = $('palette-list');
     if (!container) return;
-    armedPaletteItem = null;
+    clearArmedPaletteItem();
     container.innerHTML = '';
 
     for (const cat of PALETTE_CATEGORIES) {

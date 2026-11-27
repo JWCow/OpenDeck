@@ -153,7 +153,18 @@ async function testPhoneHost() {
 
     const stopped = await host.stop();
     assert.equal(stopped.running, false, 'phone host stops cleanly');
-    console.log('  ✓ electron/phone-host.cjs layout scrubbing, ETag/304, QR SVG & traversal guard');
+    assert.equal(stopped.state, 'stopped', 'phone host state returns to stopped');
+
+    // Concurrent start/stop serialization guard
+    const [s1, s2] = await Promise.all([host.start(undefined, 4455), host.start(undefined, 4455)]);
+    assert.equal(s1.running, true);
+    assert.equal(s2.state, 'running');
+    assert.equal(s1.port, s2.port, 'concurrent start calls share a single server instance');
+    const [x1, x2] = await Promise.all([host.stop(), host.stop()]);
+    assert.equal(x1.state, 'stopped');
+    assert.equal(x2.running, false);
+
+    console.log('  ✓ electron/phone-host.cjs layout scrubbing, ETag/304, QR SVG, concurrent lifecycle & traversal guard');
   } finally {
     await host.stop();
   }

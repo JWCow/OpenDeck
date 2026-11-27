@@ -16,6 +16,156 @@
     });
   }
 
+  function syncWorkspaceDom(mode, ctx) {
+    if (typeof document === 'undefined') return;
+    const isEdit = mode === 'edit';
+    document.body.dataset.workspaceMode = mode;
+    document.body.dataset.editSubmode = ctx.submode;
+    document.body.dataset.popover = ctx.popover;
+    document.body.classList.toggle('edit-mode', isEdit);
+    const editBtn = $('btn-edit');
+    if (editBtn) {
+      editBtn.classList.toggle('on', isEdit);
+      editBtn.setAttribute('aria-pressed', isEdit ? 'true' : 'false');
+    }
+    const selModeBtn = $('btn-sel-mode');
+    if (selModeBtn) {
+      selModeBtn.classList.toggle('on', isEdit && Boolean(ctx.selectActive));
+      selModeBtn.setAttribute('aria-pressed', isEdit && ctx.selectActive ? 'true' : 'false');
+    }
+    const moreMenu = $('more-menu');
+    const moreBtn = $('btn-more');
+    if (moreMenu && moreBtn) {
+      const moreOpen = ctx.popover === 'more_menu';
+      moreMenu.hidden = !moreOpen;
+      moreBtn.setAttribute('aria-expanded', moreOpen ? 'true' : 'false');
+      moreBtn.classList.toggle('on', moreOpen);
+    }
+    const selPop = $('sel-color-pop');
+    if (selPop) {
+      selPop.hidden = !(isEdit && ctx.popover === 'color_popover');
+    }
+  }
+
+  const workspaceMachine = Deck.createMachine({
+    id: 'workspace',
+    initial: 'run',
+    context: {
+      submode: 'browse',
+      selectActive: false,
+      popover: 'none',
+    },
+    transitions: {
+      run: {
+        ENTER_EDIT: {
+          target: 'edit',
+          action: (ctx) => { ctx.submode = 'browse'; ctx.selectActive = false; ctx.popover = 'none'; },
+        },
+        TOGGLE_EDIT: {
+          target: 'edit',
+          action: (ctx) => { ctx.submode = 'browse'; ctx.selectActive = false; ctx.popover = 'none'; },
+        },
+        OPEN_POPOVER: {
+          target: 'run',
+          action: (ctx, payload) => { ctx.popover = payload?.popover || 'more_menu'; },
+        },
+        CLOSE_POPOVER: {
+          target: 'run',
+          action: (ctx, payload) => {
+            if (!payload?.popover || ctx.popover === payload.popover) ctx.popover = 'none';
+          },
+        },
+      },
+      edit: {
+        EXIT_EDIT: {
+          target: 'run',
+          action: (ctx) => { ctx.submode = 'browse'; ctx.selectActive = false; ctx.popover = 'none'; },
+        },
+        TOGGLE_EDIT: {
+          target: 'run',
+          action: (ctx) => { ctx.submode = 'browse'; ctx.selectActive = false; ctx.popover = 'none'; },
+        },
+        ENTER_SELECT: {
+          target: 'edit',
+          action: (ctx) => {
+            ctx.submode = 'select';
+            ctx.selectActive = true;
+            ctx.popover = 'none';
+            if (typeof Deck.clearArmedPaletteItem === 'function') Deck.clearArmedPaletteItem(true);
+          },
+        },
+        EXIT_SELECT: {
+          target: 'edit',
+          action: (ctx) => {
+            ctx.selectActive = false;
+            if (ctx.submode === 'select') ctx.submode = 'browse';
+          },
+        },
+        ARM_PALETTE: {
+          target: 'edit',
+          action: (ctx) => { ctx.submode = 'place'; ctx.selectActive = false; ctx.popover = 'none'; },
+        },
+        DISARM_PALETTE: {
+          target: 'edit',
+          action: (ctx) => {
+            if (ctx.submode === 'place') ctx.submode = ctx.selectActive ? 'select' : 'browse';
+          },
+        },
+        DRAG_START: {
+          target: 'edit',
+          action: (ctx) => { ctx.submode = 'drag'; ctx.popover = 'none'; },
+        },
+        DRAG_END: {
+          target: 'edit',
+          action: (ctx) => {
+            if (ctx.submode === 'drag') ctx.submode = ctx.selectActive ? 'select' : 'browse';
+          },
+        },
+        OPEN_POPOVER: {
+          target: 'edit',
+          action: (ctx, payload) => { ctx.popover = payload?.popover || 'more_menu'; },
+        },
+        CLOSE_POPOVER: {
+          target: 'edit',
+          action: (ctx, payload) => {
+            if (!payload?.popover || ctx.popover === payload.popover) ctx.popover = 'none';
+          },
+        },
+      },
+    },
+    onEnter: {
+      run: () => {
+        if (typeof Deck.clearArmedPaletteItem === 'function') Deck.clearArmedPaletteItem();
+        if (typeof Deck.clearSelection === 'function') Deck.clearSelection();
+        dragIdx = null;
+        dragSourcePageId = '';
+        dragPageId = '';
+        paletteDragItem = null;
+        clearDragHighlights();
+        const pal = $('palette');
+        if (pal) pal.classList.remove('open');
+      },
+    },
+    onTransition: ({ state, context }) => {
+      syncWorkspaceDom(state, context);
+    },
+  });
+
+  Object.defineProperty(Deck, 'editMode', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      return workspaceMachine.state === 'edit';
+    },
+    set(val) {
+      workspaceMachine.send(val ? 'ENTER_EDIT' : 'EXIT_EDIT');
+    },
+  });
+
+  if (typeof document !== 'undefined') {
+    syncWorkspaceDom(workspaceMachine.state, workspaceMachine.context);
+  }
+
   function movePage(pageId, delta) {
     const pages = Deck.cfg?.pages;
     if (!Array.isArray(pages) || pages.length < 2) return false;
@@ -76,6 +226,7 @@
         dragPageId = d.id;
         dragIdx = null;
         dragSourcePageId = '';
+        workspaceMachine.send('DRAG_START', { kind: 'page', pageId: d.id });
         b.classList.add('dragging');
         if (e.dataTransfer) {
           e.dataTransfer.effectAllowed = 'move';
@@ -85,6 +236,7 @@
       b.addEventListener('dragend', () => {
         if (dragPageId) justDroppedAt = Date.now();
         dragPageId = '';
+        workspaceMachine.send('DRAG_END');
         clearDragHighlights();
       });
       b.addEventListener('dragover', (e) => {
@@ -265,4 +417,5 @@
   Deck.undo = undo;
   Deck.redo = redo;
   Deck.updateUndoRedoUi = updateUndoRedoUi;
+  Deck.getHistoryCounts = () => ({ undoCount: undoStack.length, redoCount: redoStack.length });
 })();
