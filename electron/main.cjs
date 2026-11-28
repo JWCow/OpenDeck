@@ -57,6 +57,17 @@ let desktopPrefs = {
 
 const phoneHost = createPhoneHost({ rootDir: APP_ROOT, preferredPort: 8765 });
 
+// Windows Chromium GPU processes can crash (0xC0000005) in Skia Graphite before
+// falling back; disabling SkiaGraphite keeps hardware gpu_compositing enabled.
+if (process.platform === 'win32') {
+  const existing = app.commandLine.getSwitchValue('disable-features');
+  const features = existing ? existing.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  if (!features.includes('SkiaGraphite')) {
+    features.push('SkiaGraphite');
+    app.commandLine.appendSwitch('disable-features', features.join(','));
+  }
+}
+
 // Must be called before app.whenReady().
 protocol.registerSchemesAsPrivileged([
   {

@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.3.6';
+  const VERSION = '2.4.0';
   const STORAGE_KEY = 'opendeck_config';
   const LEGACY_STORAGE_KEYS = ['obs_virtual_deck_v2', 'obs_deck_config_v2', 'obs_virtual_deck_v1'];
   let initialSaveFailed = false;
@@ -330,6 +330,9 @@
     }
 
     if (!isStep) {
+      if (raw.colorStyle === 'tint') {
+        out.colorStyle = 'tint';
+      }
       if (typeof raw.image === 'string' && raw.image.trim()) {
         out.image = raw.image;
         out.imageFit = raw.imageFit === 'fill' ? 'fill' : 'icon';
@@ -832,6 +835,37 @@
     }
   }
 
+  Deck.exportPagesConfig = (pageIds) => {
+    const { cfg } = Deck;
+    const idSet = new Set(Array.isArray(pageIds) ? pageIds : []);
+    const selected = (cfg.pages || []).filter((d) => idSet.has(d.id));
+    if (!selected.length) return null;
+    const fb = selected.find((d) => d.isFallback);
+    const activeId = selected.some((d) => d.id === cfg.activePageId)
+      ? cfg.activePageId
+      : selected[0].id;
+    const exported = {
+      version: 2,
+      ws: { host: cfg.ws.host, port: cfg.ws.port },
+      activePageId: activeId,
+      pages: selected.map((d) => {
+        const out = {
+          id: d.id,
+          name: d.name,
+          cols: d.cols,
+          rows: d.rows,
+          pads: d.pads.map(normalizePad),
+        };
+        if (d.sceneName) out.sceneName = d.sceneName;
+        if (d.isFallback) out.isFallback = true;
+        return out;
+      }),
+      panicSteps: [],
+    };
+    if (fb) exported.fallbackPageId = fb.id;
+    return exported;
+  };
+
   Deck.exportConfig = () => {
     const { cfg } = Deck;
     const fb = (cfg.pages || []).find((d) => d.isFallback);
@@ -1000,6 +1034,39 @@
       Deck.setMsg('No snapshot was saved');
     }
     return true;
+  };
+
+  Deck.deletePages = async (pageIds) => {
+    const { pages } = Deck.cfg;
+    const idSet = new Set(Array.isArray(pageIds) ? pageIds : []);
+    const toDelete = pages.filter((d) => idSet.has(d.id));
+    if (!toDelete.length) return 0;
+    if (pages.length - toDelete.length < 1) return 0;
+    let snapFailed = false;
+    if (typeof Deck.createSnapshot === 'function') {
+      try {
+        const label = toDelete.length === 1 ? 'Before Delete Page' : `Before Delete ${toDelete.length} Pages`;
+        const s = await Deck.createSnapshot(label);
+        if (s === null && Deck.snapshotsAvailable) snapFailed = true;
+      } catch {
+        snapFailed = true;
+      }
+    }
+    for (const d of toDelete) {
+      if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(d.id);
+    }
+    const delIds = new Set(toDelete.map((d) => d.id));
+    Deck.cfg.pages = pages.filter((d) => !delIds.has(d.id));
+    if (!Deck.cfg.pages.some((d) => d.id === Deck.cfg.activePageId)) {
+      Deck.cfg.activePageId = Deck.cfg.pages[0].id;
+    }
+    Deck.saveCfg();
+    Deck.renderGrid();
+    Deck.syncPageLockButton?.();
+    if (snapFailed) {
+      Deck.setMsg('No snapshot was saved');
+    }
+    return toDelete.length;
   };
 
   Deck.resizePage = (pageId, newCols, newRows) => {
@@ -1214,10 +1281,32 @@
       filters: opts.filters !== false,
       broadcast: opts.broadcast !== false,
     };
+    const hasSceneFilter = Array.isArray(opts.selectedScenes) || opts.selectedScenes instanceof Set;
+    const selectedSceneSet = hasSceneFilter ? new Set(opts.selectedScenes) : null;
+    const filteredScenes = selectedSceneSet
+      ? (obs.scenes || []).filter((s) => selectedSceneSet.has(s))
+      : (obs.scenes || []);
+    const allowedSourceNames = selectedSceneSet ? new Set(filteredScenes) : null;
+    const allowedGroups = selectedSceneSet ? new Set() : null;
+    if (selectedSceneSet) {
+      const groupSet = new Set(obs.groups || []);
+      for (const sName of filteredScenes) {
+        for (const it of (obs.itemsByScene[sName] || [])) {
+          if (!it?.sourceName) continue;
+          allowedSourceNames.add(it.sourceName);
+          if (groupSet.has(it.sourceName)) allowedGroups.add(it.sourceName);
+        }
+      }
+      for (const gName of allowedGroups) {
+        for (const it of (obs.itemsByScene[gName] || [])) {
+          if (it?.sourceName) allowedSourceNames.add(it.sourceName);
+        }
+      }
+    }
     const pages = [];
 
     if (cfgOpts.scenes) {
-      const items = obs.scenes.map((sceneName) => ({
+      const items = filteredScenes.map((sceneName) => ({
         type: 'scene',
         mode: 'named',
         sceneName,
@@ -1225,7 +1314,7 @@
         icon: smartSceneIcon(sceneName),
         color: '#991b1b',
       }));
-      if (obs.scenes.length > 1) {
+      if (filteredScenes.length > 1) {
         items.push(
           { type: 'scene', mode: 'prev', label: 'Prev Scene', icon: '⏮️', color: '#115e59' },
           { type: 'scene', mode: 'next', label: 'Next Scene', icon: '⏭️', color: '#115e59' }
@@ -1237,7 +1326,9 @@
     if (cfgOpts.sources) {
       const items = [];
       const seen = new Set();
-      const targets = [...new Set([...obs.scenes, ...obs.groups])];
+      const targets = selectedSceneSet
+        ? [...new Set([...filteredScenes, ...allowedGroups])]
+        : [...new Set([...obs.scenes, ...obs.groups])];
       for (const sceneName of targets) {
         for (const it of (obs.itemsByScene[sceneName] || [])) {
           if (!it?.sourceName) continue;
@@ -1262,6 +1353,7 @@
       const items = [];
       const seen = new Set();
       for (const [sourceName, flts] of Object.entries(obs.filtersBySource || {})) {
+        if (allowedSourceNames && !allowedSourceNames.has(sourceName)) continue;
         for (const f of (flts || [])) {
           if (!f?.filterName) continue;
           const key = `${sourceName}\0${f.filterName}`;
@@ -1935,6 +2027,43 @@
       : `Program: ${programScene || '—'}`;
   };
 
+  Deck.updateLiveStrip = () => {
+    const strip = $('live-strip');
+    if (!strip) return;
+    const { obs } = Deck;
+    const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+    const streaming = connected && Boolean(obs.outputs?.stream);
+    const recording = connected && Boolean(obs.outputs?.record);
+    const recPaused = recording && Boolean(obs.outputs?.recordPaused || obs.recordStatus?.outputPaused);
+
+    const streamInd = $('live-stream-ind');
+    const streamTime = $('live-stream-time');
+    if (streamInd) {
+      streamInd.hidden = !streaming;
+      if (streaming && streamTime) {
+        const st = obs.streamStatus;
+        streamTime.textContent = st ? (formatTimecode(st.outputTimecode, st.outputDuration) || '00:00:00') : '00:00:00';
+      }
+    }
+
+    const recInd = $('live-rec-ind');
+    const recLbl = $('live-rec-lbl');
+    const recTime = $('live-rec-time');
+    if (recInd) {
+      recInd.hidden = !recording;
+      recInd.classList.toggle('paused', recPaused);
+      if (recording) {
+        if (recLbl) recLbl.textContent = recPaused ? 'PAUSED' : 'REC';
+        if (recTime) {
+          const st = obs.recordStatus;
+          recTime.textContent = st ? (formatTimecode(st.outputTimecode, st.outputDuration) || '00:00:00') : '00:00:00';
+        }
+      }
+    }
+
+    strip.hidden = !(streaming || recording);
+  };
+
   Deck.setConn = (cls, txt) => {
     Deck.obs.status = cls;
     const pill = $('conn-pill');
@@ -1946,6 +2075,8 @@
       cleanDot.className = `clean-conn-dot ${cls}`;
       cleanDot.title = `OBS: ${txt}`;
     }
+    Deck.updateLiveStrip();
+    if (typeof Deck.updateGuidanceBanner === 'function') Deck.updateGuidanceBanner();
   };
 
   Deck.obsCall = (requestType, requestData) => {
@@ -2318,8 +2449,8 @@
     const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
     if (!connected) return;
     const activePads = Deck.getActivePads();
-    const hasStream = activePads.some((p) => p && p.type === 'output' && p.target === 'stream');
-    const hasRecord = activePads.some((p) => p && p.type === 'output' && (p.target === 'record' || p.target === 'recordPause'));
+    const hasStream = activePads.some((p) => p && p.type === 'output' && p.target === 'stream') || Boolean(obs.outputs?.stream);
+    const hasRecord = activePads.some((p) => p && p.type === 'output' && (p.target === 'record' || p.target === 'recordPause')) || Boolean(obs.outputs?.record);
     const mediaInputs = [...new Set(activePads.filter((p) => p && p.type === 'media' && p.inputName).map((p) => p.inputName))];
 
     const calls = [];
@@ -2351,6 +2482,9 @@
     if (typeof Deck.updateReadoutPads === 'function') {
       Deck.updateReadoutPads();
     }
+    if (typeof Deck.updateLiveStrip === 'function') {
+      Deck.updateLiveStrip();
+    }
     if (hasStream && activePads.some((p) => p && p.type === 'stats' && p.mode === 'stream')) {
       if (typeof Deck.updateStatsPads === 'function') Deck.updateStatsPads();
       Deck.applyStatsAlerts();
@@ -2360,7 +2494,10 @@
   Deck.syncReadoutPolling = () => {
     const { obs } = Deck;
     const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
-    const needsPolling = connected && Deck.getActivePads().some(needsReadoutPolling);
+    const needsPolling = connected && (
+      Deck.getActivePads().some(needsReadoutPolling)
+      || Boolean(obs.outputs?.stream || obs.outputs?.record)
+    );
     if (connected) {
       const missingVolumes = Deck.getActivePads()
         .filter((p) => p && p.type === 'volume' && p.inputName && typeof obs.volumes[p.inputName] !== 'number')
@@ -2384,7 +2521,10 @@
         Deck.fetchReadouts();
         obs.readoutTimer = setInterval(() => {
           const stillConnected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
-          if (stillConnected && Deck.getActivePads().some(needsReadoutPolling)) {
+          if (stillConnected && (
+            Deck.getActivePads().some(needsReadoutPolling)
+            || Boolean(obs.outputs?.stream || obs.outputs?.record)
+          )) {
             Deck.fetchReadouts();
           } else {
             Deck.syncReadoutPolling();
@@ -2536,9 +2676,11 @@
         updateStreamMetrics(streamRes);
       }
       if (recRes) {
+        obs.recordStatus = recRes;
         obs.outputs.record = !!recRes.outputActive;
         obs.outputs.recordPaused = !!recRes.outputPaused;
       }
+      if (typeof Deck.updateLiveStrip === 'function') Deck.updateLiveStrip();
       if (vcamRes) obs.outputs.vcam = !!vcamRes.outputActive;
       if (replayRes) obs.outputs.replay = !!replayRes.outputActive;
       if (profRes) {
@@ -2854,6 +2996,8 @@
         updateStreamMetrics({ outputActive: false });
       } else if (typeof Deck.fetchReadouts === 'function') Deck.fetchReadouts();
       if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+      if (typeof Deck.updateLiveStrip === 'function') Deck.updateLiveStrip();
+      Deck.syncReadoutPolling();
       Deck.scheduleRenderGrid();
     } else if (type === 'RecordStateChanged') {
       obs.outputs.record = !!d.outputActive;
@@ -2862,6 +3006,8 @@
       if (!d.outputActive) obs.recordStatus = null;
       else if (typeof Deck.fetchReadouts === 'function') Deck.fetchReadouts();
       if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+      if (typeof Deck.updateLiveStrip === 'function') Deck.updateLiveStrip();
+      Deck.syncReadoutPolling();
       Deck.scheduleRenderGrid();
     } else if (type === 'VirtualcamStateChanged') {
       obs.outputs.vcam = !!d.outputActive;
@@ -3338,9 +3484,11 @@
       } else if (msg.op === 2) {
         obs.retryCount = 0;
         connectionMachine.send('IDENTIFIED');
+        Deck.obs.status = 'ok';
+        await Deck.syncObsState();
+        if (obs.ws !== ws || ws.readyState !== 1) return;
         Deck.setConn('ok', 'Connected');
         Deck.setMsg(`Connected to ${url}`);
-        await Deck.syncObsState();
         if (typeof Deck.applyPendingHoldRestores === 'function') {
           await Deck.applyPendingHoldRestores();
         }

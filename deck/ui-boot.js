@@ -87,6 +87,12 @@
       btn.classList.toggle('on', on);
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
+    const topBtn = $('btn-clean-top');
+    if (topBtn) {
+      topBtn.classList.toggle('on', on);
+      topBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    Deck.updateGuidanceBanner?.();
   }
 
   function initCleanView() {
@@ -95,13 +101,48 @@
     else if (cleanParam === '0' || cleanParam === 'false') applyCleanView(false, { persist: false });
     else applyCleanView(getCleanViewPref(), { persist: false });
 
-    $('btn-clean-view')?.addEventListener('click', () => {
-      applyCleanView(document.documentElement.dataset.clean !== '1', { persist: true });
-    });
+    const toggleClean = () => applyCleanView(document.documentElement.dataset.clean !== '1', { persist: true });
+    $('btn-clean-view')?.addEventListener('click', toggleClean);
+    $('btn-clean-top')?.addEventListener('click', toggleClean);
     $('btn-clean-exit')?.addEventListener('click', () => {
       applyCleanView(false, { persist: true });
     });
     $('btn-clean-panic')?.addEventListener('click', Deck.runPanic);
+  }
+
+  function getShowPanicPref() {
+    try {
+      const saved = localStorage.getItem('opendeck_show_panic');
+      if (saved === '0') return false;
+      if (saved === '1') return true;
+    } catch {}
+    return true;
+  }
+
+  function applyShowPanic(visible, { persist = true } = {}) {
+    const show = Boolean(visible);
+    if (show) delete document.documentElement.dataset.hidePanic;
+    else document.documentElement.dataset.hidePanic = '1';
+    if (persist) {
+      try {
+        localStorage.setItem('opendeck_show_panic', show ? '1' : '0');
+      } catch {}
+    }
+    const btn = $('btn-panic-toggle');
+    if (btn) {
+      btn.textContent = show ? 'Shown' : 'Hidden';
+      btn.classList.toggle('on', show);
+      btn.setAttribute('aria-pressed', show ? 'true' : 'false');
+    }
+  }
+
+  function initPanicVisibility() {
+    applyShowPanic(getShowPanicPref(), { persist: false });
+    $('btn-panic-toggle')?.addEventListener('click', () => {
+      const currentlyHidden = document.documentElement.dataset.hidePanic === '1';
+      applyShowPanic(currentlyHidden, { persist: true });
+      Deck.setMsg?.(currentlyHidden ? 'PANIC button shown in toolbar' : 'PANIC button hidden (still available in Settings)');
+    });
   }
 
   // Overflow menu: secondary toolbar actions live behind the ⋯ button.
@@ -131,8 +172,25 @@
     if (!e.target.closest('.menu-wrap')) setMoreMenu(false);
   });
   document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+      const qsDlg = $('quick-search-dlg');
+      if (qsDlg?.open) {
+        e.preventDefault();
+        qsDlg.close();
+        return;
+      }
+      if (!document.querySelector('dialog[open]')) {
+        e.preventDefault();
+        Deck.openQuickSearch?.();
+      }
+      return;
+    }
     if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
     const ws = Deck.machines?.workspace;
+    if (ws?.context?.popover === 'context_menu' || !$('ctx-menu')?.hidden) {
+      Deck.closeContextMenu?.();
+      return;
+    }
     if (ws?.context?.popover === 'more_menu' || !$('more-menu')?.hidden) {
       setMoreMenu(false);
       $('btn-more')?.focus();
@@ -157,7 +215,24 @@
   });
 
   // Toolbar & WS
-  $('btn-conn-toggle').addEventListener('click', () => $('conn-bar').classList.toggle('open'));
+  function setConnBarOpen(open) {
+    const bar = $('conn-bar');
+    if (!bar) return;
+    const isOpen = Boolean(open);
+    bar.classList.toggle('open', isOpen);
+    const pill = $('conn-pill');
+    if (pill) {
+      pill.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    }
+    Deck.updateGuidanceBanner?.();
+  }
+  $('btn-conn-toggle').addEventListener('click', () => setConnBarOpen(!$('conn-bar')?.classList.contains('open')));
+  $('conn-pill')?.addEventListener('click', () => {
+    const willOpen = !$('conn-bar')?.classList.contains('open');
+    setConnBarOpen(willOpen);
+    if (willOpen) $('ws-host')?.focus();
+  });
+  $('btn-conn-close')?.addEventListener('click', () => setConnBarOpen(false));
   $('btn-ws-connect').addEventListener('click', () => Deck.connectObs({ manual: true }));
   $('btn-ws-disconnect').addEventListener('click', () => Deck.disconnectObs(true));
   $('btn-sync').addEventListener('click', async () => {
@@ -171,6 +246,12 @@
     Deck.renderGrid();
   });
   $('btn-panic').addEventListener('click', Deck.runPanic);
+  $('btn-panic-menu-run')?.addEventListener('click', Deck.runPanic);
+  $('btn-phone-top')?.addEventListener('click', () => Deck.openPhoneHostDialog?.());
+  $('btn-phone-host')?.addEventListener('click', () => Deck.openPhoneHostDialog?.());
+  $('btn-manage-pages')?.addEventListener('click', () => Deck.openPagesManager?.());
+  $('btn-manage-pages-menu')?.addEventListener('click', () => Deck.openPagesManager?.());
+  $('btn-quick-search')?.addEventListener('click', () => Deck.openQuickSearch?.());
 
   $('btn-export').addEventListener('click', () => {
     const out = Deck.exportConfig();
@@ -415,10 +496,8 @@
 
     const aotBtn = $('btn-desktop-aot');
     const redetectBtn = $('btn-desktop-redetect');
-    const phoneHostBtn = $('btn-phone-host');
     if (aotBtn) aotBtn.hidden = false;
     if (redetectBtn) redetectBtn.hidden = false;
-    if (phoneHostBtn) phoneHostBtn.hidden = false;
 
     const syncAotUi = (enabled) => {
       const on = Boolean(enabled);
@@ -476,10 +555,6 @@
       if (Deck.obs.status !== 'ok') {
         applyDiscoveredObsPort(info, { force: false });
       }
-    });
-
-    phoneHostBtn?.addEventListener('click', () => {
-      Deck.openPhoneHostDialog?.();
     });
 
     api.onTriggerPanic?.(() => {
@@ -554,12 +629,102 @@
     pushDesktopStatus();
   }
 
-  // Phone Deck progressive enhancements: Wake Lock, Haptics, and non-blocking live layout update banner
+  // Contextual guidance banner (Disconnected OBS / Empty starter Page)
+  const guidanceDismissed = { disconnected: false, empty: false };
+  let guidanceMode = '';
+
+  function updateGuidanceBanner() {
+    const banner = $('guidance-banner');
+    if (!banner) return;
+    if (document.documentElement.dataset.clean === '1') {
+      banner.hidden = true;
+      guidanceMode = '';
+      return;
+    }
+
+    const textEl = $('guidance-text');
+    const primaryBtn = $('btn-guidance-primary');
+    const secondaryBtn = $('btn-guidance-secondary');
+    const isConnected = Deck.obs?.status === 'ok';
+    const isConnecting = Deck.obs?.status === 'wait';
+
+    if (isConnected) {
+      guidanceDismissed.disconnected = false;
+      const page = Deck.getActivePage?.();
+      const configuredCount = (page?.pads || []).filter((p) => p && p.type !== 'none').length;
+      if (configuredCount <= 1 && !guidanceDismissed.empty && !Deck.editMode) {
+        guidanceMode = 'empty';
+        if (textEl) textEl.textContent = 'Connected to OBS — populate this Page in one click or enter Edit Mode.';
+        if (primaryBtn) { primaryBtn.textContent = 'Auto-Import Pages'; primaryBtn.hidden = false; }
+        if (secondaryBtn) { secondaryBtn.textContent = 'Edit Mode'; secondaryBtn.hidden = false; }
+        banner.dataset.mode = 'empty';
+        banner.hidden = false;
+        return;
+      }
+      guidanceMode = '';
+      banner.hidden = true;
+      return;
+    }
+
+    const connOpen = Boolean($('conn-bar')?.classList.contains('open'));
+    if (!isConnecting && !guidanceDismissed.disconnected && !connOpen) {
+      guidanceMode = 'disconnected';
+      if (textEl) textEl.textContent = 'OBS Studio is not connected — enable WebSocket Server in OBS Tools or check your host & port.';
+      if (primaryBtn) { primaryBtn.textContent = 'Connection Settings'; primaryBtn.hidden = false; }
+      if (secondaryBtn) { secondaryBtn.textContent = 'Retry'; secondaryBtn.hidden = false; }
+      banner.dataset.mode = 'disconnected';
+      banner.hidden = false;
+      return;
+    }
+
+    guidanceMode = '';
+    banner.hidden = true;
+  }
+  Deck.updateGuidanceBanner = updateGuidanceBanner;
+
+  $('btn-guidance-primary')?.addEventListener('click', () => {
+    if (guidanceMode === 'disconnected') {
+      setConnBarOpen(true);
+      $('ws-host')?.focus();
+    } else if (guidanceMode === 'empty') {
+      Deck.openAutoImportWizard?.();
+    }
+  });
+  $('btn-guidance-secondary')?.addEventListener('click', () => {
+    if (guidanceMode === 'disconnected') {
+      Deck.connectObs({ manual: true });
+    } else if (guidanceMode === 'empty') {
+      $('btn-edit')?.click();
+    }
+  });
+  $('btn-guidance-dismiss')?.addEventListener('click', () => {
+    if (guidanceMode === 'disconnected' || guidanceMode === 'empty') {
+      guidanceDismissed[guidanceMode] = true;
+    }
+    const banner = $('guidance-banner');
+    if (banner) banner.hidden = true;
+  });
+
+  // Phone Deck progressive enhancements: Wake Lock, Haptics, Touch Swipe Pages, and live layout update banner
   function initPhoneUxAndLiveLayoutBanner() {
+    const wakeLockSupported = typeof navigator !== 'undefined' && Boolean(navigator.wakeLock && typeof navigator.wakeLock.request === 'function');
+    const getWakeLockPref = () => {
+      try {
+        return localStorage.getItem('opendeck_wake_lock') !== '0';
+      } catch {}
+      return true;
+    };
+    const getHapticsPref = () => {
+      try {
+        return localStorage.getItem('opendeck_haptics') !== '0';
+      } catch {}
+      return true;
+    };
+
     let wakeLockSentinel = null;
     const syncWakeLock = async () => {
-      if (typeof navigator === 'undefined' || !navigator.wakeLock || typeof navigator.wakeLock.request !== 'function') return;
-      const wantLock = Deck.obs.status === 'ok' && document.visibilityState === 'visible';
+      if (!wakeLockSupported) return;
+      const wantLock = getWakeLockPref() && Deck.obs.status === 'ok' && document.visibilityState === 'visible';
       if (wantLock && !wakeLockSentinel) {
         try {
           wakeLockSentinel = await navigator.wakeLock.request('screen');
@@ -576,6 +741,60 @@
       }
     };
 
+    const syncWakeLockBtn = () => {
+      const btn = $('btn-wake-lock');
+      if (!btn) return;
+      if (!wakeLockSupported) {
+        btn.textContent = 'N/A';
+        btn.disabled = true;
+        btn.classList.remove('on');
+        btn.setAttribute('aria-pressed', 'false');
+        btn.title = 'Screen Wake Lock is not supported in this browser';
+        return;
+      }
+      const on = getWakeLockPref();
+      btn.disabled = false;
+      btn.textContent = on ? 'On' : 'Off';
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    };
+
+    const syncHapticsBtn = () => {
+      const btn = $('btn-haptics');
+      if (!btn) return;
+      const on = getHapticsPref();
+      btn.textContent = on ? 'On' : 'Off';
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    };
+
+    $('btn-wake-lock')?.addEventListener('click', () => {
+      if (!wakeLockSupported) return;
+      const next = !getWakeLockPref();
+      try { localStorage.setItem('opendeck_wake_lock', next ? '1' : '0'); } catch {}
+      syncWakeLockBtn();
+      syncWakeLock();
+      Deck.setMsg?.(next ? 'Keep screen awake enabled' : 'Keep screen awake disabled');
+    });
+
+    const triggerHaptic = (pattern) => {
+      if (!getHapticsPref()) return;
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        try { navigator.vibrate(pattern); } catch {}
+      }
+    };
+
+    $('btn-haptics')?.addEventListener('click', () => {
+      const next = !getHapticsPref();
+      try { localStorage.setItem('opendeck_haptics', next ? '1' : '0'); } catch {}
+      syncHapticsBtn();
+      if (next) triggerHaptic(10);
+      Deck.setMsg?.(next ? 'Haptic feedback enabled' : 'Haptic feedback disabled');
+    });
+
+    syncWakeLockBtn();
+    syncHapticsBtn();
+
     document.addEventListener('visibilitychange', () => {
       syncWakeLock();
     });
@@ -589,15 +808,6 @@
     }
     syncWakeLock();
 
-    const triggerHaptic = (pattern) => {
-      try {
-        if (localStorage.getItem('opendeck_haptics') === '0') return;
-      } catch {}
-      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-        try { navigator.vibrate(pattern); } catch {}
-      }
-    };
-
     $('grid')?.addEventListener('pointerdown', (e) => {
       if (Deck.editMode) return;
       const padEl = e.target?.closest?.('.pad');
@@ -606,6 +816,53 @@
     });
     $('btn-panic')?.addEventListener('click', () => triggerHaptic([15, 30, 15]));
     $('btn-clean-panic')?.addEventListener('click', () => triggerHaptic([15, 30, 15]));
+
+    // Horizontal touch swipe Page navigation on #grid (Run Mode only)
+    const gridEl = $('grid');
+    let swipeState = null;
+    let swipeAnimTimer = null;
+    gridEl?.addEventListener('touchstart', (e) => {
+      if (Deck.editMode || document.querySelector('dialog[open]')) { swipeState = null; return; }
+      if (!e.touches || e.touches.length !== 1) { swipeState = null; return; }
+      if ((Deck.cfg?.pages?.length || 0) <= 1) { swipeState = null; return; }
+      if (e.target?.closest?.('.hold-pad')) { swipeState = null; return; }
+      const t = e.touches[0];
+      swipeState = {
+        x: t.clientX,
+        y: t.clientY,
+        time: Date.now(),
+        scrollLeft: gridEl.scrollLeft,
+      };
+    }, { passive: true });
+    gridEl?.addEventListener('touchend', (e) => {
+      if (!swipeState || Deck.editMode || document.querySelector('dialog[open]')) { swipeState = null; return; }
+      const st = swipeState;
+      swipeState = null;
+      const t = e.changedTouches?.[0];
+      if (!t) return;
+      if (Math.abs(gridEl.scrollLeft - st.scrollLeft) > 8) return;
+      const dx = t.clientX - st.x;
+      const dy = t.clientY - st.y;
+      const dt = Date.now() - st.time;
+      if (dt > 650 || Math.abs(dx) < 56 || Math.abs(dx) <= Math.abs(dy) * 1.8) return;
+      const pages = Deck.cfg?.pages || [];
+      if (pages.length <= 1) return;
+      const curIdx = Math.max(0, pages.findIndex((p) => p.id === Deck.cfg.activePageId));
+      const delta = dx < 0 ? 1 : -1;
+      const nextPage = pages[(curIdx + delta + pages.length) % pages.length];
+      if (!nextPage || nextPage.id === Deck.cfg.activePageId) return;
+      Deck.setActivePage?.(nextPage.id);
+      triggerHaptic(8);
+      if (swipeAnimTimer) clearTimeout(swipeAnimTimer);
+      gridEl.classList.remove('swipe-next', 'swipe-prev');
+      void gridEl.offsetWidth;
+      gridEl.classList.add(delta > 0 ? 'swipe-next' : 'swipe-prev');
+      swipeAnimTimer = setTimeout(() => {
+        swipeAnimTimer = null;
+        gridEl.classList.remove('swipe-next', 'swipe-prev');
+      }, 190);
+    }, { passive: true });
+    gridEl?.addEventListener('touchcancel', () => { swipeState = null; }, { passive: true });
 
     // Poll /layout-version over HTTP/HTTPS (Phone Deck LAN host) for live layout updates
     const isHttpOrigin = location.protocol === 'http:' || location.protocol === 'https:';
@@ -739,6 +996,7 @@
   initFontScaler();
   initTheme();
   initCleanView();
+  initPanicVisibility();
   Deck.initPaletteResizer();
   if ($('version-badge') && Deck.VERSION) $('version-badge').textContent = `v${Deck.VERSION}`;
   initDesktopBridge();

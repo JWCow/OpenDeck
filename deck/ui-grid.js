@@ -4,6 +4,68 @@
   const Deck = window.Deck;
   const { $, esc, COLORS } = Deck;
 
+  const BROADCAST_ICONS = [
+    { key: 'camera', label: 'Camera', body: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3.2"/>' },
+    { key: 'video', label: 'Video', body: '<rect x="2" y="6" width="14" height="12" rx="2"/><path d="m22 8-6 4 6 4V8z"/>' },
+    { key: 'screen', label: 'Screen', body: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>' },
+    { key: 'slides', label: 'Slides', body: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10M12 16v4M8 9h8M8 12h5"/>' },
+    { key: 'mic', label: 'Mic', body: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/>' },
+    { key: 'mic-off', label: 'Mic Muted', body: '<path d="m2 2 20 20"/><path d="M15 9.3V5a3 3 0 0 0-5.7-1.3"/><path d="M9 9v2a3 3 0 0 0 5.1 2.1"/><path d="M19 10a7 7 0 0 1-1.1 3.7M5 10a7 7 0 0 0 10.6 6"/><path d="M12 17v5M8 22h8"/>' },
+    { key: 'volume', label: 'Audio', body: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9.5 9.5 0 0 1 0 14"/>' },
+    { key: 'headphones', label: 'Monitor', body: '<path d="M3 14v-2a9 9 0 0 1 18 0v2"/><path d="M21 15a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3v5zM3 15a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3v5z"/>' },
+    { key: 'live', label: 'Go Live', body: '<circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"/><path d="M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.2 5.2a9.5 9.5 0 0 0 0 13.6M18.8 5.2a9.5 9.5 0 0 1 0 13.6"/>' },
+    { key: 'record', label: 'Record', body: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/>' },
+    { key: 'replay', label: 'Replay', body: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>' },
+    { key: 'play', label: 'Play', body: '<polygon points="6 4 20 12 6 20 6 4"/>' },
+    { key: 'pause', label: 'Pause', body: '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>' },
+    { key: 'stop', label: 'Stop', body: '<rect x="5" y="5" width="14" height="14" rx="2"/>' },
+    { key: 'filter', label: 'Filter / FX', body: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/><path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8L19 16z"/>' },
+    { key: 'pip', label: 'PiP Layout', body: '<rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/>' },
+    { key: 'capture', label: 'Screenshot', body: '<path d="M4 8V6a2 2 0 0 1 2-2h2M20 8V6a2 2 0 0 0-2-2h-2M4 16v2a2 2 0 0 0 2 2h2M20 16v2a2 2 0 0 1-2 2h-2"/><circle cx="12" cy="12" r="3"/>' },
+    { key: 'chapter', label: 'Chapter', body: '<path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/>' },
+    { key: 'stats', label: 'Telemetry', body: '<path d="M3 13h4l2.5-7 4 12 2.5-5H21"/>' },
+    { key: 'macro', label: 'Timed Macro', body: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>' },
+    { key: 'hotkey', label: 'Hotkey', body: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M7 13h.01M11 13h.01M15 13h.01M8 16h8"/>' },
+    { key: 'webhook', label: 'HTTP / API', body: '<path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.5-1.5"/>' },
+    { key: 'globe', label: 'Browser', body: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a13 13 0 0 1 0 18M12 3a13 13 0 0 0 0 18"/>' },
+    { key: 'text', label: 'Text / Title', body: '<path d="M4 6h16M12 6v13M8 19h8"/>' },
+    { key: 'image', label: 'Image', body: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m21 16-5-5-6 6-2.5-2.5L3 19"/>' },
+    { key: 'studio', label: 'Studio Mode', body: '<rect x="2" y="5" width="9" height="14" rx="1.5"/><rect x="13" y="5" width="9" height="14" rx="1.5"/>' },
+    { key: 'transition', label: 'Transition', body: '<path d="M4 7h11l-3-3M20 17H9l3 3"/>' },
+    { key: 'page', label: 'Page', body: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>' },
+    { key: 'coffee', label: 'BRB / Break', body: '<path d="M17 8h1a4 4 0 0 1 0 8h-1"/><path d="M3 8h14v7a5 5 0 0 1-5 5H8a5 5 0 0 1-5-5V8z"/><path d="M6 2v2M10 2v2M14 2v2"/>' },
+    { key: 'panic', label: 'PANIC', body: '<path d="M12 3 2 20h20L12 3z"/><path d="M12 9v5M12 17h.01"/>' },
+  ];
+
+  const BROADCAST_ICON_MAP = Object.create(null);
+  for (const item of BROADCAST_ICONS) BROADCAST_ICON_MAP[item.key] = item;
+
+  function renderIconHtml(icon) {
+    if (!icon) return '';
+    const str = String(icon).trim();
+    if (!str) return '';
+    if (str.startsWith('svg:')) {
+      const entry = BROADCAST_ICON_MAP[str.slice(4)];
+      if (entry) {
+        return `<span class="ico ico-svg" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${entry.body}</svg></span>`;
+      }
+    }
+    return `<span class="ico">${esc(str)}</span>`;
+  }
+
+  function isCustomPadColor(c) {
+    if (!c) return false;
+    const def = String(COLORS[0] || '#222733').toLowerCase();
+    return String(c).trim().toLowerCase() !== def;
+  }
+
+  function formatCueSec(ms) {
+    const n = Number(ms);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    const sec = n / 1000;
+    return Number.isInteger(sec) ? `${sec}s` : `${Number(sec.toFixed(1))}s`;
+  }
+
   const TAGS = {
     scene: 'SCN',
     source: 'SRC',
@@ -448,7 +510,11 @@
         if (!Deck.editMode && p?.hold && Deck.HOLD_TYPES && Deck.HOLD_TYPES.has(p.type)) {
           return;
         }
-        Deck.openPadEditor(i);
+        if (typeof Deck.openPadContextMenu === 'function') {
+          Deck.openPadContextMenu(i, e);
+        } else {
+          Deck.openPadEditor(i);
+        }
       });
       el.addEventListener('dragstart', (e) => {
         if (!Deck.editMode) { e.preventDefault(); return; }
@@ -552,8 +618,19 @@
     const isBusy = Boolean(rt.busy);
     const isHoldPad = Boolean(p.hold && Deck.HOLD_TYPES && Deck.HOLD_TYPES.has(p.type));
     const isFullFace = Boolean(p.image && p.imageFit === 'fill');
+    const isPreview = Boolean(
+      p.type === 'scene'
+      && (p.mode || 'named') === 'named'
+      && p.sceneName
+      && Deck.obs?.studioModeEnabled
+      && Deck.obs?.previewScene === p.sceneName
+      && Deck.obs?.programScene !== p.sceneName
+    );
+    const colorStyle = p.colorStyle === 'tint' ? 'tint' : 'solid';
+    const hasCustomColor = Boolean(!isFullFace && p.type !== 'none' && isCustomPadColor(p.color));
     const isDragOver = el.classList.contains('drag-over');
     const isDraggingEl = el.classList.contains('dragging');
+    const isConfirmed = el.classList.contains('confirmed');
     const selectedPads = Deck.getSelectedPads();
     const isSelected = selectedPads.has(i);
     const hasProg = Boolean(p.type === 'macro' || p.autoOffMs > 0);
@@ -562,6 +639,27 @@
       ? Deck.getStatsAlertLevel(p.mode || 'all')
       : '';
     const ariaPressed = isTogglePad(p) ? (active ? 'true' : 'false') : '';
+
+    let cueText = '';
+    let cueKind = '';
+    if (!Deck.editMode && p.type !== 'none') {
+      if (isArmed) {
+        cueText = 'TAP';
+        cueKind = 'cue-armed';
+      } else if (active && p.type === 'scene' && Deck.obs?.studioModeEnabled) {
+        cueText = 'PGM';
+        cueKind = 'cue-pgm';
+      } else if (isPreview) {
+        cueText = 'PVW';
+        cueKind = 'cue-pvw';
+      } else if (isHoldPad) {
+        cueText = 'HOLD';
+        cueKind = 'cue-hold';
+      } else if (p.autoOffMs > 0 && !isRunning) {
+        cueText = formatCueSec(p.autoOffMs);
+        cueKind = 'cue-auto';
+      }
+    }
 
     const subText = isRunning
       ? tickText(rt)
@@ -578,6 +676,7 @@
       p.type,
       padState,
       active ? 1 : 0,
+      isPreview ? 1 : 0,
       ariaPressed,
       isRunning ? 1 : 0,
       isArmed ? 1 : 0,
@@ -592,7 +691,10 @@
       hasProg ? 1 : 0,
       showMeter ? 1 : 0,
       alertLvl,
-      p.color && p.type !== 'none' ? p.color : '',
+      hasCustomColor ? p.color : '',
+      colorStyle,
+      cueText,
+      cueKind,
       p.hideLabel ? 1 : 0,
       lbl,
       ctxText,
@@ -611,36 +713,54 @@
       + (Deck.editMode ? ' edit-mode' : '')
       + (isSelected ? ' selected' : '')
       + (active ? ' active' : '')
+      + (isPreview ? ' preview' : '')
       + (isRunning ? ' running' : '')
       + (isArmed ? ' armed' : '')
       + (isHeld ? ' held' : '')
       + (isBusy ? ' busy' : '')
       + (isHoldPad ? ' hold-pad' : '')
       + (isFullFace ? ' full-face' : '')
-      + (!isFullFace && p.color && p.type !== 'none' ? ' has-color' : '')
+      + (hasCustomColor && colorStyle !== 'tint' ? ' has-color' : '')
+      + (hasCustomColor && colorStyle === 'tint' ? ' has-tint' : '')
       + (p.hideLabel ? ' hide-label' : '')
       + (alertLvl === 'warn' ? ' warn' : alertLvl === 'crit' ? ' crit' : '')
       + (isDragOver ? ' drag-over' : '')
-      + (isDraggingEl ? ' dragging' : '');
+      + (isDraggingEl ? ' dragging' : '')
+      + (isConfirmed ? ' confirmed' : '');
     el.dataset.padState = padState;
     if (isBusy) el.setAttribute('aria-busy', 'true');
     else el.removeAttribute('aria-busy');
     if (ariaPressed) el.setAttribute('aria-pressed', ariaPressed);
     else el.removeAttribute('aria-pressed');
     if (isFullFace) {
-      el.style.backgroundColor = p.color && p.type !== 'none' ? p.color : '';
+      el.style.backgroundColor = (p.type !== 'none' && isCustomPadColor(p.color)) ? p.color : '';
       el.style.backgroundImage = `url("${p.image}")`;
       el.style.backgroundSize = 'cover';
       el.style.backgroundPosition = 'center';
+      el.style.removeProperty('--pad-tint');
+    } else if (hasCustomColor && colorStyle === 'tint') {
+      el.style.backgroundImage = '';
+      el.style.backgroundSize = '';
+      el.style.backgroundPosition = '';
+      el.style.backgroundColor = '';
+      el.style.setProperty('--pad-tint', p.color);
+    } else if (hasCustomColor) {
+      el.style.backgroundImage = '';
+      el.style.backgroundSize = '';
+      el.style.backgroundPosition = '';
+      el.style.backgroundColor = p.color;
+      el.style.removeProperty('--pad-tint');
     } else {
       el.style.backgroundImage = '';
       el.style.backgroundSize = '';
       el.style.backgroundPosition = '';
-      el.style.backgroundColor = p.color && p.type !== 'none' ? p.color : '';
+      el.style.backgroundColor = '';
+      el.style.removeProperty('--pad-tint');
     }
     el.draggable = Deck.editMode && p.type !== 'none';
     const tipParts = [lbl || `Pad ${i + 1}`];
     if (ctxText) tipParts.push(`[${ctxText}]`);
+    if (isPreview) tipParts.push('(Preview)');
     if ((p.type === 'stats' || isReadoutPad(p)) && subText) tipParts.push(`(${subText})`);
     if (TAGS[p.type]) tipParts.push(`[${TAGS[p.type]}]`);
     el.title = tipParts.join(' ');
@@ -649,21 +769,42 @@
     if (p.image && p.imageFit !== 'fill') {
       iconHtml = `<img class="pad-icon-img" src="${esc(p.image)}" alt="">`;
     } else if (!p.image && p.icon) {
-      iconHtml = `<span class="ico">${esc(p.icon)}</span>`;
+      iconHtml = renderIconHtml(p.icon);
     }
 
+    const cueHtml = cueText ? `<span class="pad-cue ${cueKind}">${esc(cueText)}</span>` : '';
     const lblHtml = `<span class="lbl"${p.hideLabel ? ' style="display:none"' : ''}>${esc(lbl)}</span>`;
     const ctxHtml = ctxText ? `<span class="ctx"${(isRunning || subText || p.hideLabel) ? ' style="display:none"' : ''}>${esc(ctxText)}</span>` : '';
     const progHtml = hasProg ? `<span class="pad-prog" aria-hidden="true" style="--prog:${isRunning && rt.endsAt ? computeTickProgress(page.id, { idx: i, kind: rt.kind, endsAt: rt.endsAt }, p).toFixed(3) : '0'}"></span>` : '';
     const meterHtml = (showMeter && Deck.obs?.status === 'ok') ? '<span class="pad-meter" aria-hidden="true"></span>' : '';
 
     el.innerHTML = `<i class="led"></i>${TAGS[p.type] ? `<span class="tag">${TAGS[p.type]}</span>` : ''}`
+      + cueHtml
       + iconHtml
       + lblHtml
       + ctxHtml
       + `${subText ? `<span class="sub${subText === 'PAUSED' ? ' paused' : ''}">${esc(subText)}</span>` : ''}`
       + progHtml
       + meterHtml;
+  }
+
+  const confirmTimers = new Map();
+  function flashPadConfirm(idx, pageId) {
+    const activeId = Deck.cfg?.activePageId;
+    if (pageId && activeId && pageId !== activeId) return;
+    const btn = $('grid')?.querySelector(`.pad[data-idx="${idx}"]`);
+    if (!btn) return;
+    const key = `${activeId || ''}:${idx}`;
+    const prev = confirmTimers.get(key);
+    if (prev) clearTimeout(prev);
+    btn.classList.remove('confirmed');
+    void btn.offsetWidth;
+    btn.classList.add('confirmed');
+    const tid = setTimeout(() => {
+      confirmTimers.delete(key);
+      btn.classList.remove('confirmed');
+    }, 280);
+    confirmTimers.set(key, tid);
   }
 
   let renderFrame = null;
@@ -692,6 +833,7 @@
     if (typeof Deck.updateMeterPads === 'function') Deck.updateMeterPads();
     if (typeof Deck.applyStatsAlerts === 'function') Deck.applyStatsAlerts();
     Deck.updateSelectionUi();
+    if (typeof Deck.updateGuidanceBanner === 'function') Deck.updateGuidanceBanner();
   }
 
   if (typeof window !== 'undefined') {
@@ -700,6 +842,38 @@
     });
   }
 
+  let locateTimer = null;
+  function locatePad(idx, pageId) {
+    if (pageId && Deck.cfg?.activePageId !== pageId) {
+      Deck.setActivePage?.(pageId);
+    }
+    const grid = $('grid');
+    if (!grid) return;
+    const btn = grid.querySelector(`.pad[data-idx="${idx}"]`);
+    if (!btn) return;
+    if (locateTimer) {
+      clearTimeout(locateTimer);
+      locateTimer = null;
+    }
+    grid.querySelectorAll('.pad.search-locate').forEach((el) => el.classList.remove('search-locate'));
+    setRovingFocus(grid, idx, true);
+    if (typeof btn.scrollIntoView === 'function') {
+      try { btn.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' }); } catch {}
+    }
+    void btn.offsetWidth;
+    btn.classList.add('search-locate');
+    locateTimer = setTimeout(() => {
+      locateTimer = null;
+      btn.classList.remove('search-locate');
+    }, 1400);
+  }
+
+  Deck.BROADCAST_ICONS = BROADCAST_ICONS;
+  Deck.renderIconHtml = renderIconHtml;
+  Deck.isCustomPadColor = isCustomPadColor;
+  Deck.formatCueSec = formatCueSec;
+  Deck.flashPadConfirm = flashPadConfirm;
+  Deck.locatePad = locatePad;
   Deck.TAGS = TAGS;
   Deck.padFallbackLabel = padFallbackLabel;
   Deck.initGrid = initGrid;

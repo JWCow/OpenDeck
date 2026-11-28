@@ -45,6 +45,10 @@
     if (selPop) {
       selPop.hidden = !(isEdit && ctx.popover === 'color_popover');
     }
+    const ctxMenu = $('ctx-menu');
+    if (ctxMenu && ctx.popover !== 'context_menu') {
+      ctxMenu.hidden = true;
+    }
   }
 
   const workspaceMachine = Deck.createMachine({
@@ -221,6 +225,10 @@
         Deck.clearSelection();
         Deck.setActivePage(d.id);
       });
+      b.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        Deck.openPageContextMenu?.(d.id, e);
+      });
       b.addEventListener('dragstart', (e) => {
         if (!Deck.editMode) { e.preventDefault(); return; }
         dragPageId = d.id;
@@ -286,7 +294,7 @@
     }
     syncPageLockButton();
     const cfgBtn = $('btn-deck-cfg');
-    if (cfgBtn) cfgBtn.textContent = `${active.cols}×${active.rows} ⚙`;
+    if (cfgBtn) cfgBtn.textContent = `${active.cols}×${active.rows}`;
   }
 
   $('btn-page-lock')?.addEventListener('click', () => {

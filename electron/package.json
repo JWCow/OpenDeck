@@ -1,7 +1,7 @@
 {
   "name": "opendeck",
   "productName": "OpenDeck",
-  "version": "2.3.6",
+  "version": "2.4.0",
   "license": "MIT",
   "description": "OpenDeck desktop app — virtual Stream Deck for OBS Studio (obs-websocket v5)",
   "private": true,
