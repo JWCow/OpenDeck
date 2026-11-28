@@ -130,9 +130,11 @@
     COLORS.forEach((c) => {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'sw';
-      b.style.background = c;
+      const isNeutral = c === COLORS[0];
+      b.className = 'sw' + (isNeutral ? ' sw-neutral' : '');
+      if (!isNeutral) b.style.background = c;
       b.title = c;
+      b.setAttribute('aria-label', isNeutral ? 'Default adaptive neutral color' : `Color ${c}`);
       b.addEventListener('click', () => {
         if (!selectedPads.size) return;
         Deck.pushHistory(() => {

@@ -6,6 +6,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>OpenDeck - Virtual Deck for OBS Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="deck/deck.css">
 <script defer src="deck/state.js"></script>
 <script defer src="deck/obs-ws.js"></script>
@@ -22,25 +25,39 @@
 <body>
 <div id="top-bar" class="bar">
   <div class="brand" title="OpenDeck for OBS Studio">
-    <svg class="brand-mark" width="18" height="18" viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="1" width="9" height="9" rx="2.5" fill="currentColor"/><rect x="12" y="1" width="9" height="9" rx="2.5" fill="currentColor" opacity=".3"/><rect x="1" y="12" width="9" height="9" rx="2.5" fill="currentColor" opacity=".3"/><rect x="12" y="12" width="9" height="9" rx="2.5" fill="#ff4d3d"/></svg>
+    <svg class="brand-mark" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="1.5" y="1.5" width="9.5" height="9.5" rx="2.75" fill="#3b82f6"/>
+      <rect x="2.25" y="2.25" width="8" height="2" rx="1" fill="#ffffff" opacity="0.28"/>
+      <rect x="13" y="1.5" width="9.5" height="9.5" rx="2.75" fill="currentColor" opacity="0.26"/>
+      <rect x="1.5" y="13" width="9.5" height="9.5" rx="2.75" fill="currentColor" opacity="0.26"/>
+      <rect x="13" y="13" width="9.5" height="9.5" rx="2.75" fill="#ff4742"/>
+      <rect x="13.75" y="13.75" width="8" height="2" rx="1" fill="#ffffff" opacity="0.28"/>
+    </svg>
     <span class="brand-title">OpenDeck</span>
     <span class="brand-sub">OBS Studio</span>
   </div>
-  <span id="conn-pill" class="pill bad"><i class="dot"></i><span id="conn-text">Disconnected</span></span>
+  <button id="conn-pill" class="pill bad" type="button" aria-expanded="false" aria-controls="conn-bar" title="Click to configure OBS WebSocket connection"><i class="dot"></i><span id="conn-text">Disconnected</span><span class="pill-caret" aria-hidden="true">▾</span></button>
+  <div id="live-strip" class="live-strip" hidden aria-live="off">
+    <span id="live-stream-ind" class="live-ind live-ind-stream" hidden title="OBS Stream is live"><i class="live-dot" aria-hidden="true"></i><span class="live-lbl">LIVE</span><span id="live-stream-time" class="live-time">00:00:00</span></span>
+    <span id="live-rec-ind" class="live-ind live-ind-rec" hidden title="OBS Recording is active"><i class="live-dot" aria-hidden="true"></i><span id="live-rec-lbl" class="live-lbl">REC</span><span id="live-rec-time" class="live-time">00:00:00</span></span>
+  </div>
   <div class="spacer"></div>
   <button id="btn-edit" class="btn sm" title="Toggle Edit Mode to configure, drag-swap, or move pads across Pages">Edit</button>
   <button id="btn-palette" class="btn sm edit-only" title="Toggle Command Palette in Edit Mode">Commands</button>
   <div class="menu-wrap">
-    <button id="btn-more" class="btn sm icon-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="more-menu" aria-label="More options" title="More options">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+    <button id="btn-more" class="btn sm menu-trigger" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="more-menu" aria-label="Settings and options" title="Settings &amp; options">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="11" cy="18" r="2" fill="currentColor"/></svg>
+      <span class="btn-lbl">Settings</span>
     </button>
     <div id="more-menu" class="menu" role="menu" hidden>
       <div class="menu-group">
-        <button id="btn-conn-toggle" class="menu-item" type="button" title="WebSocket connection settings">Connection…</button>
+        <div class="menu-heading">OBS Studio</div>
+        <button id="btn-conn-toggle" class="menu-item" type="button" title="Open WebSocket connection settings">Connection settings…</button>
         <button id="btn-sync" class="menu-item" type="button" title="Refresh OBS scenes, sources, filters, hotkeys, and outputs">Sync with OBS</button>
-        <button id="btn-auto-import" class="menu-item" type="button" title="Auto-Import Pages from connected OBS Studio (read-only)">Auto-Import…</button>
+        <button id="btn-auto-import" class="menu-item" type="button" title="Auto-Import Pages from connected OBS Studio (read-only)">Auto-Import Pages…</button>
       </div>
       <div class="menu-group">
+        <div class="menu-heading">Display &amp; Toolbar</div>
         <div class="menu-row">
           <span class="menu-label">Text size</span>
           <div class="font-scale-ctrl">
@@ -52,19 +69,35 @@
           <span class="menu-label">Theme</span>
           <button id="btn-theme" class="btn sm" type="button" title="Toggle Dark/Light Theme">☀️</button>
         </div>
+        <div class="menu-row">
+          <span class="menu-label">Toolbar PANIC</span>
+          <button id="btn-panic-toggle" class="btn sm on" type="button" aria-pressed="true" title="Show or hide the PANIC button in the toolbar">Shown</button>
+        </div>
+        <div class="menu-row">
+          <span class="menu-label">Keep screen awake</span>
+          <button id="btn-wake-lock" class="btn sm on" type="button" aria-pressed="true" title="Keep screen awake while connected to OBS (Phone &amp; Tablet Deck)">On</button>
+        </div>
+        <div class="menu-row">
+          <span class="menu-label">Haptic feedback</span>
+          <button id="btn-haptics" class="btn sm on" type="button" aria-pressed="true" title="Gentle vibration feedback on touch pad presses">On</button>
+        </div>
         <button id="btn-clean-view" class="menu-item" type="button" title="Toggle Clean View (hide toolbar &amp; status bar; ?clean=1)">Clean View</button>
       </div>
       <div class="menu-group">
-        <button id="btn-panic-cfg" class="menu-item" type="button" title="Configure PANIC reset steps">PANIC steps…</button>
-        <button id="btn-snapshots" class="menu-item" type="button" title="View and restore layout snapshots">Snapshots…</button>
+        <div class="menu-heading">Safety &amp; Backups</div>
+        <button id="btn-panic-menu-run" class="menu-item menu-item-danger" type="button" title="Abort running Timed Macros &amp; Auto-Off timers and run PANIC reset">Run PANIC Reset</button>
+        <button id="btn-panic-cfg" class="menu-item" type="button" title="Configure PANIC reset steps">Configure PANIC steps…</button>
+        <button id="btn-snapshots" class="menu-item" type="button" title="View and restore layout snapshots">Layout Snapshots…</button>
       </div>
       <div class="menu-group">
+        <div class="menu-heading">Deck Layouts</div>
         <button id="btn-export" class="menu-item" type="button" title="Export Deck configuration as JSON (passwords omitted)">Export Deck</button>
         <button id="btn-import" class="menu-item" type="button" title="Import Deck configuration JSON">Import Deck…</button>
         <button id="btn-merge-pages" class="menu-item" type="button" title="Append Pages from a layout JSON onto your current Deck">Import Pages…</button>
         <button id="btn-import-link" class="menu-item" type="button" title="Import Deck configuration from link or URL">Import from Link…</button>
       </div>
-      <div class="menu-group">
+      <div class="menu-group menu-group-desktop">
+        <div class="menu-heading">Desktop App</div>
         <button id="btn-desktop-aot" class="menu-item" type="button" hidden title="Toggle Always on Top">Always on Top: Off</button>
         <button id="btn-desktop-redetect" class="menu-item" type="button" hidden title="Re-detect local OBS WebSocket port (read-only)">Re-detect OBS Port</button>
         <button id="btn-phone-host" class="menu-item" type="button" hidden title="Start local Phone Deck QR host">Phone Deck (QR)…</button>
@@ -80,18 +113,22 @@
   <label>Host <input id="ws-host" class="w-host" placeholder="127.0.0.1"></label>
   <label>Port <input id="ws-port" class="w-port" type="number" placeholder="4455"></label>
   <label>Pass <input id="ws-pass" class="w-pass" type="password" placeholder="(optional)"></label>
-  <button id="btn-ws-connect" class="btn sm on">Connect</button>
-  <button id="btn-ws-disconnect" class="btn sm">Disconnect</button>
-  <button id="btn-reset-layout" class="btn sm" title="Restore starter Deck defaults">Reset Deck</button>
+  <button id="btn-ws-connect" class="btn sm on" type="button">Connect</button>
+  <button id="btn-ws-disconnect" class="btn sm" type="button">Disconnect</button>
+  <button id="btn-reset-layout" class="btn sm" type="button" title="Restore starter Deck defaults">Reset Deck</button>
+  <div class="spacer"></div>
+  <button id="btn-conn-close" class="btn sm icon-btn" type="button" aria-label="Close connection settings" title="Close connection settings">✕</button>
 </div>
 
 <div id="deck-bar" class="bar page-bar">
   <span id="clean-conn-dot" class="clean-conn-dot bad" title="OBS: Disconnected" aria-hidden="true"></span>
   <div id="deck-tabs" class="page-tabs" role="tablist" aria-label="Deck Pages"></div>
   <button id="btn-page-lock" class="btn sm page-lock-btn" type="button" aria-pressed="false" hidden title="Lock current Page (pause Scene-Linked auto-switching)">🔒</button>
-  <button id="btn-deck-add" class="btn sm" title="Add new Page">+ Page</button>
-  <button id="btn-deck-dup" class="btn sm" title="Duplicate current Page">⎘</button>
-  <button id="btn-deck-cfg" class="btn sm" title="Rename Page, resize grid, or delete Page">8×8 ⚙</button>
+  <div class="page-actions">
+    <button id="btn-deck-add" class="btn sm" type="button" title="Add new Page">+ Page</button>
+    <button id="btn-deck-dup" class="btn sm" type="button" title="Duplicate current Page"><span aria-hidden="true">⎘</span><span class="btn-lbl"> Duplicate</span></button>
+    <button id="btn-deck-cfg" class="btn sm" type="button" title="Page &amp; Grid Settings — rename, resize grid, link scene, or delete Page">8×8 ⚙</button>
+  </div>
   <div class="clean-bar-controls">
     <button id="btn-clean-panic" class="btn sm panic" type="button" title="Abort running Timed Macros &amp; Auto-Off timers and run PANIC reset">PANIC</button>
     <button id="btn-clean-exit" class="btn sm" type="button" title="Show OpenDeck toolbar &amp; controls">Controls</button>
@@ -99,7 +136,7 @@
 </div>
 
 <div id="select-bar" class="bar select-bar">
-  <button type="button" id="btn-sel-mode" class="btn sm" title="Toggle Click-to-Select mode">Select</button>
+  <button type="button" id="btn-sel-mode" class="btn sm" title="Toggle click-to-select mode for bulk pad actions">Multi-Select</button>
   <span id="sel-count" class="sel-count">0 selected</span>
   <button type="button" id="btn-sel-all" class="btn sm">Select All</button>
   <button type="button" id="btn-sel-none" class="btn sm">Clear Sel</button>
@@ -116,6 +153,7 @@
   <span class="sel-sep">|</span>
   <button type="button" id="btn-undo" class="btn sm" title="Undo last edit (Ctrl/Cmd+Z)" disabled>↶ Undo</button>
   <button type="button" id="btn-redo" class="btn sm" title="Redo last edit (Ctrl/Cmd+Shift+Z)" disabled>↷ Redo</button>
+  <span class="edit-hint">Click pad to edit · Drag to move</span>
 </div>
 
 <div id="layout-update-banner" class="layout-banner" hidden>
@@ -123,6 +161,15 @@
   <button type="button" id="btn-layout-reload" class="btn sm on">Load</button>
   <button type="button" id="btn-layout-merge" class="btn sm">Merge Pages</button>
   <button type="button" id="btn-layout-dismiss" class="btn sm" aria-label="Dismiss">✕</button>
+</div>
+
+<div id="guidance-banner" class="guidance-banner" hidden>
+  <span id="guidance-text" class="guidance-text"></span>
+  <div class="guidance-actions">
+    <button type="button" id="btn-guidance-primary" class="btn sm on">Connection Settings</button>
+    <button type="button" id="btn-guidance-secondary" class="btn sm">Retry</button>
+    <button type="button" id="btn-guidance-dismiss" class="btn sm icon-btn" aria-label="Dismiss tip" title="Dismiss">✕</button>
+  </div>
 </div>
 
 <div id="deck-body" class="deck-body">
@@ -149,65 +196,94 @@
   <div class="dlg-h"><span id="dlg-title">Edit Pad</span><button id="dlg-close" type="button" class="btn sm" aria-label="Close">✕</button></div>
   <form id="pad-form" class="frm" method="dialog">
     <div class="pad-meta">
-    <div class="pad-preview-wrap"><div id="pad-preview" class="pad" aria-hidden="true"></div></div>
-    <div class="row2">
-      <div class="row"><label for="f-label">Label</label><input id="f-label" maxlength="32" placeholder="Cam Blur"></div>
-      <div class="row"><label for="f-icon">Icon</label><input id="f-icon" maxlength="8" placeholder="🎬"></div>
-    </div>
-    <div class="row"><label>Quick Icons</label><div id="f-icons" class="icon-presets"></div></div>
-    <div class="row">
-      <label>Custom Image</label>
-      <div class="image-upload-row">
-        <input type="file" id="f-image-file" accept="image/*" hidden>
-        <button type="button" id="btn-upload-image" class="btn sm">Upload Image…</button>
-        <button type="button" id="btn-remove-image" class="btn sm bad" hidden>Remove Image</button>
-        <select id="f-image-fit">
-          <option value="icon">Fit Icon</option>
-          <option value="fill">Full Face</option>
-        </select>
-        <label class="chk-label"><input type="checkbox" id="f-image-hidelabel"> Hide Text</label>
+      <div class="pad-editor-hero">
+        <div class="pad-preview-wrap"><div id="pad-preview" class="pad" aria-hidden="true"></div></div>
+        <div class="pad-hero-fields">
+          <div class="row2">
+            <div class="row"><label for="f-label">Label</label><input id="f-label" maxlength="32" placeholder="Cam Blur"></div>
+            <div class="row"><label for="f-icon">Icon</label><input id="f-icon" maxlength="24" placeholder="svg:camera or 🎬"></div>
+          </div>
+          <div class="row"><label for="f-type">Action</label>
+            <select id="f-type">
+              <option value="none">Empty / None</option>
+              <optgroup label="Scenes &amp; Studio">
+                <option value="scene">Switch Scene</option>
+                <option value="studio">Studio Mode</option>
+                <option value="transition">Scene Transition</option>
+              </optgroup>
+              <optgroup label="Sources &amp; Media">
+                <option value="source">Source Visibility</option>
+                <option value="transform">Source Transform / PiP</option>
+                <option value="media">Media Playback</option>
+                <option value="image">Image / Slideshow</option>
+                <option value="text">Text / Counter</option>
+                <option value="browser">Browser Source</option>
+                <option value="screenshot">Take Screenshot</option>
+              </optgroup>
+              <optgroup label="Filters &amp; Audio">
+                <option value="filter">Filter Control</option>
+                <option value="mute">Input Mute</option>
+                <option value="volume">Input Volume</option>
+                <option value="monitor">Audio Monitor Mode</option>
+              </optgroup>
+              <optgroup label="Recording, Streaming &amp; Telemetry">
+                <option value="output">Stream / Record / Cam</option>
+                <option value="chapter">Recording Chapter</option>
+                <option value="stats">Telemetry Stats</option>
+                <option value="hotkey">OBS Hotkey</option>
+                <option value="profile">Switch Profile</option>
+                <option value="collection">Scene Collection</option>
+              </optgroup>
+              <optgroup label="Pages &amp; Automation">
+                <option value="page">Switch Page</option>
+                <option value="macro">Timed Macro</option>
+                <option value="http">HTTP / Webhook</option>
+                <option value="panic">PANIC Reset</option>
+              </optgroup>
+            </select>
+          </div>
+        </div>
       </div>
-    </div>
-    <div class="row"><label>Color</label><div id="f-colors" class="swatches"></div></div>
-    <div class="row"><label for="f-type">Action</label>
-      <select id="f-type">
-        <option value="none">Empty / None</option>
-        <optgroup label="Scenes &amp; Studio">
-          <option value="scene">Switch Scene</option>
-          <option value="studio">Studio Mode</option>
-          <option value="transition">Scene Transition</option>
-        </optgroup>
-        <optgroup label="Sources &amp; Media">
-          <option value="source">Source Visibility</option>
-          <option value="transform">Source Transform / PiP</option>
-          <option value="media">Media Playback</option>
-          <option value="image">Image / Slideshow</option>
-          <option value="text">Text / Counter</option>
-          <option value="browser">Browser Source</option>
-          <option value="screenshot">Take Screenshot</option>
-        </optgroup>
-        <optgroup label="Filters &amp; Audio">
-          <option value="filter">Filter Control</option>
-          <option value="mute">Input Mute</option>
-          <option value="volume">Input Volume</option>
-          <option value="monitor">Audio Monitor Mode</option>
-        </optgroup>
-        <optgroup label="Recording, Streaming &amp; Telemetry">
-          <option value="output">Stream / Record / Cam</option>
-          <option value="chapter">Recording Chapter</option>
-          <option value="stats">Telemetry Stats</option>
-          <option value="hotkey">OBS Hotkey</option>
-          <option value="profile">Switch Profile</option>
-          <option value="collection">Scene Collection</option>
-        </optgroup>
-        <optgroup label="Pages &amp; Automation">
-          <option value="page">Switch Page</option>
-          <option value="macro">Timed Macro</option>
-          <option value="http">HTTP / Webhook</option>
-          <option value="panic">PANIC Reset</option>
-        </optgroup>
-      </select>
-    </div>
+      <div id="pad-editor-tabs" class="editor-tabs" role="tablist" aria-label="Pad Editor sections">
+        <button type="button" class="editor-tab on" data-editor-tab="all" role="tab" aria-selected="true">All</button>
+        <button type="button" class="editor-tab" data-editor-tab="action" role="tab" aria-selected="false">Action</button>
+        <button type="button" class="editor-tab" data-editor-tab="appearance" role="tab" aria-selected="false">Appearance</button>
+      </div>
+      <div id="pad-appearance-panel" class="pad-appearance-panel">
+        <div class="row">
+          <div class="row-head">
+            <label>Icons</label>
+            <div class="ico-mode-tabs" role="tablist" aria-label="Icon library">
+              <button type="button" id="btn-ico-svg" class="ico-mode-tab on" role="tab" aria-selected="true">Broadcast</button>
+              <button type="button" id="btn-ico-emoji" class="ico-mode-tab" role="tab" aria-selected="false">Emoji</button>
+            </div>
+          </div>
+          <div id="f-icons" class="icon-presets"></div>
+        </div>
+        <div class="row">
+          <div class="row-head">
+            <label>Color &amp; Surface</label>
+            <div id="f-color-style" class="ico-mode-tabs" role="group" aria-label="Pad color fill style">
+              <button type="button" class="ico-mode-tab on" data-color-style="solid" aria-pressed="true">Solid</button>
+              <button type="button" class="ico-mode-tab" data-color-style="tint" aria-pressed="false">Soft Tint</button>
+            </div>
+          </div>
+          <div id="f-colors" class="swatches"></div>
+        </div>
+        <div class="row">
+          <label>Custom Image</label>
+          <div class="image-upload-row">
+            <input type="file" id="f-image-file" accept="image/*" hidden>
+            <button type="button" id="btn-upload-image" class="btn sm">Upload Image…</button>
+            <button type="button" id="btn-remove-image" class="btn sm bad" hidden>Remove Image</button>
+            <select id="f-image-fit">
+              <option value="icon">Fit Icon</option>
+              <option value="fill">Full Face</option>
+            </select>
+            <label class="chk-label"><input type="checkbox" id="f-image-hidelabel"> Hide Text</label>
+          </div>
+        </div>
+      </div>
     </div>
     <div id="f-fields" class="frm"></div>
     <div class="dlg-f">

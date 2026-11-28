@@ -14,6 +14,8 @@
   let draftPad = null;
   let labelTouched = false;
   let prevTargetName = '';
+  let iconLibraryMode = 'svg';
+  let editorTab = 'all';
 
   function maybeAutoSyncLabel(newTargetName) {
     const lblInput = $('f-label');
@@ -1243,6 +1245,94 @@
     });
   }
 
+  function setEditorTab(tab) {
+    editorTab = ['all', 'action', 'appearance'].includes(tab) ? tab : 'all';
+    const tabBar = $('pad-editor-tabs');
+    if (tabBar) {
+      tabBar.querySelectorAll('.editor-tab').forEach((b) => {
+        const isOn = b.dataset.editorTab === editorTab;
+        b.classList.toggle('on', isOn);
+        b.setAttribute('aria-selected', isOn ? 'true' : 'false');
+      });
+    }
+    const appPanel = $('pad-appearance-panel');
+    const fieldsEl = $('f-fields');
+    const isMacroWide = Boolean($('pad-dlg')?.classList.contains('macro-wide') && window.innerWidth >= 720);
+    if (appPanel) appPanel.hidden = editorTab === 'action';
+    if (fieldsEl) fieldsEl.hidden = !isMacroWide && editorTab === 'appearance';
+  }
+
+  function syncColorStyleUi() {
+    const style = draftPad?.colorStyle === 'tint' ? 'tint' : 'solid';
+    const box = $('f-color-style');
+    if (!box) return;
+    box.querySelectorAll('[data-color-style]').forEach((b) => {
+      const isOn = b.dataset.colorStyle === style;
+      b.classList.toggle('on', isOn);
+      b.setAttribute('aria-pressed', isOn ? 'true' : 'false');
+    });
+  }
+
+  function syncIconChipSelection() {
+    const icoBox = $('f-icons');
+    if (!icoBox) return;
+    const cur = $('f-icon')?.value.trim() || '';
+    icoBox.querySelectorAll('.ico-chip').forEach((b) => {
+      b.classList.toggle('sel', Boolean(cur && b.dataset.iconVal === cur));
+    });
+  }
+
+  function renderIconChips() {
+    const icoBox = $('f-icons');
+    if (!icoBox) return;
+    const svgBtn = $('btn-ico-svg');
+    const emoBtn = $('btn-ico-emoji');
+    const useSvg = iconLibraryMode === 'svg' && Array.isArray(Deck.BROADCAST_ICONS) && Deck.BROADCAST_ICONS.length > 0;
+    if (svgBtn) {
+      svgBtn.classList.toggle('on', useSvg);
+      svgBtn.setAttribute('aria-selected', useSvg ? 'true' : 'false');
+    }
+    if (emoBtn) {
+      emoBtn.classList.toggle('on', !useSvg);
+      emoBtn.setAttribute('aria-selected', !useSvg ? 'true' : 'false');
+    }
+    icoBox.innerHTML = '';
+    const cur = $('f-icon')?.value.trim() || '';
+    if (useSvg) {
+      for (const item of Deck.BROADCAST_ICONS) {
+        const val = `svg:${item.key}`;
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ico-chip ico-chip-svg' + (cur === val ? ' sel' : '');
+        b.dataset.iconVal = val;
+        b.title = item.label;
+        b.setAttribute('aria-label', item.label);
+        b.innerHTML = Deck.renderIconHtml ? Deck.renderIconHtml(val) : '';
+        b.addEventListener('click', () => {
+          $('f-icon').value = val;
+          syncIconChipSelection();
+          updatePadPreview();
+        });
+        icoBox.appendChild(b);
+      }
+    } else {
+      for (const emo of ICON_PRESETS) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ico-chip' + (cur === emo ? ' sel' : '');
+        b.dataset.iconVal = emo;
+        b.textContent = emo;
+        b.title = `Use ${emo}`;
+        b.addEventListener('click', () => {
+          $('f-icon').value = emo;
+          syncIconChipSelection();
+          updatePadPreview();
+        });
+        icoBox.appendChild(b);
+      }
+    }
+  }
+
   function updatePadPreview() {
     const previewEl = $('pad-preview');
     if (!previewEl || !draftPad) return;
@@ -1262,41 +1352,74 @@
 
     const isFullFace = Boolean(previewPad.image && previewPad.imageFit === 'fill');
     const isHoldPad = Boolean(previewPad.hold && Deck.HOLD_TYPES && Deck.HOLD_TYPES.has(previewPad.type));
-    const hasColor = Boolean(!isFullFace && previewPad.color && previewPad.type !== 'none');
+    const colorStyle = previewPad.colorStyle === 'tint' ? 'tint' : 'solid';
+    const isCustom = typeof Deck.isCustomPadColor === 'function'
+      ? Deck.isCustomPadColor(previewPad.color)
+      : Boolean(previewPad.color && previewPad.color !== COLORS[0]);
+    const hasCustomColor = Boolean(!isFullFace && previewPad.type !== 'none' && isCustom);
     const lbl = previewPad.label || (Deck.padFallbackLabel ? Deck.padFallbackLabel(previewPad, idx, cols) : '');
     const ctxText = Deck.getPadContextSubtitle ? Deck.getPadContextSubtitle(previewPad) : '';
     const tag = Deck.TAGS?.[previewPad.type] || '';
+
+    let cueText = '';
+    let cueKind = '';
+    if (previewPad.type !== 'none') {
+      if (isHoldPad) {
+        cueText = 'HOLD';
+        cueKind = 'cue-hold';
+      } else if (previewPad.autoOffMs > 0) {
+        cueText = Deck.formatCueSec ? Deck.formatCueSec(previewPad.autoOffMs) : `${Math.round(previewPad.autoOffMs / 1000)}s`;
+        cueKind = 'cue-auto';
+      }
+    }
 
     previewEl.className = 'pad'
       + (previewPad.type === 'none' ? ' empty' : ` is-${previewPad.type}`)
       + (previewPad.type === 'stats' ? ' stats-pad' : '')
       + (isHoldPad ? ' hold-pad' : '')
       + (isFullFace ? ' full-face' : '')
-      + (hasColor ? ' has-color' : '')
+      + (hasCustomColor && colorStyle !== 'tint' ? ' has-color' : '')
+      + (hasCustomColor && colorStyle === 'tint' ? ' has-tint' : '')
       + (previewPad.hideLabel ? ' hide-label' : '');
 
     if (isFullFace && String(previewPad.image).startsWith('data:image/')) {
-      previewEl.style.backgroundColor = previewPad.color && previewPad.type !== 'none' ? previewPad.color : '';
+      previewEl.style.backgroundColor = (previewPad.type !== 'none' && isCustom) ? previewPad.color : '';
       previewEl.style.backgroundImage = `url("${previewPad.image}")`;
       previewEl.style.backgroundSize = 'cover';
       previewEl.style.backgroundPosition = 'center';
+      previewEl.style.removeProperty('--pad-tint');
+    } else if (hasCustomColor && colorStyle === 'tint') {
+      previewEl.style.backgroundImage = '';
+      previewEl.style.backgroundSize = '';
+      previewEl.style.backgroundPosition = '';
+      previewEl.style.backgroundColor = '';
+      previewEl.style.setProperty('--pad-tint', previewPad.color);
+    } else if (hasCustomColor) {
+      previewEl.style.backgroundImage = '';
+      previewEl.style.backgroundSize = '';
+      previewEl.style.backgroundPosition = '';
+      previewEl.style.backgroundColor = previewPad.color;
+      previewEl.style.removeProperty('--pad-tint');
     } else {
       previewEl.style.backgroundImage = '';
       previewEl.style.backgroundSize = '';
       previewEl.style.backgroundPosition = '';
-      previewEl.style.backgroundColor = previewPad.color && previewPad.type !== 'none' ? previewPad.color : '';
+      previewEl.style.backgroundColor = '';
+      previewEl.style.removeProperty('--pad-tint');
     }
 
     let iconHtml = '';
     if (previewPad.image && previewPad.imageFit !== 'fill') {
       iconHtml = `<img class="pad-icon-img" src="${esc(previewPad.image)}" alt="">`;
     } else if (!previewPad.image && previewPad.icon) {
-      iconHtml = `<span class="ico">${esc(previewPad.icon)}</span>`;
+      iconHtml = Deck.renderIconHtml ? Deck.renderIconHtml(previewPad.icon) : `<span class="ico">${esc(previewPad.icon)}</span>`;
     }
+    const cueHtml = cueText ? `<span class="pad-cue ${cueKind}">${esc(cueText)}</span>` : '';
     const lblHtml = `<span class="lbl"${previewPad.hideLabel ? ' style="display:none"' : ''}>${esc(lbl)}</span>`;
     const ctxHtml = ctxText ? `<span class="ctx"${previewPad.hideLabel ? ' style="display:none"' : ''}>${esc(ctxText)}</span>` : '';
 
     previewEl.innerHTML = `<i class="led"></i>${tag ? `<span class="tag">${esc(tag)}</span>` : ''}`
+      + cueHtml
       + iconHtml
       + lblHtml
       + ctxHtml;
@@ -1359,6 +1482,7 @@
     } else {
       renderActionFields(f, draftPad, false);
     }
+    setEditorTab(editorTab);
     updatePadPreview();
   }
 
@@ -1394,30 +1518,20 @@
     if ($('f-image-fit')) $('f-image-fit').value = draftPad.imageFit === 'fill' ? 'fill' : 'icon';
     if ($('f-image-hidelabel')) $('f-image-hidelabel').checked = Boolean(draftPad.hideLabel);
 
-    const icoBox = $('f-icons');
-    if (icoBox && !icoBox.children.length) {
-      for (const emo of ICON_PRESETS) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'ico-chip';
-        b.textContent = emo;
-        b.title = `Use ${emo}`;
-        b.addEventListener('click', () => {
-          $('f-icon').value = emo;
-          updatePadPreview();
-        });
-        icoBox.appendChild(b);
-      }
-    }
+    iconLibraryMode = (draftPad.icon && !String(draftPad.icon).startsWith('svg:')) ? 'emoji' : 'svg';
+    renderIconChips();
+    syncColorStyleUi();
 
     const sw = $('f-colors');
     sw.innerHTML = '';
     COLORS.forEach((c) => {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'sw' + ((draftPad.color || COLORS[0]) === c ? ' sel' : '');
-      b.style.background = c;
+      const isNeutral = c === COLORS[0];
+      b.className = 'sw' + (isNeutral ? ' sw-neutral' : '') + ((draftPad.color || COLORS[0]) === c ? ' sel' : '');
+      if (!isNeutral) b.style.background = c;
       b.title = c;
+      b.setAttribute('aria-label', isNeutral ? 'Default adaptive neutral color' : `Color ${c}`);
       b.addEventListener('click', () => {
         draftPad.color = c;
         sw.querySelectorAll('.sw').forEach((x) => x.classList.remove('sel'));
@@ -1439,9 +1553,35 @@
     });
     sw.appendChild(clrCol);
 
+    editorTab = 'all';
     drawPadFields();
+    setEditorTab('all');
     $('pad-dlg').showModal();
   };
+
+  $('pad-editor-tabs')?.addEventListener('click', (e) => {
+    const tabBtn = e.target?.closest?.('.editor-tab[data-editor-tab]');
+    if (!tabBtn) return;
+    setEditorTab(tabBtn.dataset.editorTab);
+  });
+
+  $('btn-ico-svg')?.addEventListener('click', () => {
+    iconLibraryMode = 'svg';
+    renderIconChips();
+  });
+  $('btn-ico-emoji')?.addEventListener('click', () => {
+    iconLibraryMode = 'emoji';
+    renderIconChips();
+  });
+
+  $('f-color-style')?.addEventListener('click', (e) => {
+    const btn = e.target?.closest?.('[data-color-style]');
+    if (!btn || !draftPad) return;
+    if (btn.dataset.colorStyle === 'tint') draftPad.colorStyle = 'tint';
+    else delete draftPad.colorStyle;
+    syncColorStyleUi();
+    updatePadPreview();
+  });
 
   $('f-type').addEventListener('change', () => {
     if ($('f-type').value === 'scene') {
@@ -1462,7 +1602,10 @@
     labelTouched = Boolean($('f-label').value.trim());
     updatePadPreview();
   });
-  $('f-icon')?.addEventListener('input', updatePadPreview);
+  $('f-icon')?.addEventListener('input', () => {
+    syncIconChipSelection();
+    updatePadPreview();
+  });
   $('f-fields')?.addEventListener('input', updatePadPreview);
   $('f-fields')?.addEventListener('change', updatePadPreview);
 

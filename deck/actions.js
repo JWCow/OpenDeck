@@ -610,6 +610,10 @@
           obs.outputs.replay = want;
         }
       }
+      if (t === 'stream' || t === 'record' || t === 'recordPause') {
+        if (typeof Deck.updateLiveStrip === 'function') Deck.updateLiveStrip();
+        if (typeof Deck.syncReadoutPolling === 'function') Deck.syncReadoutPolling();
+      }
     } else if (a.type === 'media' && a.inputName) {
       const ma = a.mediaAction || 'play_pause';
       let enumAction;
@@ -881,11 +885,8 @@
     logPadTransition(key, prev, resolvePadState(key), 'DISARM');
     const [pageId, idxStr] = key.split(':');
     if (Deck.cfg?.activePageId === pageId) {
-      const grid = Deck.$ ? Deck.$('grid') : document.getElementById('grid');
-      if (grid) {
-        const btn = grid.querySelector(`.pad[data-idx="${idxStr}"]`);
-        if (btn) btn.classList.remove('armed');
-      }
+      const idxNum = Number(idxStr);
+      if (Number.isInteger(idxNum)) Deck.renderPad?.(idxNum);
     }
     return true;
   }
@@ -905,11 +906,7 @@
     armedPads.set(key, ctx);
     logPadTransition(key, prev, resolvePadState(key), 'ARM');
     if (Deck.cfg?.activePageId === pageId) {
-      const grid = Deck.$ ? Deck.$('grid') : document.getElementById('grid');
-      if (grid) {
-        const btn = grid.querySelector(`.pad[data-idx="${idx}"]`);
-        if (btn) btn.classList.add('armed');
-      }
+      Deck.renderPad?.(idx);
     }
     const t = p.target || 'stream';
     const label = p.label || OUTPUT_TARGET_LABELS[t] || t;
@@ -1463,6 +1460,24 @@
       addBusy(key, 'PAD_CLICK_EXEC');
       if (Deck.obs) Deck.obs.lastTextReadFromFileWarn = '';
       await execAction(p);
+      const isOneShot = (
+        p.type === 'screenshot'
+        || p.type === 'chapter'
+        || p.type === 'hotkey'
+        || p.type === 'http'
+        || p.type === 'transition'
+        || p.type === 'profile'
+        || p.type === 'collection'
+        || (p.type === 'output' && p.target === 'saveReplay')
+        || (p.type === 'studio' && p.action === 'transition')
+        || (p.type === 'scene' && (p.mode === 'next' || p.mode === 'prev'))
+        || (p.type === 'volume' && (p.mode || 'step') === 'step')
+        || (p.type === 'image' && (p.mode || 'set_file') !== 'set_file')
+        || (p.type === 'text' && (p.mode === 'counter' || p.mode === 'cycle'))
+      );
+      if (isOneShot && typeof Deck.flashPadConfirm === 'function') {
+        Deck.flashPadConfirm(idx, page.id);
+      }
       if (isTurnOnAction(p, wasActive)) {
         let expectedState;
         if (p.type === 'volume' && p.inputName) expectedState = Deck.obs?.volumes?.[p.inputName];

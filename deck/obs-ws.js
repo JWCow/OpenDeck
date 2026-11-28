@@ -330,6 +330,9 @@
     }
 
     if (!isStep) {
+      if (raw.colorStyle === 'tint') {
+        out.colorStyle = 'tint';
+      }
       if (typeof raw.image === 'string' && raw.image.trim()) {
         out.image = raw.image;
         out.imageFit = raw.imageFit === 'fill' ? 'fill' : 'icon';
@@ -1935,6 +1938,43 @@
       : `Program: ${programScene || '—'}`;
   };
 
+  Deck.updateLiveStrip = () => {
+    const strip = $('live-strip');
+    if (!strip) return;
+    const { obs } = Deck;
+    const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
+    const streaming = connected && Boolean(obs.outputs?.stream);
+    const recording = connected && Boolean(obs.outputs?.record);
+    const recPaused = recording && Boolean(obs.outputs?.recordPaused || obs.recordStatus?.outputPaused);
+
+    const streamInd = $('live-stream-ind');
+    const streamTime = $('live-stream-time');
+    if (streamInd) {
+      streamInd.hidden = !streaming;
+      if (streaming && streamTime) {
+        const st = obs.streamStatus;
+        streamTime.textContent = st ? (formatTimecode(st.outputTimecode, st.outputDuration) || '00:00:00') : '00:00:00';
+      }
+    }
+
+    const recInd = $('live-rec-ind');
+    const recLbl = $('live-rec-lbl');
+    const recTime = $('live-rec-time');
+    if (recInd) {
+      recInd.hidden = !recording;
+      recInd.classList.toggle('paused', recPaused);
+      if (recording) {
+        if (recLbl) recLbl.textContent = recPaused ? 'PAUSED' : 'REC';
+        if (recTime) {
+          const st = obs.recordStatus;
+          recTime.textContent = st ? (formatTimecode(st.outputTimecode, st.outputDuration) || '00:00:00') : '00:00:00';
+        }
+      }
+    }
+
+    strip.hidden = !(streaming || recording);
+  };
+
   Deck.setConn = (cls, txt) => {
     Deck.obs.status = cls;
     const pill = $('conn-pill');
@@ -1946,6 +1986,8 @@
       cleanDot.className = `clean-conn-dot ${cls}`;
       cleanDot.title = `OBS: ${txt}`;
     }
+    Deck.updateLiveStrip();
+    if (typeof Deck.updateGuidanceBanner === 'function') Deck.updateGuidanceBanner();
   };
 
   Deck.obsCall = (requestType, requestData) => {
@@ -2318,8 +2360,8 @@
     const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
     if (!connected) return;
     const activePads = Deck.getActivePads();
-    const hasStream = activePads.some((p) => p && p.type === 'output' && p.target === 'stream');
-    const hasRecord = activePads.some((p) => p && p.type === 'output' && (p.target === 'record' || p.target === 'recordPause'));
+    const hasStream = activePads.some((p) => p && p.type === 'output' && p.target === 'stream') || Boolean(obs.outputs?.stream);
+    const hasRecord = activePads.some((p) => p && p.type === 'output' && (p.target === 'record' || p.target === 'recordPause')) || Boolean(obs.outputs?.record);
     const mediaInputs = [...new Set(activePads.filter((p) => p && p.type === 'media' && p.inputName).map((p) => p.inputName))];
 
     const calls = [];
@@ -2351,6 +2393,9 @@
     if (typeof Deck.updateReadoutPads === 'function') {
       Deck.updateReadoutPads();
     }
+    if (typeof Deck.updateLiveStrip === 'function') {
+      Deck.updateLiveStrip();
+    }
     if (hasStream && activePads.some((p) => p && p.type === 'stats' && p.mode === 'stream')) {
       if (typeof Deck.updateStatsPads === 'function') Deck.updateStatsPads();
       Deck.applyStatsAlerts();
@@ -2360,7 +2405,10 @@
   Deck.syncReadoutPolling = () => {
     const { obs } = Deck;
     const connected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
-    const needsPolling = connected && Deck.getActivePads().some(needsReadoutPolling);
+    const needsPolling = connected && (
+      Deck.getActivePads().some(needsReadoutPolling)
+      || Boolean(obs.outputs?.stream || obs.outputs?.record)
+    );
     if (connected) {
       const missingVolumes = Deck.getActivePads()
         .filter((p) => p && p.type === 'volume' && p.inputName && typeof obs.volumes[p.inputName] !== 'number')
@@ -2384,7 +2432,10 @@
         Deck.fetchReadouts();
         obs.readoutTimer = setInterval(() => {
           const stillConnected = Boolean(obs.ws && obs.ws.readyState === 1 && obs.status === 'ok');
-          if (stillConnected && Deck.getActivePads().some(needsReadoutPolling)) {
+          if (stillConnected && (
+            Deck.getActivePads().some(needsReadoutPolling)
+            || Boolean(obs.outputs?.stream || obs.outputs?.record)
+          )) {
             Deck.fetchReadouts();
           } else {
             Deck.syncReadoutPolling();
@@ -2536,9 +2587,11 @@
         updateStreamMetrics(streamRes);
       }
       if (recRes) {
+        obs.recordStatus = recRes;
         obs.outputs.record = !!recRes.outputActive;
         obs.outputs.recordPaused = !!recRes.outputPaused;
       }
+      if (typeof Deck.updateLiveStrip === 'function') Deck.updateLiveStrip();
       if (vcamRes) obs.outputs.vcam = !!vcamRes.outputActive;
       if (replayRes) obs.outputs.replay = !!replayRes.outputActive;
       if (profRes) {
@@ -2854,6 +2907,8 @@
         updateStreamMetrics({ outputActive: false });
       } else if (typeof Deck.fetchReadouts === 'function') Deck.fetchReadouts();
       if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+      if (typeof Deck.updateLiveStrip === 'function') Deck.updateLiveStrip();
+      Deck.syncReadoutPolling();
       Deck.scheduleRenderGrid();
     } else if (type === 'RecordStateChanged') {
       obs.outputs.record = !!d.outputActive;
@@ -2862,6 +2917,8 @@
       if (!d.outputActive) obs.recordStatus = null;
       else if (typeof Deck.fetchReadouts === 'function') Deck.fetchReadouts();
       if (typeof Deck.updateReadoutPads === 'function') Deck.updateReadoutPads();
+      if (typeof Deck.updateLiveStrip === 'function') Deck.updateLiveStrip();
+      Deck.syncReadoutPolling();
       Deck.scheduleRenderGrid();
     } else if (type === 'VirtualcamStateChanged') {
       obs.outputs.vcam = !!d.outputActive;
@@ -3338,9 +3395,11 @@
       } else if (msg.op === 2) {
         obs.retryCount = 0;
         connectionMachine.send('IDENTIFIED');
+        Deck.obs.status = 'ok';
+        await Deck.syncObsState();
+        if (obs.ws !== ws || ws.readyState !== 1) return;
         Deck.setConn('ok', 'Connected');
         Deck.setMsg(`Connected to ${url}`);
-        await Deck.syncObsState();
         if (typeof Deck.applyPendingHoldRestores === 'function') {
           await Deck.applyPendingHoldRestores();
         }
