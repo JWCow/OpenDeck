@@ -4,12 +4,12 @@
 [![Download ZIP](https://img.shields.io/badge/Download-opendeck.zip-16a34a?logo=github)](https://github.com/JWCow/OpenDeck/releases/latest/download/opendeck.zip)
 [![Platforms](https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux%20%C2%B7%20Phone-OBS%2028%2B-334155)](#quick-start-obs-custom-browser-dock)
 
-**Virtual Stream Deck for OBS Studio (`obs-websocket` v5) — zero-backend UI v2.**  
+**Virtual Stream Deck for OBS Studio (`obs-websocket` v5) — zero-backend broadcast console.**  
 Run it three ways with the exact same Deck, Pages, and Pads:
 
-- 🖥️ **[Desktop App](#%EF%B8%8F-desktop-app-electron)** — Standalone Electron app for **Windows** (`.exe`), **macOS** (`arm64`/`x64` `.dmg`/`.zip`), and **Linux** (`.AppImage`) with tray controls & Always on Top
+- 🖥️ **[Desktop App](#%EF%B8%8F-desktop-app-electron)** — Standalone Electron app for **Windows** (`.exe`), **macOS** (`arm64`/`x64` `.dmg`/`.zip`), and **Linux** (`.AppImage`) with tray controls, Always on Top & 1-click Phone Deck QR
 - 🔌 **[OBS Browser Dock](#quick-start-obs-custom-browser-dock)** — Drop `deck.html` from [`opendeck.zip`](https://github.com/JWCow/OpenDeck/releases/latest/download/opendeck.zip) into an OBS Custom Browser Dock (no plugins, no server)
-- 📱 **[Phone / Tablet Deck](#-phone-deck)** — Control OBS from any phone on Wi-Fi via `Phone Helper` + QR code
+- 📱 **[Phone / Tablet Deck](#-phone-deck)** — Control OBS from any phone on Wi-Fi via **Phone Deck (QR)** (1-click in Desktop App, or offline QR + `Phone Helper` in browser/dock)
 
 **[⬇️ All Desktop & Dock Downloads](https://github.com/JWCow/OpenDeck/releases)** · **[⬇️ Latest opendeck.zip](https://github.com/JWCow/OpenDeck/releases/latest/download/opendeck.zip)**
 
@@ -23,55 +23,63 @@ Run it three ways with the exact same Deck, Pages, and Pads:
 
 | | Feature | What it does |
 |---|---|---|
-| ✨ | **UI v2 & State-First Pads** | Compact `Edit` / `⋯` / `PANIC` header with high-contrast tally states |
-| 🖥️ | **Standalone Desktop App** | Windows, macOS & Linux app with `app://opendeck/` storage, tray & Always on Top |
-| 🪄 | **Auto-Import (Read-Only)** | Reads your OBS scenes, sources, filters & audio into ready Pages |
-| 🎛️ | **23 Actions & Hold Pads** | Scenes, PiP, filters, audio, media, streams, stats, hotkeys, HTTP & Hold-to-Run |
-| 🖼️ | **Custom Icons** | Upload PNG/JPG/WebP/SVG artwork (Fit Icon, Full Face, Hide Text) |
-| 📄 | **Pages, Linked Scenes & Undo** | `2×2` to `12×12` grids, Scene-Linked Pages, Undo/Redo, crisp down to `360×420` |
-| ⏱️ | **Timers & Macros** | Auto-Off countdowns, multi-step Timed Macros with abort cleanup, and **PANIC** |
-| 🌓 | **Themes, Sizing & Clean View** | Dark/Light Studio toggle, `A-` / `A+` font scaling & **Clean View** (`?clean=1`) |
-| 💾 | **Portable JSON & Snapshots** | **Export Deck**, **Import Pages…**, **Import from Link…** & IndexedDB **Snapshots…** |
+| ✨ | **Anodized Console UI & Live Strip** | Clickable status pill, cross-page `LIVE` / `REC` / `PAUSED` timecode strip, `Edit` / `Commands` / `Phone Deck` / `Clean View` / `Settings` / `PANIC` header, plus `PVW`/`PGM` & `HOLD`/timer cue badges |
+| 🖥️ | **Standalone Desktop App** | Windows, macOS & Linux app with `app://opendeck/` storage, tray, Always on Top & 1-click Phone Deck QR host |
+| 🪄 | **Auto-Import (Read-Only)** | Reads your OBS scenes, sources, filters & audio into ready Pages with selective scene filtering, Starter Layouts & live preview counts |
+| 🎛️ | **24 Actions & Hold Pads** | Scenes, PiP, filters, audio, media, text/counters, streams, stats, hotkeys, HTTP & Hold-to-Run |
+| 🎨 | **Broadcast Icons, Styles & Art** | Built-in Broadcast SVG icons + Emoji library, Solid vs Soft Tint styles, or custom PNG/JPG/WebP/SVG Pad Graphics (`Fit Icon`, `Full Face`, `Hide Text`) |
+| 📄 | **Pages, Search & Context Menus** | `2×2` to `12×12` grids (active grid-size button, e.g. `6×4` / `8×8`), Scene-Linked Pages, Quick Search (`Ctrl+K`), Manage Pages (search, bulk delete/export), right-click Pad & Page menus, Undo/Redo, crisp down to `360×420` |
+| ⏱️ | **Timers, Macros & PANIC** | Auto-Off countdowns, multi-step Timed Macros with abort cleanup & **PANIC** (toggleable in **Settings**) |
+| 🌓 | **Themes, Sizing & Clean View** | Dark/Light Studio toggle, `A-` / `A+` Font Scale & top-bar **Clean View** (`?clean=1`) |
+| 💾 | **Portable JSON & Snapshots** | **Export Deck**, **Import Pages…**, **Import from Link…** & IndexedDB **Layout Snapshots…** |
 
 <br>
 
 ![OpenDeck Edit Mode & Command Palette](docs/screenshots/opendeck-edit.png)
 
-> **Edit Mode:** Click **Edit** to drag commands from the right palette onto Pads, drag Pads across Page tabs, reorder Pages, or multi-select to duplicate, recolor, and move in bulk.
+> **Edit Mode:** Click **Edit** to toggle the **Commands** palette and drag actions onto Pads, drag Pads across Page tabs, reorder Pages, open the tabbed **All / Action / Appearance** Pad Editor, right-click Pads or Page tabs (Edit, Run, Duplicate, Copy, Paste, Paste Style, Move to Page, Clear), or multi-select to duplicate, recolor, and move in bulk.
 
 <br>
 
-![OpenDeck Light Studio & More Menu](docs/screenshots/opendeck-light.png)
+![OpenDeck Light Studio & Settings Menu](docs/screenshots/opendeck-light.png)
 
-> **Light Studio & `⋯` Menu:** Switch between Dark/Light Studio themes, adjust `A-`/`A+` text size, enable **Clean View** (`?clean=1`), or manage **Connection…**, **Auto-Import…**, **Snapshots…**, and **Export Deck** from `⋯`.
+> **Light Studio & Settings Menu:** Switch between Dark/Light Studio themes, adjust `A-`/`A+` text size, toggle **Toolbar PANIC**, enable **Clean View** (`?clean=1`), or open **Connection settings…**, **Auto-Import Pages…**, **Phone Deck (QR)…**, **Layout Snapshots…**, **Manage Pages…**, and **Export Deck** from **Settings**.
+
+<br>
+
+![OpenDeck Pad Editor (Appearance Tab & Broadcast Icons)](docs/screenshots/opendeck-desktop.png)
+
+> **Tabbed Pad Editor:** Switch between **All**, **Action**, and **Appearance** tabs with a live Pad preview, built-in **Broadcast** SVG & **Emoji** icon libraries, **Solid** vs **Soft Tint** surface styles, and custom Pad Graphics.
 
 <br>
 
 <details>
-<summary>📋 <strong>All 23 Action Types</strong></summary>
+<summary>📋 <strong>All 24 Action Types</strong></summary>
 
 <br>
 
 | Category | Action | Tag | Capabilities |
 |---|---|---|---|
-| 🎬 **Scenes** | Switch Scene | `SCN` | Named scene, Next, or Previous |
+| 🎬 **Scenes** | Switch Scene | `SCN` | Named scene, Next, or Previous *(Studio Mode `PVW`/`PGM` badges)* |
 | | Studio Mode | `STD` | Toggle, load Preview, or Transition *(Auto-Off)* |
 | | Scene Transition | `TRN` | Switch transition & duration |
 | 🧩 **Sources** | Source Visibility | `SRC` | Toggle, Show, Hide, Solo *(Auto-Off, Hold)* |
 | | Transform / PiP | `PIP` | Corner PiP, Center 50%, or Reset |
 | | Media Playback | `MED` | Play/Pause, Restart, Stop, Next, Prev *(Auto-Off)* |
 | | Image / Slideshow | `IMG` | Swap image path or step slides |
+| | Text / Counter | `TXT` | Set text, cycle presets, or `+/-` counter *(Auto-Off)* |
 | | Browser Source | `WEB` | Refresh cache or update URL |
 | | Take Screenshot | `CAP` | Snapshot source or scene |
 | 🎚️ **Filters & Audio** | Filter Control | `FLT` | Toggle, Enable, or Disable *(Auto-Off, Hold)* |
 | | Input Mute | `MUT` | Toggle, Mute, or Unmute *(Auto-Off, Hold)* |
-| | Input Volume | `VOL` | Set dB or step `+/- dB` |
+| | Input Volume | `VOL` | Set dB or step `+/- dB` *(Auto-Off, Hold)* |
 | | Audio Monitor | `MON` | Off / Monitor Only / Monitor & Output |
 | 📡 **Broadcast** | Stream / Record / Cam | `OUT` | Stream, Record, Pause, VCam, Replay *(Auto-Off)* |
 | | Recording Chapter | `CHP` | Insert chapter marker |
 | | Telemetry Stats | `STS` | Live CPU %, FPS & dropped frames |
 | | OBS Hotkey | `KEY` | Trigger OBS hotkey by name or key sequence |
-| | Profile / Collection | `PRF` / `COL` | Switch OBS Profile or Scene Collection |
+| | Switch Profile | `PRF` | Switch OBS Profile |
+| | Scene Collection | `COL` | Switch OBS Scene Collection |
 | ⚡ **Automation** | Switch Page | `PAG` | Jump to Page or Next / Prev |
 | | Timed Macro | `MCR` | Multi-step sequence with `Wait (ms)` & abort cleanup |
 | | HTTP / Webhook | `API` | `GET`/`POST`/`PUT` webhook or local bridge call |
@@ -84,8 +92,6 @@ Run it three ways with the exact same Deck, Pages, and Pads:
 ## 🖥️ Desktop App (Electron)
 
 Prefer a standalone window instead of an OBS dock? Download the desktop installer (**Windows** `.exe`, **macOS** Apple Silicon `arm64` & Intel `x64` `.dmg`/`.zip`, **Linux** `.AppImage`) from [Releases](https://github.com/JWCow/OpenDeck/releases) or run it from source.
-
-![OpenDeck Standalone Desktop App](docs/screenshots/opendeck-desktop.png)
 
 - **Stable storage & tray controls:** Serves the Deck from a fixed `app://opendeck/` origin (preserving layouts across updates and Linux AppImage mounts) with window state persistence, Always on Top (`Ctrl/Cmd+Shift+T`), and system tray controls.
 - **Auto port discovery (ADR-0002):** Reads OBS `obs-websocket/config.json` read-only for `server_port` on launch and never reads or persists passwords.
@@ -110,29 +116,28 @@ Prefer a standalone window instead of an OBS dock? Download the desktop installe
 
 <br>
 
-**4. 🔗 Connect** — Open **⋯ → Connection…**, enter your password in **Pass** (if set), click **Connect**, and run **⋯ → Auto-Import…** *(the Desktop App and installers auto-detect your OBS port via ADR-0002 without storing passwords)*.
+**4. 🔗 Connect** — Click the status pill (or open **Settings → Connection settings…**), enter your password in **Pass** (if set), click **Connect**, and run **Settings → Auto-Import Pages…** *(the Desktop App and installers auto-detect your OBS port via ADR-0002 without storing passwords)*.
 
-> 💡 *Upgrading from v1/v2.x?* Opening `deck.html` at the same `file://` path migrates your layout automatically. Click **⋯ → Export Deck** first for a backup.
+> 💡 *Upgrading from v1/v2.x?* Opening `deck.html` at the same `file://` path migrates your layout automatically. Click **Settings → Export Deck** first for a backup.
 
 <br>
 
 ## 📱 Phone Deck
 
-Control OBS from a phone or tablet on the same Wi-Fi. Needs [Node.js](https://nodejs.org) on the OBS computer.
+Control OBS from a phone or tablet on the same Wi-Fi using the universal **Phone Deck (QR)** dialog — click the top-bar **Phone Deck** icon or open **Settings → Phone Deck (QR)…**.
 
 ![OpenDeck Phone Deck Touch View](docs/screenshots/opendeck-phone.png)
 
-1. **Start OBS first** (WebSocket server enabled), then double-click **Phone Helper.bat** (Windows) or run `node scripts/lan-helper.mjs`.
-2. The helper finds the port your running OBS uses, then prints the phone URLs and a **QR code** for your home-network address. Scan it, or type the URL on the phone.
-3. **Your layout:** design the Deck on the PC and click **⋯ → Export Deck**. If `obs-virtual-deck*.json` is in your Downloads folder, Phone Helper serves the newest one and the QR link carries it; the phone asks before loading it (a Snapshot is saved first). Otherwise the phone starts with its own layout. Export again and restart the helper to update it.
+- **Desktop App (1-click):** Opening **Phone Deck (QR)** automatically starts the built-in local LAN host, generates a QR code, and syncs layout edits live — no Node.js or extra script needed.
+- **OBS Browser Dock / Browser:** Enter your computer's Wi-Fi IP in the **Phone Deck (QR)** dialog to generate an offline QR code directly on the page, then start OBS (WebSocket server enabled) and run **Phone Helper.bat** (Windows) or `node scripts/lan-helper.mjs` (requires [Node.js](https://nodejs.org)). Use **Export Layout** in the dialog (or **Settings → Export Deck**) to share your layout via `Downloads/obs-virtual-deck*.json` or `layout.json` in the deck folder.
 
 | Good to know | |
 |---|---|
-| Port | Uses `8765`; if taken, any free port (the URL changes, so use the one printed). Change it in the `.bat`. |
+| Port | Uses `8765`; if taken, any free port (adjust in **Helper Port** or the `.bat`). |
 | Several devices | Any number of phones can open the same link. Each keeps its own layout. |
-| OBS detection | Windows only. Elsewhere it uses `4455` or `--obs-port=`. |
-| Load a layout by hand | **⋯ → Import from Link…** with `http://<ip>:<port>/layout.json`. |
-| Password | Never in the link. Type it once on the phone (**⋯ → Connection… → Pass**). |
+| OBS detection | Desktop App auto-detects the local OBS port across platforms; `Phone Helper` auto-detects on Windows and uses `4455` or `--obs-port=` elsewhere. |
+| Load a layout by hand | **Settings → Import from Link…** with `http://<ip>:<port>/layout.json`. |
+| Password | Never in the link or QR code. Type it once on the phone (click the status pill or **Settings → Connection settings… → Pass**). |
 
 <br>
 
@@ -141,10 +146,10 @@ Control OBS from a phone or tablet on the same Wi-Fi. Needs [Node.js](https://no
 | Symptom | Fix |
 |---|---|
 | 🔴 **Disconnected** | Check OBS **Tools → WebSocket Server Settings → Enable WebSocket server** |
-| 🔑 **Auth Failed** | Copy password from OBS **Show Connect Info** into **⋯ → Connection… → Pass** |
+| 🔑 **Auth Failed** | Copy password from OBS **Show Connect Info** into **Settings → Connection settings… → Pass** (or click the status pill) |
 | ⬜ **Blank Dock** | URL must start with `file:///` and point to `deck.html` (macOS: allow Files & Folders access) |
-| 🔄 **Missing Items** | Connect to OBS, then click **⋯ → Sync with OBS** |
-| 📂 **Layout Reset / Sharing** | Layouts live in browser storage, not the folder — click **⋯ → Export Deck** (saving `layout.json` in the deck folder also lets `Phone Helper.bat` and external tools read/extend your deck), **⋯ → Import Pages…** to append new Pages onto an active Deck, or **⋯ → Snapshots…** to roll back |
+| 🔄 **Missing Items** | Connect to OBS, then click **Settings → Sync with OBS** |
+| 📂 **Layout Reset / Sharing** | Layouts live in browser storage, not the folder — click **Settings → Export Deck** (saving `layout.json` in the deck folder also lets `Phone Helper.bat` and external tools read/extend your deck), **Settings → Import Pages…** to append Pages onto an active Deck, **Manage Pages…** to bulk export/delete, or **Settings → Layout Snapshots…** to roll back |
 | ⌨️ **External App Hotkeys** | For OS hotkeys outside OBS (triggered via `API` / `http` pads), launch optional **Hotkey Bridge.bat** (`127.0.0.1:3905/hotkey`) |
 
 <br>
@@ -158,7 +163,7 @@ Control OBS from a phone or tablet on the same Wi-Fi. Needs [Node.js](https://no
 | 🎮 **Gaming PC** (local) | `file:///.../obs-virtual-deck/deck.html?port=4455` |
 | 📡 **Streaming PC** (remote) | `file:///.../obs-virtual-deck/deck.html?host=192.168.1.50&port=4455` |
 
-Each dock connects to the OBS in its own URL, but **both share one layout**: the browser keeps a single storage area for every `file://` page, so copying the folder does not separate them. Keep the controls for both machines on separate Pages. Leave the **Host** and **Port** fields in **⋯ → Connection…** alone in these docks; typing a host or port there is saved and then overrides the URL in every dock. On Phone Deck, add the same `?host=` and `?port=` to the LAN URL (e.g. `http://192.168.1.50:8765/deck.html?host=192.168.1.50&port=4455`).
+Each dock connects to the OBS in its own URL, but **both share one layout**: the browser keeps a single storage area for every `file://` page, so copying the folder does not separate them. Keep the controls for both machines on separate Pages. Leave the **Host** and **Port** fields in **Settings → Connection settings…** alone in these docks; typing a host or port there is saved and then overrides the URL in every dock. On Phone Deck, add the same `?host=` and `?port=` to the LAN URL (e.g. `http://192.168.1.50:8765/deck.html?host=192.168.1.50&port=4455`).
 
 <br>
 
