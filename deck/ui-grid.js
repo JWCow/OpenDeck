@@ -510,7 +510,11 @@
         if (!Deck.editMode && p?.hold && Deck.HOLD_TYPES && Deck.HOLD_TYPES.has(p.type)) {
           return;
         }
-        Deck.openPadEditor(i);
+        if (typeof Deck.openPadContextMenu === 'function') {
+          Deck.openPadContextMenu(i, e);
+        } else {
+          Deck.openPadEditor(i);
+        }
       });
       el.addEventListener('dragstart', (e) => {
         if (!Deck.editMode) { e.preventDefault(); return; }
@@ -838,11 +842,38 @@
     });
   }
 
+  let locateTimer = null;
+  function locatePad(idx, pageId) {
+    if (pageId && Deck.cfg?.activePageId !== pageId) {
+      Deck.setActivePage?.(pageId);
+    }
+    const grid = $('grid');
+    if (!grid) return;
+    const btn = grid.querySelector(`.pad[data-idx="${idx}"]`);
+    if (!btn) return;
+    if (locateTimer) {
+      clearTimeout(locateTimer);
+      locateTimer = null;
+    }
+    grid.querySelectorAll('.pad.search-locate').forEach((el) => el.classList.remove('search-locate'));
+    setRovingFocus(grid, idx, true);
+    if (typeof btn.scrollIntoView === 'function') {
+      try { btn.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' }); } catch {}
+    }
+    void btn.offsetWidth;
+    btn.classList.add('search-locate');
+    locateTimer = setTimeout(() => {
+      locateTimer = null;
+      btn.classList.remove('search-locate');
+    }, 1400);
+  }
+
   Deck.BROADCAST_ICONS = BROADCAST_ICONS;
   Deck.renderIconHtml = renderIconHtml;
   Deck.isCustomPadColor = isCustomPadColor;
   Deck.formatCueSec = formatCueSec;
   Deck.flashPadConfirm = flashPadConfirm;
+  Deck.locatePad = locatePad;
   Deck.TAGS = TAGS;
   Deck.padFallbackLabel = padFallbackLabel;
   Deck.initGrid = initGrid;

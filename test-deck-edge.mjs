@@ -3823,8 +3823,10 @@ try {
     await pageFsm.locator('#grid .pad').nth(0).click();
     await pageFsm.waitForFunction(() => Deck.getPadRuntime(0).state === 'auto_off');
     assert.equal(await pageFsm.locator('#grid .pad').nth(0).getAttribute('data-pad-state'), 'auto_off', 'pad[data-pad-state] reflects auto_off');
-    // Open pad editor via contextmenu and click Clear -> aborts timer cleanly
+    // Open pad editor via contextmenu submenu and click Clear -> aborts timer cleanly
     await pageFsm.locator('#grid .pad').nth(0).click({ button: 'right' });
+    await pageFsm.waitForSelector('#ctx-menu:not([hidden])');
+    await pageFsm.click('#ctx-pad-edit');
     await pageFsm.waitForSelector('#pad-dlg[open]');
     await pageFsm.click('#btn-pad-clear');
     assert.equal(await pageFsm.evaluate(() => Deck.activeAutoOffs.size), 0, 'clearing pad in editor aborts active Auto-Off timer');

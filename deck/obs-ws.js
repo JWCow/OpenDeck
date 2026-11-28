@@ -835,6 +835,37 @@
     }
   }
 
+  Deck.exportPagesConfig = (pageIds) => {
+    const { cfg } = Deck;
+    const idSet = new Set(Array.isArray(pageIds) ? pageIds : []);
+    const selected = (cfg.pages || []).filter((d) => idSet.has(d.id));
+    if (!selected.length) return null;
+    const fb = selected.find((d) => d.isFallback);
+    const activeId = selected.some((d) => d.id === cfg.activePageId)
+      ? cfg.activePageId
+      : selected[0].id;
+    const exported = {
+      version: 2,
+      ws: { host: cfg.ws.host, port: cfg.ws.port },
+      activePageId: activeId,
+      pages: selected.map((d) => {
+        const out = {
+          id: d.id,
+          name: d.name,
+          cols: d.cols,
+          rows: d.rows,
+          pads: d.pads.map(normalizePad),
+        };
+        if (d.sceneName) out.sceneName = d.sceneName;
+        if (d.isFallback) out.isFallback = true;
+        return out;
+      }),
+      panicSteps: [],
+    };
+    if (fb) exported.fallbackPageId = fb.id;
+    return exported;
+  };
+
   Deck.exportConfig = () => {
     const { cfg } = Deck;
     const fb = (cfg.pages || []).find((d) => d.isFallback);
@@ -1003,6 +1034,39 @@
       Deck.setMsg('No snapshot was saved');
     }
     return true;
+  };
+
+  Deck.deletePages = async (pageIds) => {
+    const { pages } = Deck.cfg;
+    const idSet = new Set(Array.isArray(pageIds) ? pageIds : []);
+    const toDelete = pages.filter((d) => idSet.has(d.id));
+    if (!toDelete.length) return 0;
+    if (pages.length - toDelete.length < 1) return 0;
+    let snapFailed = false;
+    if (typeof Deck.createSnapshot === 'function') {
+      try {
+        const label = toDelete.length === 1 ? 'Before Delete Page' : `Before Delete ${toDelete.length} Pages`;
+        const s = await Deck.createSnapshot(label);
+        if (s === null && Deck.snapshotsAvailable) snapFailed = true;
+      } catch {
+        snapFailed = true;
+      }
+    }
+    for (const d of toDelete) {
+      if (typeof Deck.abortPageTimers === 'function') Deck.abortPageTimers(d.id);
+    }
+    const delIds = new Set(toDelete.map((d) => d.id));
+    Deck.cfg.pages = pages.filter((d) => !delIds.has(d.id));
+    if (!Deck.cfg.pages.some((d) => d.id === Deck.cfg.activePageId)) {
+      Deck.cfg.activePageId = Deck.cfg.pages[0].id;
+    }
+    Deck.saveCfg();
+    Deck.renderGrid();
+    Deck.syncPageLockButton?.();
+    if (snapFailed) {
+      Deck.setMsg('No snapshot was saved');
+    }
+    return toDelete.length;
   };
 
   Deck.resizePage = (pageId, newCols, newRows) => {
@@ -1217,10 +1281,32 @@
       filters: opts.filters !== false,
       broadcast: opts.broadcast !== false,
     };
+    const hasSceneFilter = Array.isArray(opts.selectedScenes) || opts.selectedScenes instanceof Set;
+    const selectedSceneSet = hasSceneFilter ? new Set(opts.selectedScenes) : null;
+    const filteredScenes = selectedSceneSet
+      ? (obs.scenes || []).filter((s) => selectedSceneSet.has(s))
+      : (obs.scenes || []);
+    const allowedSourceNames = selectedSceneSet ? new Set(filteredScenes) : null;
+    const allowedGroups = selectedSceneSet ? new Set() : null;
+    if (selectedSceneSet) {
+      const groupSet = new Set(obs.groups || []);
+      for (const sName of filteredScenes) {
+        for (const it of (obs.itemsByScene[sName] || [])) {
+          if (!it?.sourceName) continue;
+          allowedSourceNames.add(it.sourceName);
+          if (groupSet.has(it.sourceName)) allowedGroups.add(it.sourceName);
+        }
+      }
+      for (const gName of allowedGroups) {
+        for (const it of (obs.itemsByScene[gName] || [])) {
+          if (it?.sourceName) allowedSourceNames.add(it.sourceName);
+        }
+      }
+    }
     const pages = [];
 
     if (cfgOpts.scenes) {
-      const items = obs.scenes.map((sceneName) => ({
+      const items = filteredScenes.map((sceneName) => ({
         type: 'scene',
         mode: 'named',
         sceneName,
@@ -1228,7 +1314,7 @@
         icon: smartSceneIcon(sceneName),
         color: '#991b1b',
       }));
-      if (obs.scenes.length > 1) {
+      if (filteredScenes.length > 1) {
         items.push(
           { type: 'scene', mode: 'prev', label: 'Prev Scene', icon: '⏮️', color: '#115e59' },
           { type: 'scene', mode: 'next', label: 'Next Scene', icon: '⏭️', color: '#115e59' }
@@ -1240,7 +1326,9 @@
     if (cfgOpts.sources) {
       const items = [];
       const seen = new Set();
-      const targets = [...new Set([...obs.scenes, ...obs.groups])];
+      const targets = selectedSceneSet
+        ? [...new Set([...filteredScenes, ...allowedGroups])]
+        : [...new Set([...obs.scenes, ...obs.groups])];
       for (const sceneName of targets) {
         for (const it of (obs.itemsByScene[sceneName] || [])) {
           if (!it?.sourceName) continue;
@@ -1265,6 +1353,7 @@
       const items = [];
       const seen = new Set();
       for (const [sourceName, flts] of Object.entries(obs.filtersBySource || {})) {
+        if (allowedSourceNames && !allowedSourceNames.has(sourceName)) continue;
         for (const f of (flts || [])) {
           if (!f?.filterName) continue;
           const key = `${sourceName}\0${f.filterName}`;

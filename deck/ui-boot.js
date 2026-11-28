@@ -87,6 +87,11 @@
       btn.classList.toggle('on', on);
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
+    const topBtn = $('btn-clean-top');
+    if (topBtn) {
+      topBtn.classList.toggle('on', on);
+      topBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
     Deck.updateGuidanceBanner?.();
   }
 
@@ -96,9 +101,9 @@
     else if (cleanParam === '0' || cleanParam === 'false') applyCleanView(false, { persist: false });
     else applyCleanView(getCleanViewPref(), { persist: false });
 
-    $('btn-clean-view')?.addEventListener('click', () => {
-      applyCleanView(document.documentElement.dataset.clean !== '1', { persist: true });
-    });
+    const toggleClean = () => applyCleanView(document.documentElement.dataset.clean !== '1', { persist: true });
+    $('btn-clean-view')?.addEventListener('click', toggleClean);
+    $('btn-clean-top')?.addEventListener('click', toggleClean);
     $('btn-clean-exit')?.addEventListener('click', () => {
       applyCleanView(false, { persist: true });
     });
@@ -167,8 +172,25 @@
     if (!e.target.closest('.menu-wrap')) setMoreMenu(false);
   });
   document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+      const qsDlg = $('quick-search-dlg');
+      if (qsDlg?.open) {
+        e.preventDefault();
+        qsDlg.close();
+        return;
+      }
+      if (!document.querySelector('dialog[open]')) {
+        e.preventDefault();
+        Deck.openQuickSearch?.();
+      }
+      return;
+    }
     if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
     const ws = Deck.machines?.workspace;
+    if (ws?.context?.popover === 'context_menu' || !$('ctx-menu')?.hidden) {
+      Deck.closeContextMenu?.();
+      return;
+    }
     if (ws?.context?.popover === 'more_menu' || !$('more-menu')?.hidden) {
       setMoreMenu(false);
       $('btn-more')?.focus();
@@ -225,6 +247,11 @@
   });
   $('btn-panic').addEventListener('click', Deck.runPanic);
   $('btn-panic-menu-run')?.addEventListener('click', Deck.runPanic);
+  $('btn-phone-top')?.addEventListener('click', () => Deck.openPhoneHostDialog?.());
+  $('btn-phone-host')?.addEventListener('click', () => Deck.openPhoneHostDialog?.());
+  $('btn-manage-pages')?.addEventListener('click', () => Deck.openPagesManager?.());
+  $('btn-manage-pages-menu')?.addEventListener('click', () => Deck.openPagesManager?.());
+  $('btn-quick-search')?.addEventListener('click', () => Deck.openQuickSearch?.());
 
   $('btn-export').addEventListener('click', () => {
     const out = Deck.exportConfig();
@@ -469,10 +496,8 @@
 
     const aotBtn = $('btn-desktop-aot');
     const redetectBtn = $('btn-desktop-redetect');
-    const phoneHostBtn = $('btn-phone-host');
     if (aotBtn) aotBtn.hidden = false;
     if (redetectBtn) redetectBtn.hidden = false;
-    if (phoneHostBtn) phoneHostBtn.hidden = false;
 
     const syncAotUi = (enabled) => {
       const on = Boolean(enabled);
@@ -530,10 +555,6 @@
       if (Deck.obs.status !== 'ok') {
         applyDiscoveredObsPort(info, { force: false });
       }
-    });
-
-    phoneHostBtn?.addEventListener('click', () => {
-      Deck.openPhoneHostDialog?.();
     });
 
     api.onTriggerPanic?.(() => {

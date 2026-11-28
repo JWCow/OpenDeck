@@ -378,7 +378,7 @@ try {
   await page.click('#d-presets button[data-cols="4"][data-rows="3"]');
   await page.click('#deck-form button[type="submit"]');
   await page.waitForFunction(() => document.querySelectorAll('#grid .pad').length === 12);
-  assert.equal((await page.textContent('#btn-deck-cfg')).trim(), '4×3 ⚙');
+  assert.equal((await page.textContent('#btn-deck-cfg')).trim(), '4×3');
   assert.equal((await page.locator('#deck-tabs .page-tab.on').textContent()).trim(), 'Show Controls');
 
   // Configure pad 0 on Page 2 to jump back to Page 1 (Main)

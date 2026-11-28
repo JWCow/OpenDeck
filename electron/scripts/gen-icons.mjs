@@ -18,13 +18,13 @@ import zlib from 'node:zlib';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ASSETS_DIR = path.resolve(__dirname, '..', 'assets');
 
-// Normalized geometry from the 256x256 icon in artifact/desktop-shim.js
+// Normalized geometry matching the cobalt blue & crimson red 4-pad brand mark in deck.html
 const BG_COLOR = [11, 12, 15]; // #0b0c0f
 const PADS = [
-  { x: 40 / 256, y: 40 / 256, w: 80 / 256, h: 80 / 256, r: 20 / 256, color: [236, 238, 242], alpha: 1.0 },
-  { x: 136 / 256, y: 40 / 256, w: 80 / 256, h: 80 / 256, r: 20 / 256, color: [236, 238, 242], alpha: 0.3 },
-  { x: 40 / 256, y: 136 / 256, w: 80 / 256, h: 80 / 256, r: 20 / 256, color: [236, 238, 242], alpha: 0.3 },
-  { x: 136 / 256, y: 136 / 256, w: 80 / 256, h: 80 / 256, r: 20 / 256, color: [255, 77, 61], alpha: 1.0 },
+  { x: 40 / 256, y: 40 / 256, w: 80 / 256, h: 80 / 256, r: 22 / 256, color: [59, 130, 246], alpha: 1.0, bevel: true },
+  { x: 136 / 256, y: 40 / 256, w: 80 / 256, h: 80 / 256, r: 22 / 256, color: [236, 238, 242], alpha: 0.26, bevel: false },
+  { x: 40 / 256, y: 136 / 256, w: 80 / 256, h: 80 / 256, r: 22 / 256, color: [236, 238, 242], alpha: 0.26, bevel: false },
+  { x: 136 / 256, y: 136 / 256, w: 80 / 256, h: 80 / 256, r: 22 / 256, color: [255, 71, 66], alpha: 1.0, bevel: true },
 ];
 const BG_RADIUS = 56 / 256;
 
@@ -111,6 +111,20 @@ function renderIconRgba(size, samplesPerAxis = 4) {
               r += (pad.color[0] - r) * a;
               g += (pad.color[1] - g) * a;
               b += (pad.color[2] - b) * a;
+              if (pad.bevel) {
+                const bx = pad.x + pad.w * 0.08;
+                const by = pad.y + pad.h * 0.08;
+                const bw = pad.w * 0.84;
+                const bh = pad.h * 0.21;
+                const br = bh * 0.5;
+                const bCov = covFromSdf(sdRoundedRect(nx, ny, bx, by, bw, bh, br), halfPixel);
+                if (bCov > 0) {
+                  const ba = 0.28 * bCov * padCov;
+                  r += (255 - r) * ba;
+                  g += (255 - g) * ba;
+                  b += (255 - b) * ba;
+                }
+              }
             }
           }
 

@@ -6,6 +6,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>OpenDeck - Virtual Deck for OBS Studio</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0c0f'/%3E%3Crect x='10' y='10' width='20' height='20' rx='5.5' fill='%233b82f6'/%3E%3Crect x='11.6' y='11.6' width='16.8' height='4.2' rx='2.1' fill='%23ffffff' opacity='0.28'/%3E%3Crect x='34' y='10' width='20' height='20' rx='5.5' fill='%23eceef2' opacity='0.26'/%3E%3Crect x='10' y='34' width='20' height='20' rx='5.5' fill='%23eceef2' opacity='0.26'/%3E%3Crect x='34' y='34' width='20' height='20' rx='5.5' fill='%23ff4742'/%3E%3Crect x='35.6' y='35.6' width='16.8' height='4.2' rx='2.1' fill='%23ffffff' opacity='0.28'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -44,6 +45,12 @@
   <div class="spacer"></div>
   <button id="btn-edit" class="btn sm" title="Toggle Edit Mode to configure, drag-swap, or move pads across Pages">Edit</button>
   <button id="btn-palette" class="btn sm edit-only" title="Toggle Command Palette in Edit Mode">Commands</button>
+  <button id="btn-phone-top" class="btn sm icon-btn" type="button" aria-label="Phone Deck" title="Phone Deck — connect your phone or tablet via QR code">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2.5"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+  </button>
+  <button id="btn-clean-top" class="btn sm icon-btn" type="button" aria-pressed="false" aria-label="Clean View" title="Clean View — hide toolbar &amp; status bar">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4"/><path d="M20 9V5a1 1 0 0 0-1-1h-4"/><path d="M4 15v4a1 1 0 0 0 1 1h4"/><path d="M20 15v4a1 1 0 0 1-1 1h-4"/></svg>
+  </button>
   <div class="menu-wrap">
     <button id="btn-more" class="btn sm menu-trigger" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="more-menu" aria-label="Settings and options" title="Settings &amp; options">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="11" cy="18" r="2" fill="currentColor"/></svg>
@@ -55,6 +62,7 @@
         <button id="btn-conn-toggle" class="menu-item" type="button" title="Open WebSocket connection settings">Connection settings…</button>
         <button id="btn-sync" class="menu-item" type="button" title="Refresh OBS scenes, sources, filters, hotkeys, and outputs">Sync with OBS</button>
         <button id="btn-auto-import" class="menu-item" type="button" title="Auto-Import Pages from connected OBS Studio (read-only)">Auto-Import Pages…</button>
+        <button id="btn-phone-host" class="menu-item" type="button" title="Connect your phone or tablet via QR code">Phone Deck (QR)…</button>
       </div>
       <div class="menu-group">
         <div class="menu-heading">Display &amp; Toolbar</div>
@@ -91,6 +99,7 @@
       </div>
       <div class="menu-group">
         <div class="menu-heading">Deck Layouts</div>
+        <button id="btn-manage-pages-menu" class="menu-item" type="button" title="Search, bulk delete, or export selected Pages">Manage Pages…</button>
         <button id="btn-export" class="menu-item" type="button" title="Export Deck configuration as JSON (passwords omitted)">Export Deck</button>
         <button id="btn-import" class="menu-item" type="button" title="Import Deck configuration JSON">Import Deck…</button>
         <button id="btn-merge-pages" class="menu-item" type="button" title="Append Pages from a layout JSON onto your current Deck">Import Pages…</button>
@@ -100,7 +109,6 @@
         <div class="menu-heading">Desktop App</div>
         <button id="btn-desktop-aot" class="menu-item" type="button" hidden title="Toggle Always on Top">Always on Top: Off</button>
         <button id="btn-desktop-redetect" class="menu-item" type="button" hidden title="Re-detect local OBS WebSocket port (read-only)">Re-detect OBS Port</button>
-        <button id="btn-phone-host" class="menu-item" type="button" hidden title="Start local Phone Deck QR host">Phone Deck (QR)…</button>
       </div>
     </div>
   </div>
@@ -125,9 +133,17 @@
   <div id="deck-tabs" class="page-tabs" role="tablist" aria-label="Deck Pages"></div>
   <button id="btn-page-lock" class="btn sm page-lock-btn" type="button" aria-pressed="false" hidden title="Lock current Page (pause Scene-Linked auto-switching)">🔒</button>
   <div class="page-actions">
+    <button id="btn-quick-search" class="btn sm icon-btn" type="button" aria-label="Search Pages and Pads (Ctrl+K)" title="Quick Switch Pages &amp; Pads (Ctrl+K)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20" y1="20" x2="16.2" y2="16.2"/></svg>
+    </button>
+    <button id="btn-manage-pages" class="btn sm icon-btn" type="button" aria-label="Manage Pages" title="Manage, search, export, or bulk delete Pages">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 3 7.5 12 12l9-4.5L12 3z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg>
+    </button>
     <button id="btn-deck-add" class="btn sm" type="button" title="Add new Page">+ Page</button>
-    <button id="btn-deck-dup" class="btn sm" type="button" title="Duplicate current Page"><span aria-hidden="true">⎘</span><span class="btn-lbl"> Duplicate</span></button>
-    <button id="btn-deck-cfg" class="btn sm" type="button" title="Page &amp; Grid Settings — rename, resize grid, link scene, or delete Page">8×8 ⚙</button>
+    <button id="btn-deck-dup" class="btn sm icon-btn" type="button" aria-label="Duplicate current Page" title="Duplicate current Page">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+    </button>
+    <button id="btn-deck-cfg" class="btn sm" type="button" title="Page &amp; Grid Settings — rename, resize grid, link scene, or delete Page">8×8</button>
   </div>
   <div class="clean-bar-controls">
     <button id="btn-clean-panic" class="btn sm panic" type="button" title="Abort running Timed Macros &amp; Auto-Off timers and run PANIC reset">PANIC</button>
@@ -368,6 +384,18 @@
       <label class="chk"><input type="checkbox" id="wiz-filters" checked> <span><strong>Filters</strong> — Source &amp; scene filter toggles</span></label>
       <label class="chk"><input type="checkbox" id="wiz-broadcast" checked> <span><strong>Audio, Broadcast &amp; Telemetry</strong> — Mutes, Stream, Record, Chapter, Studio Mode, Snapshot, Stats</span></label>
     </div>
+    <div id="wiz-scene-filter" class="wiz-scene-filter" hidden>
+      <div class="wiz-scene-head">
+        <span class="wiz-scene-title">Scenes to Include <span id="wiz-scenes-count" class="wiz-scenes-count"></span></span>
+        <div class="wiz-scene-btns">
+          <button type="button" id="btn-wiz-scenes-all" class="btn sm">All</button>
+          <button type="button" id="btn-wiz-scenes-none" class="btn sm">None</button>
+        </div>
+      </div>
+      <input id="wiz-scene-search" type="search" placeholder="Filter OBS scenes…" aria-label="Filter OBS scenes">
+      <div id="wiz-scene-list" class="wiz-scene-list"></div>
+    </div>
+    <div id="wiz-preview-count" class="wiz-preview-count" hidden></div>
     <div class="wiz-opts">
       <label class="chk"><input type="checkbox" id="wiz-replace" checked> <span>Populate empty starter Page (unchecked creates new Pages)</span></label>
     </div>
@@ -428,17 +456,73 @@
   <div class="frm phone-host-body">
     <div id="phone-host-status" class="hint">Starting local Phone Deck host…</div>
     <div id="phone-host-qr" class="phone-host-qr" hidden></div>
+    <div id="phone-lan-fields" class="phone-lan-fields" hidden>
+      <div class="row">
+        <label for="phone-lan-host">Computer Wi-Fi IP / Host</label>
+        <input id="phone-lan-host" type="text" autocomplete="off" spellcheck="false" placeholder="192.168.1.25">
+      </div>
+      <div class="row phone-lan-port-row" id="phone-http-port-wrap">
+        <label for="phone-http-port">Helper Port</label>
+        <input id="phone-http-port" type="number" min="1" max="65535" value="8765">
+      </div>
+    </div>
     <div class="phone-host-url">
       <input id="phone-host-url" type="text" readonly aria-label="Phone Deck URL">
       <button type="button" id="btn-phone-copy" class="btn sm">Copy</button>
     </div>
-    <div class="hint">Connect your phone to the same Wi-Fi and scan the QR code. Passwords are never included in URLs.</div>
+    <div id="phone-host-steps" class="phone-host-steps" hidden>
+      <div class="phone-step"><strong>1.</strong> Run <code>Phone Helper.bat</code> (or <code>npm run phone</code>) — or open the <strong>OpenDeck Desktop App</strong> for 1-click QR hosting.</div>
+      <div class="phone-step"><strong>2.</strong> Enter your computer's Wi-Fi IP above and scan the QR code on your phone on the same Wi-Fi.</div>
+    </div>
+    <div id="phone-host-hint" class="hint">Connect your phone to the same Wi-Fi and scan the QR code. Passwords are never included in URLs.</div>
     <div class="dlg-f" style="width:100%">
       <button type="button" id="btn-phone-toggle" class="btn sm">Stop Host</button>
+      <button type="button" id="btn-phone-export" class="btn sm" hidden title="Export Deck JSON to transfer or load on your phone">Export Layout</button>
       <div class="spacer"></div>
       <button type="button" id="btn-phone-done" class="btn sm on">Done</button>
     </div>
   </div>
 </dialog>
+
+<dialog id="pages-mgr-dlg">
+  <div class="dlg-h"><span>Manage Pages</span><button id="pages-mgr-close" type="button" class="btn sm" aria-label="Close">✕</button></div>
+  <div class="frm">
+    <div class="pm-toolbar">
+      <input id="pm-search" type="search" placeholder="Search pages or linked OBS scenes…" aria-label="Search pages">
+      <span id="pm-summary" class="pm-summary">0 pages</span>
+    </div>
+    <div class="pm-quick-bar">
+      <button type="button" id="pm-sel-all" class="btn sm">Select All</button>
+      <button type="button" id="pm-sel-empty" class="btn sm" title="Select Pages with zero configured pads">Select Empty</button>
+      <button type="button" id="pm-sel-none" class="btn sm">Clear</button>
+      <span id="pm-guard-hint" class="pm-guard-hint" hidden>Keep at least 1 Page</span>
+    </div>
+    <div id="pm-list" class="pm-list" role="list"></div>
+    <div class="dlg-f">
+      <button type="button" id="pm-del-selected" class="btn sm panic" disabled>Delete Selected</button>
+      <button type="button" id="pm-export-selected" class="btn sm" disabled title="Export only the checked Pages as JSON (passwords omitted)">Export Selected</button>
+      <div class="spacer"></div>
+      <button type="button" id="pm-done" class="btn sm on">Done</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="quick-search-dlg">
+  <div class="qs-head">
+    <svg class="qs-ico" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20" y1="20" x2="16.2" y2="16.2"/></svg>
+    <input id="qs-input" type="search" autocomplete="off" spellcheck="false" placeholder="Jump to Page or Pad…" aria-label="Search Pages and Pads">
+    <button id="qs-close" type="button" class="btn sm icon-btn" aria-label="Close">✕</button>
+  </div>
+  <div id="qs-results" class="qs-results" role="listbox" aria-label="Search results"></div>
+  <div class="qs-foot">
+    <span>↑↓ Navigate</span>
+    <span aria-hidden="true">·</span>
+    <span>Enter Jump</span>
+    <span aria-hidden="true">·</span>
+    <span>Esc Close</span>
+  </div>
+</dialog>
+
+<div id="ctx-menu" class="ctx-menu" role="menu" hidden></div>
 </body>
 </html>
